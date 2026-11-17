@@ -4,6 +4,8 @@ Las columnas se buscan por NOMBRE normalizado (util.clave_encabezado), nunca por
 """
 import getpass
 import json
+import re
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from gestor import db, util, xlsx
@@ -44,16 +46,20 @@ AVISO_SIN_PARTIDA = (
 
 MOTIVOS_DESCARTE = ("sin_oc", "partida", "centro", "exclusion_manual")
 
-# Campos de la OC que vienen del reporte (los demás se cargan a mano o se infieren).
+# Campos de la OC que vienen del reporte o se infieren al importar (los demás se cargan a mano).
 CAMPOS_OC = (
     "efector", "sap", "clase", "org_compras", "centro", "ca", "expediente_contratacion",
-    "fecha_oc", "vig_desde", "vig_hasta", "cerrada_sap",
+    "fecha_oc", "vig_desde", "vig_hasta", "cerrada_sap", "tipo", "comodato", "centralizada",
 )
-# Campos del renglón que vienen del reporte.
+# Campos del renglón que vienen del reporte o se infieren al importar.
 CAMPOS_RENGLON = (
     "codigo", "descripcion", "cantidad", "precio_centavos", "importe_centavos", "partida",
     "sap_entregado", "sap_facturado", "sap_por_entregar", "revisar_importe", "crudo",
+    "desglose_cantidad", "desglose_unidad", "desglose_precio_centavos", "revisar_desglose", "exceso_sap",
 )
+
+RE_ANIO_FINAL = re.compile(r"[-\s]+(20\d\d)\s*$")
+RE_CODIGO_SERVICIO = re.compile(r"1\d{6}")
 # Campos que, si cambian, se listan en informe["cambios"].
 CAMPOS_CAMBIO_RENGLON = ("precio_centavos", "cantidad")
 CAMPOS_CAMBIO_OC = ("vig_desde", "vig_hasta")
@@ -182,6 +188,115 @@ def _limpiar_fila(fila, columnas):
     return oc, renglon
 
 
+# --- Inferencias: desglose mensual, por entregar, tipo de OC --------------
+
+def anio_final(descripcion):
+    """Año con que termina la descripción ("… - 2027", "SERV. ESTERIL. POR ETO 2026") o None."""
+    m = RE_ANIO_FINAL.search(descripcion or "")
+    return int(m.group(1)) if m is not None else None
+
+
+def _a_fecha(valor):
+    if valor is None or valor == "":
+        return None
+    if isinstance(valor, date):
+        return valor
+    return util.fecha_desde_texto(valor)
+
+
+def _sumar_meses(fecha, meses):
+    total = fecha.year * 12 + (fecha.month - 1) + meses
+    anio, mes = divmod(total, 12)
+    mes += 1
+    ultimo = (date(anio + (mes // 12), mes % 12 + 1, 1) - timedelta(days=1)).day
+    return date(anio, mes, min(fecha.day, ultimo))
+
+
+def meses_entre(desde, hasta):
+    """Meses enteros de `desde` a `hasta` + 1 día (2026-04-09..2026-08-08 → 4); None si no es un número entero."""
+    desde, hasta = _a_fecha(desde), _a_fecha(hasta)
+    if desde is None or hasta is None or hasta < desde:
+        return None
+    fin = hasta + timedelta(days=1)
+    meses = (fin.year - desde.year) * 12 + (fin.month - desde.month)
+    if meses >= 1 and _sumar_meses(desde, meses) == fin:
+        return Decimal(meses)
+    return None
+
+
+def inferir_desglose(renglon, vig_desde, vig_hasta):
+    """Desglose mensual de un servicio cargado como cantidad 1, y por entregar/exceso según SAP.
+
+    Devuelve los campos a guardar: desglose_*, revisar_desglose, sap_por_entregar, exceso_sap.
+    """
+    cantidad = Decimal(str(renglon.get("cantidad") or "0"))
+    entregado = Decimal(str(renglon.get("sap_entregado") or "0"))
+    importe = int(renglon.get("importe_centavos") or 0)
+    desde, hasta = _a_fecha(vig_desde), _a_fecha(vig_hasta)
+    resultado = {
+        "desglose_cantidad": None,
+        "desglose_unidad": None,
+        "desglose_precio_centavos": None,
+        "revisar_desglose": 0,
+    }
+
+    tramo = None
+    if cantidad == 1 and desde is not None and hasta is not None:
+        anio = anio_final(renglon.get("descripcion"))
+        if anio is not None:
+            tramo = (max(desde, date(anio, 1, 1)), min(hasta, date(anio, 12, 31)))
+        elif entregado > 1:
+            tramo = (desde, hasta)
+    if tramo is not None:
+        meses = meses_entre(*tramo) if tramo[0] <= tramo[1] else None
+        if meses is None or importe % int(meses) != 0:
+            resultado["revisar_desglose"] = 1
+        else:
+            resultado.update({
+                "desglose_cantidad": _texto_decimal(meses),
+                "desglose_unidad": "MES",
+                "desglose_precio_centavos": importe // int(meses),
+            })
+
+    base = Decimal(resultado["desglose_cantidad"]) if resultado["desglose_cantidad"] is not None else cantidad
+    resultado["sap_por_entregar"] = _texto_decimal(max(Decimal(0), base - entregado))
+    resultado["exceso_sap"] = 1 if entregado > base else 0
+    return resultado
+
+
+def _es_servicio(codigo):
+    codigo = (codigo or "").strip()
+    return codigo == "" or RE_CODIGO_SERVICIO.fullmatch(codigo) is not None
+
+
+def inferir_oc(oc, renglones, parametros):
+    """tipo, comodato y centralizada de la OC a partir de sus renglones y de org_compras."""
+    propias = {str(o) for o in parametros.get("org_compras_propias") or []}
+    comodato = any("COMODATO" in (r.get("descripcion") or "").upper() for r in renglones)
+    if comodato:
+        tipo = "PROVISION"
+    elif renglones and all(_es_servicio(r.get("codigo")) for r in renglones):
+        tipo = "SERVICIO"
+    else:
+        tipo = "BIEN"
+    return {
+        "tipo": tipo,
+        "comodato": 1 if comodato else 0,
+        "centralizada": 0 if (oc.get("org_compras") or "") in propias else 1,
+    }
+
+
+def _aplicar_inferencias(ocs, renglones, parametros):
+    por_oc = {}
+    for (numero, _), renglon in renglones.items():
+        por_oc.setdefault(numero, []).append(renglon)
+    for numero, oc in ocs.items():
+        lista = por_oc.get(numero, [])
+        oc.update(inferir_oc(oc, lista, parametros))
+        for renglon in lista:
+            renglon.update(inferir_desglose(renglon, oc["vig_desde"], oc["vig_hasta"]))
+
+
 def _leer(origen, efector, parametros):
     """Lee y limpia el reporte. Devuelve (informe sin comparar con la base, OC por número, renglones por (oc, pos))."""
     centros = _validar_efector(efector, parametros)
@@ -249,6 +364,7 @@ def _leer(origen, efector, parametros):
         if clave in renglones:
             informe["duplicados"] += 1
         renglones[clave] = renglon
+    _aplicar_inferencias(ocs, renglones, parametros)
     informe["oc_distintas"] = len(ocs)
     return informe, ocs, renglones
 
