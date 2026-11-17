@@ -1,0 +1,965 @@
+[
+  {
+    "id": "E1-T1",
+    "title": "Entry point app.py, servidor y /api/salud con --check",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `python app.py --check` runs from the project root THE SYSTEM SHALL start the server on a free port of 127.0.0.1, request `/api/salud`, print one JSON line containing `\"app\": \"gestor-expedientes\"` and `\"version\": \"0.1.0\"`, shut the server down and exit 0.",
+      "WHEN `GET /api/salud` is requested THE SYSTEM SHALL answer 200 with a JSON object whose keys are exactly `app`, `version`, `db`, `usuario` in that order, `db` being `ok` or `sin_base` and `usuario` equal to `getpass.getuser()`.",
+      "WHEN a route that does not exist is requested THE SYSTEM SHALL answer 404 with the body `{\"ok\": false, \"error\": {\"codigo\": \"no_encontrado\", \"mensaje\": \"Ruta no encontrada: <ruta>\"}}`.",
+      "WHEN the preferred port is already held by another program THE SYSTEM SHALL return the next bindable port of the range from `elegir_puerto` together with `False`.",
+      "WHEN the port being probed already answers `/api/salud` with `\"app\": \"gestor-expedientes\"` THE SYSTEM SHALL return that port together with `True` from `elegir_puerto` instead of binding it."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_servidor -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-01-esqueleto",
+    "files": [
+      "app.py",
+      "gestor/__init__.py",
+      "gestor/config.py",
+      "gestor/server.py",
+      "tests/test_servidor.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E1-T2",
+    "title": "Capa de datos SQLite: esquema, versión, auditoría y backups",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [
+      "E1-T1"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `gestor.db.inicializar` runs on a database path that does not exist THE SYSTEM SHALL create every table of the schema (`config`, `proveedor`, `oc`, `renglon`, `entrega`, `expediente`, `evento`, `importacion`) with `PRAGMA user_version` 1 and `PRAGMA journal_mode` `delete`, and a second run SHALL leave exactly one `config` row per key of `parametros_iniciales`.",
+      "WHEN `db.actualizar_con_version` saves a row with its current `version` THE SYSTEM SHALL store `version + 1` and insert exactly one `evento` row (accion `MODIFICACION`, usuario, pc, antes, despues) in the same transaction.",
+      "WHEN `db.actualizar_con_version` saves a row with a stale `version` THE SYSTEM SHALL raise `db.ConflictoVersion`, leave the row unchanged and insert no `evento` row.",
+      "WHEN a `DELETE` or `UPDATE` is attempted on `evento`, or a `DELETE` on `expediente` or `oc`, THE SYSTEM SHALL raise `sqlite3.IntegrityError` and keep the row.",
+      "WHEN `db.hacer_backup` runs 31 times with distinct timestamps and `conservar=30` THE SYSTEM SHALL leave exactly 30 files named `expedientes-AAAAMMDD-HHMMSS.db`, the oldest one removed, and `POST /api/base/restaurar` SHALL bring back the content of the newest backup.",
+      "WHEN the server starts with a temporary `GESTOR_CONFIG` THE SYSTEM SHALL answer `/api/salud` with `\"db\": \"ok\"` and `GET /api/base/estado` with `\"ok\": true` and `datos.integridad` equal to `\"ok\"`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_db -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-02-base-de-datos",
+    "files": [
+      "gestor/db.py",
+      "gestor/server.py",
+      "app.py",
+      "tests/test_db.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E1-T3",
+    "title": "Utilidades de fechas, períodos, montos y letras",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [
+      "E1-T1"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `letras.importe_en_letras(122499000)` runs THE SYSTEM SHALL return exactly `PESOS UN MILLÓN DOSCIENTOS VEINTICUATRO MIL NOVECIENTOS NOVENTA CON 00/100 CENTAVOS ($ 1.224.990,00-)`.",
+      "WHEN `letras.letras_con_centavos` receives 2109500000, 3388160000, 2210187213, 100000, 10000 and 370000000 centavos THE SYSTEM SHALL return `VEINTIUN MILLONES NOVENTA Y CINCO MIL CON 00/100`, `TREINTA Y TRES MILLONES OCHOCIENTOS OCHENTA Y UN MIL SEISCIENTOS CON 00/100`, `VEINTIDOS MILLONES CIENTO UN MIL OCHOCIENTOS SETENTA Y DOS CON 13/100`, `MIL CON 00/100`, `CIEN CON 00/100` and `TRES MILLONES SETECIENTOS MIL CON 00/100` respectively.",
+      "WHEN `util.periodo_de_fecha` receives 2026-10-20, 2026-11-16 and 2026-11-17 with `dia_inicio=17` THE SYSTEM SHALL return `2026-11` (from 2026-10-17 to 2026-11-16), `2026-11` and `2026-12`, and with `dia_inicio=1` and 2026-08-31 it SHALL return `2026-08` from 2026-08-01 to 2026-08-31.",
+      "WHEN `util.normalizar_factura` receives `00002B00003908` and `0002 - 00003908` THE SYSTEM SHALL return `(2, \"B\", 3908)` and `(2, None, 3908)` and `util.misma_factura` SHALL report them as the same invoice.",
+      "WHEN `util.normalizar_gde` receives `EX-2025-18959064-   -INSSJP-GESP%INSSJP` THE SYSTEM SHALL return `EX-2025-18959064- -INSSJP-GESP#INSSJP`, which `util.validar_gde` SHALL accept while rejecting `EX-2026-12-INSSJP`.",
+      "WHEN `util.a_centavos` receives `1.224.990,01`, `1224990.01` and the integer 1224990 THE SYSTEM SHALL return 122499001, 122499001 and 122499000, and `util.formato_pesos(122499001)` SHALL return `1.224.990,01`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_util -v  # expect: exit 0; el resumen final dice OK",
+      "python -W error::DeprecationWarning -m unittest tests.test_letras -v  # expect: exit 0; el resumen final dice OK",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-03-util-y-letras",
+    "files": [
+      "gestor/util.py",
+      "gestor/letras.py",
+      "tests/test_util.py",
+      "tests/test_letras.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E1-T4",
+    "title": "Lector de .xlsx con zipfile y ElementTree",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [
+      "E1-T1"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `xlsx.leer_tabla` reads `tests/fixtures/xlsx/z_compras2_hbi_2026.xlsx` THE SYSTEM SHALL return its 27 headers in file order, from `Número de Expediente GDE` to `Facturadas (cantidad`, and 3074 data rows.",
+      "WHEN `xlsx.leer_tabla` reads `tests/fixtures/xlsx/z_compras2_por_partida.xlsx` THE SYSTEM SHALL return its 30 headers starting with `Partida Presupuestar` and ending with `Número de Expediente`, without `Precio unitario`, and 5897 data rows.",
+      "WHEN a cell holds the supplier `0000115819` or the file `EX-2025-18959064-   -INSSJP-GESP#INSSJP` THE SYSTEM SHALL return the text exactly as stored, keeping leading zeros and inner spaces.",
+      "WHEN `xlsx.leer_tabla` receives bytes that are not a zip THE SYSTEM SHALL raise `xlsx.XlsxError` with the message `El archivo no es un Excel .xlsx válido.`"
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_xlsx -v  # expect: exit 0; el resumen final dice OK",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-04-lector-xlsx",
+    "files": [
+      "gestor/xlsx.py",
+      "tests/test_xlsx.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E1-T5",
+    "title": "Importador z_compras2: limpieza, exclusiones y upsert",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [
+      "E1-T2",
+      "E1-T3",
+      "E1-T4"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `importar.analizar` runs on `z_compras2_hbi_2026.xlsx` as efector HBI THE SYSTEM SHALL report 3074 rows, discards `sin_oc` 2, `partida` 0, `centro` 2639, `exclusion_manual` 0, 433 remaining rows, 107 distinct OC, 0 duplicates and the warning `Este reporte no tiene la partida presupuestaria; no se pueden descartar honorarios (3490000). Agregá la columna al layout del z_compras2.`",
+      "WHEN `importar.analizar` runs on `z_compras2_por_partida.xlsx` as efector HBI THE SYSTEM SHALL report 5897 rows, discards `sin_oc` 16, `partida` 5402, `centro` 192, `exclusion_manual` 0, 287 remaining rows, 108 distinct OC, 0 duplicates and no partida warning.",
+      "WHEN both reports are imported as HBI in either order THE SYSTEM SHALL hold 574 rows in `renglon`, and importing either report again SHALL report 0 `altas`.",
+      "WHEN a report lacks the column `Importe` THE SYSTEM SHALL raise `ErrorImportacion` with the message `Falta la columna obligatoria \"Importe\" en el reporte.` and write nothing.",
+      "WHEN a field of an OC listed in `campos_manuales` was edited by hand THE SYSTEM SHALL keep the hand-edited value after re-importing, and every imported `renglon.crudo` SHALL contain the original row keyed by the Excel headers.",
+      "WHEN the report has no `Precio unitario` column THE SYSTEM SHALL store `precio_centavos` equal to `Importe / Cant` rounded half-up to 2 decimals for every imported row with `Cant` different from 0."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_importar -v  # expect: exit 0; el resumen final dice OK",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-05-importar",
+    "files": [
+      "gestor/importar.py",
+      "tests/test_importar.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E1-T6",
+    "title": "Desglose mensual de servicios e inferencias al importar",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [
+      "E1-T5"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `z_compras2_hbi_2026.xlsx` is imported as HBI THE SYSTEM SHALL store for OC 4500600299 position 1 `desglose_cantidad` 3, `desglose_unidad` `MES`, `desglose_precio_centavos` 122499000, and for position 2 `desglose_cantidad` 9 with the same unit and price.",
+      "WHEN `importar.anio_final` receives `SERV. ESTERIL. POR ETO 2026` and `SERV. ESTERIL. POR VAPOR HUMEDO - 2027` THE SYSTEM SHALL return 2026 and 2027, and for `DETERMINACIONES DE TROPONINA I` it SHALL return `None`.",
+      "WHEN `importar.meses_entre` receives 2026-04-09 to 2026-08-08 and 2026-10-01 to 2026-12-31 THE SYSTEM SHALL return 4 and 3.",
+      "WHEN `z_compras2_hbi_2026.xlsx` is imported as HBI THE SYSTEM SHALL leave no `renglon` with a negative `sap_por_entregar`.",
+      "WHEN OC 4500587121 is imported THE SYSTEM SHALL infer `tipo` `BIEN` and `comodato` 0, and WHEN a row description contains `COMODATO` THE SYSTEM SHALL infer `tipo` `PROVISION` and `comodato` 1."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_desglose -v  # expect: exit 0; el resumen final dice OK",
+      "python -W error::DeprecationWarning -m unittest tests.test_importar -v  # expect: exit 0; el resumen final dice OK",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-06-desglose",
+    "files": [
+      "gestor/importar.py",
+      "tests/test_desglose.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E1-T7",
+    "title": "Interfaz base (8 pantallas) y pantalla Importar",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [
+      "E1-T5"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `GET /` is requested THE SYSTEM SHALL serve `web/index.html` as `text/html; charset=utf-8` containing `lang=\"es\"`, `id=\"selector-efector\"`, `id=\"avisos\"` and the eight section ids `pantalla-inicio`, `pantalla-calendario`, `pantalla-oc`, `pantalla-expedientes`, `pantalla-centralizadas`, `pantalla-entregas`, `pantalla-importar`, `pantalla-configuracion`.",
+      "WHEN `GET /config.json` is requested THE SYSTEM SHALL answer 404 and serve no file outside `web/`.",
+      "WHEN `z_compras2_hbi_2026.xlsx` is posted to `/api/importar/vista-previa` with efector HBI THE SYSTEM SHALL answer `quedan` 433 and leave `renglon` empty, and posting it to `/api/importar/confirmar` SHALL leave 433 rows in `renglon` and one row in `importacion`.",
+      "WHEN an import is posted with efector CASPH while CASPH has no configured centers THE SYSTEM SHALL answer 422 with `mensaje` `Configurá los centros SAP de CASPH antes de importar.`",
+      "WHEN `PUT /api/parametros` carries a stale `version` THE SYSTEM SHALL answer 409 with `mensaje` `Otra persona guardó cambios en este registro. Recargá para ver la última versión.`",
+      "WHEN an upload exceeds `tamano_maximo_subida_mb` THE SYSTEM SHALL answer 413 with `codigo` `demasiado_grande` without reading the file into the database."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_web_importar -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-07-ui-e-importar",
+    "files": [
+      "web/index.html",
+      "web/app.js",
+      "web/style.css",
+      "gestor/server.py",
+      "tests/test_web_importar.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E1-T8",
+    "title": "Órdenes de compra: lista, ficha, campos manuales y alta",
+    "epic": "01-nucleo-y-oc",
+    "dependencies": [
+      "E1-T6",
+      "E1-T7"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `POST /api/oc` receives the manual OC 4500555861 of SAP 77170 `GRUPO EFIA S.R.L.` THE SYSTEM SHALL store it with `origen` `MANUAL`, CA `195-2025`, expediente `EX-2025-70356979- -INSSJP-GESP#INSSJP`, validity 2025-10-01 to 2026-09-30 and position 1 with `desglose_cantidad` 9, `desglose_unidad` `MES`, `desglose_precio_centavos` 122499000.",
+      "WHEN `PUT /api/oc/<numero>` changes `objeto` with the current `version` THE SYSTEM SHALL store it, add `objeto` to `campos_manuales`, and a later re-import of the same report SHALL keep the edited `objeto`.",
+      "WHEN `PUT /api/oc/<numero>` carries a stale `version` THE SYSTEM SHALL answer 409 with `mensaje` `Otra persona guardó cambios en este registro. Recargá para ver la última versión.`",
+      "WHEN `dia_inicio_periodo` 29 is saved THE SYSTEM SHALL answer 400 with `mensaje` `El día de inicio del período debe estar entre 1 y 28.`",
+      "WHEN `GET /api/oc?efector=HBI&q=EFIA` runs after importing `z_compras2_hbi_2026.xlsx` THE SYSTEM SHALL list OC 4500600299, and WHEN that OC is saved with `excluida` 1 THE SYSTEM SHALL leave it out of the default list."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_oc -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-08-oc",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "web/app.js",
+      "tests/datos_prueba.py",
+      "tests/test_oc.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E2-T1",
+    "title": "API de expedientes: alta, versión, historial y anulación",
+    "epic": "02-expediente-comun",
+    "dependencies": [
+      "E1-T8"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `POST /api/expedientes` creates a `COMUN` file for OC 4500555861 THE SYSTEM SHALL store `estado` `BORRADOR`, `version` 1, `sap` `77170`, `usuario` equal to `getpass.getuser()` and one `datos.historial` entry with `accion` `ALTA`.",
+      "WHEN `PUT /api/expedientes/<id>` saves with the current `version` THE SYSTEM SHALL answer with `version` 2 and write one `evento` row with `accion` `MODIFICACION`; with a stale `version` it SHALL answer 409 with `mensaje` `Otra persona guardó cambios en este registro. Recargá para ver la última versión.`",
+      "WHEN `POST /api/expedientes/<id>/anular` arrives with an empty `motivo` THE SYSTEM SHALL answer 400 with `mensaje` `Indicá el motivo de la anulación.`",
+      "WHEN a file is annulled with a reason THE SYSTEM SHALL keep its row with `estado` `ANULADO` and the reason, and a later `PUT` on it SHALL answer 422 with `mensaje` `El expediente está anulado.`",
+      "WHEN `GET /api/expedientes?estado=BORRADOR&periodo=2026-08` runs THE SYSTEM SHALL return only files in that state and period."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_expedientes_api -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-09-expedientes-api",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "tests/test_expedientes_api.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E2-T2",
+    "title": "Período sugerido y carga rápida de varios remitos",
+    "epic": "02-expediente-comun",
+    "dependencies": [
+      "E2-T1"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN the text `0001-00000001;05/08/2026` + newline + `0001-00000002;28/08/2026;02/09/2026` is pasted into a file whose OC starts periods on day 1 THE SYSTEM SHALL store two remitos and suggest period `2026-09`, because the newest base date is the signature date 2026-09-02.",
+      "WHEN the second pasted line is `0001-00000003` without a date THE SYSTEM SHALL answer 400 with `mensaje` `Línea 2: se esperaba \"numero;fecha[;fecha_firma]\".` and store no remito.",
+      "WHEN the OC starts periods on day 17 and the only remito is dated 20/10/2026 THE SYSTEM SHALL set `periodo` `2026-11`, `periodo_desde` `2026-10-17` and `periodo_hasta` `2026-11-16`.",
+      "WHEN 15 remitos dated August 2026 and 1 dated July 2026 are pasted THE SYSTEM SHALL suggest `2026-08` and `remitos_fuera_de_periodo` SHALL return exactly the July remito.",
+      "WHEN the period is changed by hand THE SYSTEM SHALL store `periodo_manual` 1 and a `datos.historial` entry with `accion` `PERIODO_MANUAL`, and later pastes SHALL not overwrite that period."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_periodo_remitos -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-10-periodo-y-remitos",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "tests/test_periodo_remitos.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E2-T3",
+    "title": "Parser del texto pegado de SII y normalización de factura",
+    "epic": "02-expediente-comun",
+    "dependencies": [
+      "E1-T3"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN the EFIA fixture `EX-2026-89654857_EFIA/0004_IF-*.txt` is parsed THE SYSTEM SHALL return CAE `86372407008783`, `fecha_emision` `2026-09-10`, `periodo` `2026-08`, `monto_centavos` 122499000, `tipo_comprobante` `FACTURA B`, `nro_comprobante` `0003-00031812`, `sap` `77170`, `orden_compra` `4500555861`, `area` `GESP - MESA DE ENTRADAS Y SALIDAS - HOSPITAL DEL BICENTENARIO ITUZAINGO` and `cod_tramite` `HXW2037078`.",
+      "WHEN the BIO FAB fixture `EX-2026-94963848_BIOFAB/0004_IF-*.txt` is parsed THE SYSTEM SHALL return CAE `86372594419176`, `fecha_emision` `2026-09-11`, `periodo` `2026-08`, `monto_centavos` 2109500000, `nro_comprobante` `0002-00003908`, `orden_compra` `4500587121` and `cuit` `30-71172660-4`.",
+      "WHEN the MACATEX fixture `EX-2026-99349179_MACATEX/0004_IF-*.txt` is parsed THE SYSTEM SHALL return CAE `86416949757962`, `fecha_emision` `2026-10-09`, `periodo` `2026-09`, `monto_centavos` 3388160000, `nro_comprobante` `0002-00000160` and `orden_compra` `4500594643`.",
+      "WHEN the pasted text has no `CAE:` label THE SYSTEM SHALL return `cae` `None` and list `CAE` in `faltantes` instead of failing.",
+      "WHEN `util.misma_factura` compares the invoice `0003B00031812` with the SII number `0003-00031812` THE SYSTEM SHALL report them as the same invoice."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_comprobantes -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-11-comprobantes",
+    "files": [
+      "gestor/comprobantes.py",
+      "gestor/util.py",
+      "gestor/server.py",
+      "tests/test_comprobantes.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E2-T4",
+    "title": "Consumo, saldo y grilla renglón × período",
+    "epic": "02-expediente-comun",
+    "dependencies": [
+      "E2-T2"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN OC 4500555861 (9 `MES`) has one non-annulled file for `2026-08` with quantity 1 THE SYSTEM SHALL report for position 1 `validado` 1, `saldo` 8, `ideal_mes` 1 and `pct_consumido` 11.",
+      "WHEN that file is annulled THE SYSTEM SHALL report `validado` 0 and `saldo` 9.",
+      "WHEN `consumo_previo` 5 is saved on position 1 THE SYSTEM SHALL report `saldo` 3 with the `2026-08` file still counted.",
+      "WHEN `GET /api/oc/4500555861/consumo` runs THE SYSTEM SHALL return a grid whose periods go from `2025-10` to `2026-09` (12 columns) with quantity 1 under `2026-08`.",
+      "WHEN validated quantity leaves a balance lower than `ideal_mes` THE SYSTEM SHALL set `por_agotarse` true for that row."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_consumo -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-12-consumo-y-saldo",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "tests/test_consumo.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E2-T5",
+    "title": "Motor de controles con cuatro niveles",
+    "epic": "02-expediente-comun",
+    "dependencies": [
+      "E2-T3",
+      "E2-T4"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN the EFIA file (manual OC 4500555861, remito `00001-00029461` of 31/08/2026 with quantity 1, invoice `0003B00031812` for 122499000 centavos, EFIA SII) is controlled THE SYSTEM SHALL use period `2026-08` and report 0 `error` and 0 `salvable` results.",
+      "WHEN the BIO FAB file (OC 4500587121 with `comodato` 1, remito `0001-00003354` whose position 2 carries code `5002383`, equipment remito `0001-00003281`) is controlled THE SYSTEM SHALL report exactly one `salvable` result with `codigo` `codigo_remito_distinto` and 0 `error` results.",
+      "WHEN the same BIO FAB file has no equipment remito THE SYSTEM SHALL report an `error` with `codigo` `comodato_sin_remito_equipo` and `mensaje` `Primera validación de OC con comodato sin remito del equipo.`",
+      "WHEN the MACATEX file (OC 4500594643 with empty `objeto`, remito `0001-00004409` of 07/09/2026) is controlled THE SYSTEM SHALL use period `2026-09` and report the `error` `objeto_faltante` with `mensaje` `Falta el objeto de la contratación en la OC 4500594643`.",
+      "WHEN the EFIA invoice amount is 122499001 centavos THE SYSTEM SHALL report the `error` `importe_factura` with `mensaje` `El importe de la factura ($ 1.224.990,01) no coincide con cantidad × precio ($ 1.224.990,00).` and no `salvable` result for the amount.",
+      "WHEN a file has 15 remitos of August 2026 and 1 of July 2026 THE SYSTEM SHALL report exactly one `remito_fuera_de_periodo` error, referencing the July remito."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_controles -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-13-controles",
+    "files": [
+      "gestor/controles.py",
+      "gestor/server.py",
+      "tests/datos_prueba.py",
+      "tests/test_controles.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E2-T6",
+    "title": "Notas aclaratorias redactadas para controles salvables",
+    "epic": "02-expediente-comun",
+    "dependencies": [
+      "E2-T5"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN the BIO FAB file is controlled THE SYSTEM SHALL offer for `codigo_remito_distinto` exactly the note `Se deja constancia de que en el remito N° 0001-00003354 el renglón 2 figura con el código 5002383, cuando el código correcto según la Orden de Compra N° 4500587121 es 5003283. Se trata de un error de tipeo que no afecta lo entregado.`",
+      "WHEN that note is saved through `POST /api/expedientes/<id>/notas` THE SYSTEM SHALL return the result with `nota_guardada` filled and `resumen.salvable_con_nota` 1.",
+      "WHEN the result is the `error` `importe_factura` THE SYSTEM SHALL return it without `nota_sugerida` and SHALL not accept a note for it (answer 422 with `mensaje` `Un error de importe no se salva con nota aclaratoria.`).",
+      "WHEN the EFIA invoice carries `periodo_desde` 2026-07-01 and `periodo_hasta` 2026-07-31 (rendered `2026-07` because both fall in the same month) while the validated period is `2026-08` THE SYSTEM SHALL offer exactly `Se deja constancia de que la factura N° 0003B00031812 indica el período 2026-07, cuando el período validado según remito es 2026-08.`"
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_notas -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-14-notas-aclaratorias",
+    "files": [
+      "gestor/controles.py",
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "tests/test_notas.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E2-T7",
+    "title": "Asistente del expediente, pasos 1 a 4 en la interfaz",
+    "epic": "02-expediente-comun",
+    "dependencies": [
+      "E2-T6"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN `GET /` is requested THE SYSTEM SHALL return HTML containing the ids `asistente-paso-1` through `asistente-paso-7`.",
+      "WHEN `GET /app.js` is requested THE SYSTEM SHALL return a script that contains the API paths `/remitos/pegar`, `/api/comprobantes/analizar`, `/controles` and `/notas`.",
+      "WHEN the EFIA case is run through the HTTP API in the wizard order (create, paste remito, analyze SII text, save invoice and SII, control) THE SYSTEM SHALL end with `resumen.error` 0 and `resumen.salvable` 0."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_web_asistente -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-15-asistente-1-4",
+    "files": [
+      "web/index.html",
+      "web/app.js",
+      "web/style.css",
+      "tests/test_web_asistente.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E3-T1",
+    "title": "Carátula, referencias GDE y nombres de archivo",
+    "epic": "03-salidas-y-prototipo",
+    "dependencies": [
+      "E2-T5"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `textos.caratula` runs for the three real files THE SYSTEM SHALL return exactly `PAGO SAP 77170 GRUPO EFIA S.R.L. - FC 0003B00031812 - 4500555861`, `PAGO SAP 116467 BIO FAB S.R.L - FC 00002B00003908 - 4500587121` and `PAGO SAP 118896 MACATEX S.A - FC 0002B00000160 - 4500594643`.",
+      "WHEN `textos.referencias` runs for the EFIA file (service, one remito, period `2026-08`) THE SYSTEM SHALL return in order `08-26 - FC 0003B00031812 - GRUPO EFIA S.R.L.`, `08-26 - CARGA EN SII - GRUPO EFIA S.R.L.`, `08-26 - RTO 00001-00029461 - GRUPO EFIA S.R.L.`, `08-26 - CERTIFICADO DE VALIDACIÓN - GRUPO EFIA S.R.L.`, `08-26 - HOJA DE ENTRADA - GRUPO EFIA S.R.L.`, `AUTORIZACIÓN DE PAGO FC N° 0003B00031812, GRUPO EFIA S.R.L. - 08-26` and `08-26 - CONSTANCIA DE CONTABILIZACIÓN - GRUPO EFIA S.R.L.`",
+      "WHEN a file has two or more remitos THE SYSTEM SHALL emit one reference `MM-AA - REMITOS - <razon>` instead of one per remito, and WHEN it has an equipment remito in a first validation THE SYSTEM SHALL add `08-26 - REMITO POR EQUIPO EN COMODATO - BIO FAB S.R.L` for BIO FAB.",
+      "WHEN the efector is CASPH THE SYSTEM SHALL prefix every reference with `CASPH - `, giving `CASPH - AUTORIZACIÓN DE PAGO FC N° 0003B00031812, GRUPO EFIA S.R.L. - 08-26` for the authorization.",
+      "WHEN `textos.nombre_archivo` receives `08-26 - RTO 1/2 - X:Y` THE SYSTEM SHALL return `08-26 - RTO 1-2 - X-Y.pdf`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_textos_referencias -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-16-caratula-y-referencias",
+    "files": [
+      "gestor/textos.py",
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "tests/test_textos_referencias.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E3-T2",
+    "title": "Autorización, constancia de comodato y copiar con formato",
+    "epic": "03-salidas-y-prototipo",
+    "dependencies": [
+      "E3-T1"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `textos.autorizacion` runs for the EFIA file THE SYSTEM SHALL return the reference `AUTORIZACIÓN DE PAGO FC N° 0003B00031812, GRUPO EFIA S.R.L. - 08-26` and the body, as one line, `Por medio del expediente EX-2026-89654857- -INSSJP-GESP#INSSJP AUTORIZO se abone la factura N° 0003B00031812 por la suma de PESOS UN MILLÓN DOSCIENTOS VEINTICUATRO MIL NOVECIENTOS NOVENTA CON 00/100 CENTAVOS ($ 1.224.990,00-) del proveedor GRUPO EFIA S.R.L. correspondiente al servicio de control integral de plagas, fumigación, desinsectación y desratización, conforme al remito N° 00001-00029461, con destino al Hospital del Bicentenario de Ituzaingó, en el mes de agosto del 2026 de acuerdo a la Orden de compra N° 4500555861.`",
+      "WHEN the EFIA body has `, con destino al Hospital del Bicentenario de Ituzaingó,` removed and `del 2026` replaced by `2026` THE SYSTEM SHALL match word for word the paragraph of the fixture `0009_IF-2026-91157933` with whitespace normalized.",
+      "WHEN `textos.autorizacion` runs for the BIO FAB first validation with equipment remito THE SYSTEM SHALL return exactly `Por medio del expediente EX-2026-94963848- -INSSJP-GESP#INSSJP AUTORIZO se abone la factura N° 00002B00003908 por la suma de PESOS VEINTIUN MILLONES NOVENTA Y CINCO MIL CON 00/100 CENTAVOS ($ 21.095.000,00-) del proveedor BIO FAB S.R.L correspondiente a la provisión de inmunoensayo por fluorescencia, conforme al remito N° 0001-00003354, y el remito n° 0001-00003281, correspondiente al equipo entregado en calidad de comodato, con destino al Hospital del Bicentenario de Ituzaingó, en el mes de agosto del 2026 de acuerdo a la Orden de compra N° 4500587121.`",
+      "WHEN the OC has an empty `objeto` (MACATEX 4500594643) THE SYSTEM SHALL raise `textos.TextoIncompleto` with `Falta el objeto de la contratación en la OC 4500594643` and never return a text containing `correspondiente al , conforme`.",
+      "WHEN `textos.frase_remitos` receives one, two and three numbers and `textos.frase_periodo` a day-17 period THE SYSTEM SHALL return `conforme al remito N° A`, `conforme a los remitos N° A y B`, `conforme a los remitos N° A, B y C` and `en el período del 17/10/2026 al 16/11/2026`.",
+      "WHEN `textos.constancia_comodato` runs for BIO FAB (razón `BIO FAB S.R.L` as stored in `proveedor.razon_social`, SAP 116467, remito `0001-00003281`, orden 7) THE SYSTEM SHALL return the reference `CONSTANCIA DE RECEPCIÓN: EQUIPO EN COMODATO - OC 4500587121, BIO FAB S.R.L` and a body equal to the body of fixture `0008_PV-2026-96851161` after normalizing whitespace and replacing `BIO FAB S.R.L.` with `BIO FAB S.R.L` in the fixture."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_autorizacion -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-17-autorizacion",
+    "files": [
+      "gestor/textos.py",
+      "gestor/negocio.py",
+      "web/app.js",
+      "tests/test_autorizacion.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E3-T3",
+    "title": "Certificado de validación y autorización en Word",
+    "epic": "03-salidas-y-prototipo",
+    "dependencies": [
+      "E3-T2"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN `GET /api/expedientes/<id>/cv.docx` runs for the EFIA file THE SYSTEM SHALL return a valid zip whose `word/document.xml` parses and contains `GRUPO EFIA S.R.L.`, `4500555861` and `Se valida con remito 00001-00029461 correspondiente al período agosto 2026.`",
+      "WHEN the HBI CV is generated THE SYSTEM SHALL keep `word/media/image1.jpeg` and `word/header1.xml` byte for byte identical to `plantillas/cv_hbi.docx`, and every part other than `word/document.xml` identical too.",
+      "WHEN the CASPH CV is generated THE SYSTEM SHALL keep `word/footer2.xml` byte for byte identical to `plantillas/cv_casph.docx`.",
+      "WHEN the file has three remitos and five OC rows THE SYSTEM SHALL write `Se valida con remitos A, B y C correspondientes al período agosto 2026.` and a rows table with exactly five data rows.",
+      "WHEN the CV is generated for a 2027 period THE SYSTEM SHALL write the year 2027 in the date line instead of the template's fixed `2026`.",
+      "WHEN `GET /api/expedientes/<id>/autorizacion.docx` runs THE SYSTEM SHALL return a .docx whose body paragraph has `w:jc` `both` and contains the EFIA authorization text."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_docx -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-18-word",
+    "files": [
+      "gestor/docx_gen.py",
+      "gestor/server.py",
+      "tests/test_docx.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E3-T4",
+    "title": "Textos para SAP: ingreso, contabilización, MIGO y ML81N",
+    "epic": "03-salidas-y-prototipo",
+    "dependencies": [
+      "E3-T1"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN `textos.textos_sap` runs for the EFIA file (concepto corto `SERV. FUMIGACIÓN`, period `2026-08`) THE SYSTEM SHALL return `ingreso.texto` `HBI - OC 4500555861 - SERV. FUMIGACIÓN - 08/26`, `ingreso.fecha_documento` `01.08.2026`, `ingreso.asignacion` `OC 4500555861`, `ingreso.txt_cabecera` `0000-0000-0000000-0` and `ingreso.clase` `KE`.",
+      "WHEN the same file is booked THE SYSTEM SHALL return `contabilizada.txt_cabecera` `08/26 HBI OC 4500555861`, and for efector CASPH `08/26 CASPH OC 4500555861`.",
+      "WHEN `ingreso.texto` is longer than the configured limit THE SYSTEM SHALL return `aviso_largo` `El Texto tiene <n> caracteres; el límite configurado es <limite>.` with the real length, and `None` when it fits.",
+      "WHEN the OC is a service THE SYSTEM SHALL return `entrada.transaccion` `ML81N` with `fecha_contabilizacion` `31.08.2026` for the EFIA remito, and `MIGO` for a `BIEN` OC."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_sap -v  # expect: exit 0; el resumen final dice OK",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-19-textos-sap",
+    "files": [
+      "gestor/textos.py",
+      "gestor/negocio.py",
+      "tests/test_sap.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E3-T5",
+    "title": "Asistente pasos 5 a 7: documentos, GDE y estados",
+    "epic": "03-salidas-y-prototipo",
+    "dependencies": [
+      "E2-T6",
+      "E2-T7",
+      "E3-T2",
+      "E3-T3",
+      "E3-T4"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN the EFIA file is moved BORRADOR → CONTROLADO → EN_FIRMA → FIRMADO THE SYSTEM SHALL accept every transition and append one `datos.historial` entry per change.",
+      "WHEN the MACATEX file (error `objeto_faltante`) is moved to CONTROLADO THE SYSTEM SHALL answer 422 with `mensaje` `No se puede pasar a CONTROLADO: hay 1 errores y 0 salvables sin nota.`",
+      "WHEN a file in BORRADOR is moved to FIRMADO THE SYSTEM SHALL answer 422 with `mensaje` `No se puede pasar de BORRADOR a FIRMADO.`",
+      "WHEN a file is set to PENDIENTE with a reason and a follow-up date and later resumed THE SYSTEM SHALL return it to the state it had before PENDIENTE.",
+      "WHEN `POST /api/expedientes/<id>/estado` asks for ENVIADO THE SYSTEM SHALL answer 422 with `mensaje` `Asigná el expediente a una entrega para marcarlo como enviado.`",
+      "WHEN `PUT /api/expedientes/<id>/gde` receives `IF-2026-90061259-INSSJP-GESP%INSSJP` THE SYSTEM SHALL store `IF-2026-90061259-INSSJP-GESP#INSSJP`, and for `IF-2026-12` it SHALL answer 400 with `mensaje` `El número GDE \"IF-2026-12\" no tiene un formato válido.`"
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_estados -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-20-asistente-5-7-y-estados",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "web/app.js",
+      "tests/test_estados.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E3-T6",
+    "title": "Gate del prototipo: tres expedientes reales de punta a punta",
+    "epic": "03-salidas-y-prototipo",
+    "dependencies": [
+      "E3-T5"
+    ],
+    "priority": "p0",
+    "acceptance": [
+      "WHEN the EFIA case runs end to end over HTTP THE SYSTEM SHALL report 0 `error` and 0 `salvable`, return the golden carátula and authorization, serve a CV containing `Se valida con remito 00001-00029461 correspondiente al período agosto 2026.` and reach `FIRMADO`.",
+      "WHEN the BIO FAB case runs end to end over HTTP and the suggested note is saved THE SYSTEM SHALL accept CONTROLADO and return the golden BIO FAB authorization.",
+      "WHEN the MACATEX case runs end to end over HTTP THE SYSTEM SHALL return `autorizacion_error` `Falta el objeto de la contratación en la OC 4500594643` and refuse CONTROLADO, and after the OC gets the object `provisión de insumos textiles` with article `a la` it SHALL accept CONTROLADO and generate an authorization containing `correspondiente a la provisión de insumos textiles, conforme al remito N° 0001-00004409`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_prototipo -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-21-gate-prototipo",
+    "files": [
+      "tests/datos_prueba.py",
+      "tests/test_prototipo.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E4-T1",
+    "title": "Calendario anual OC × meses con estados accesibles",
+    "epic": "04-seguimiento",
+    "dependencies": [
+      "E3-T6"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN `GET /api/calendario?anio=2026&hoy=2026-09-20` runs with the EFIA manual OC (validity 2025-10-01 to 2026-09-30) and one FIRMADO file for `2026-08` THE SYSTEM SHALL return `validado` for August, `atrasado` for July, `pendiente_en_plazo` for September and `fuera` for October to December.",
+      "WHEN the OC validity ends 10 days after `hoy` and `dias_aviso_vencimiento_oc` is 60 THE SYSTEM SHALL set `vence_pronto` true on that row.",
+      "WHEN the calendar is returned THE SYSTEM SHALL give every cell a `letra` among `-`, `V`, `C`, `M`, `P`, `A` and `·` matching its state, so no state is conveyed by color alone.",
+      "WHEN a period without file ended 9 days before `hoy` and `dias_gracia` is 10 THE SYSTEM SHALL return `pendiente_en_plazo`, and 11 days before it SHALL return `atrasado`.",
+      "WHEN `GET /app.js` is requested THE SYSTEM SHALL serve an `app.js` whose text contains `leyenda-calendario` and each of the seven state names."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_calendario -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-22-calendario",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "web/app.js",
+      "web/style.css",
+      "tests/test_calendario.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E4-T2",
+    "title": "Pantalla Inicio con alertas ordenadas por urgencia",
+    "epic": "04-seguimiento",
+    "dependencies": [
+      "E4-T1"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN alerts of urgencies 3, 1 and 2 exist THE SYSTEM SHALL return them from `GET /api/inicio/alertas` ordered 1, 2, 3.",
+      "WHEN a PENDIENTE file has `fecha_seguimiento` earlier than `hoy` THE SYSTEM SHALL return a `pendiente_vencido` alert with urgency 1 and its `expediente_id`.",
+      "WHEN a file is FIRMADO and has no delivery THE SYSTEM SHALL return a `listo_sin_entrega` alert.",
+      "WHEN `hoy` is 2026-09-07 (fifth business day of September 2026) THE SYSTEM SHALL include the `informe_correctivos` alert, and WHEN `hoy` is 2026-09-08 it SHALL not.",
+      "WHEN the server started with a failed integrity check THE SYSTEM SHALL return `base_con_errores` as the first alert with `mensaje` `La base de datos tiene errores de integridad. Restaurá la última copia de seguridad desde Configuración.`"
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_inicio -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-23-inicio-alertas",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "web/app.js",
+      "tests/test_inicio.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E4-T3",
+    "title": "Entregas y CSV con formato NUMERACIÓN",
+    "epic": "04-seguimiento",
+    "dependencies": [
+      "E3-T6"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN two deliveries are created for HBI and one for CASPH THE SYSTEM SHALL number them 1 and 2 for HBI and 1 for CASPH.",
+      "WHEN a BORRADOR file is assigned to a delivery THE SYSTEM SHALL answer 422 with `mensaje` `Solo se asignan expedientes FIRMADO del mismo efector.`",
+      "WHEN a delivery with the FIRMADO EFIA file is sent THE SYSTEM SHALL set the delivery to `ENVIADA` with its `fecha_envio` and the file to `ENVIADO`.",
+      "WHEN `GET /api/entregas/<id>/numeracion.csv` runs THE SYSTEM SHALL return bytes starting with the UTF-8 BOM followed by the header line `REMITO;SII;PERIODO;SAP;OC;FACTURA;IMPORTE;TEXTO SAP;TXT CABECERA;EXPEDIENTE;GDE CARATULA;GDE FACTURA;GDE SII;GDE OC;GDE REMITOS;GDE CV;GDE VALE/HOJA;GDE AUTORIZACION;GDE CONTABILIZACION` and CRLF line endings.",
+      "WHEN the EFIA file is in the delivery THE SYSTEM SHALL write a row whose `REMITO` is `00001-00029461`, `PERIODO` `08-26`, `SAP` `77170`, `OC` `4500555861`, `FACTURA` `0003B00031812`, `IMPORTE` `1.224.990,00` and `TEXTO SAP` `HBI - OC 4500555861 - SERV. FUMIGACIÓN - 08/26`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_entregas -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-24-entregas",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/exportes.py",
+      "gestor/server.py",
+      "web/app.js",
+      "tests/test_entregas.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E4-T4",
+    "title": "Pendientes, pantalla Configuración, apagado e Iniciar.bat",
+    "epic": "04-seguimiento",
+    "dependencies": [
+      "E4-T2",
+      "E4-T3"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN two PENDIENTE files have follow-up dates 5 and 2 days before `hoy` THE SYSTEM SHALL list them from `GET /api/pendientes` with `dias_demora` 5 first and 2 second.",
+      "WHEN `PUT /api/config-local` receives a new `base_datos` THE SYSTEM SHALL write it to the file named by `GESTOR_CONFIG` keeping every other key.",
+      "WHEN `POST /api/base/backup` runs THE SYSTEM SHALL create one more `expedientes-AAAAMMDD-HHMMSS.db` in the backup folder.",
+      "WHEN `POST /api/apagar` runs THE SYSTEM SHALL answer `{\"ok\": true, \"datos\": {\"apagando\": true}}` and stop accepting connections within 5 seconds.",
+      "WHEN `Iniciar.bat` is read THE SYSTEM SHALL contain `start \"\" /b pythonw app.py`, `start \"\" /b pyw -3 app.py` and `start \"\" /b py -3 app.py` in that order, followed by the message `No se encontro Python 3.10 o superior en esta PC.`"
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_pendientes_config -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-25-pendientes-y-configuracion",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "web/app.js",
+      "Iniciar.bat",
+      "tests/test_pendientes_config.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E4-T5",
+    "title": "Escritor .xlsx propio, vista imprimible y seis exportes",
+    "epic": "04-seguimiento",
+    "dependencies": [
+      "E4-T4"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN `GET /api/exportes/consumo-oc.xlsx?oc=4500555861` runs THE SYSTEM SHALL return a zip containing `[Content_Types].xml`, `xl/workbook.xml` and `xl/worksheets/sheet1.xml`, and reading it back with `gestor.xlsx.leer_filas` SHALL return the same headers and cell values the export produced.",
+      "WHEN any of the six exports (`consumo-oc`, `seguimiento-oc`, `pendientes`, `entrega`, `calendario`, `centralizadas`) is requested as `.xlsx`, `.csv` and `.html` THE SYSTEM SHALL answer 200 for each.",
+      "WHEN a `.csv` export is requested THE SYSTEM SHALL return bytes that start with the UTF-8 BOM and use `;` as separator.",
+      "WHEN a `.html` export is requested THE SYSTEM SHALL return a page containing a `<table>` and an `@media print` rule.",
+      "WHEN `GET /api/exportes/inexistente.xlsx` runs THE SYSTEM SHALL answer 404 with `codigo` `no_encontrado`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_exportes -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-26-exportes",
+    "files": [
+      "gestor/xlsx_escritor.py",
+      "gestor/exportes.py",
+      "gestor/server.py",
+      "web/app.js",
+      "tests/test_exportes.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E5-T1",
+    "title": "Centralizadas: CV con leyenda, nota a Central y checklist",
+    "epic": "05-especiales-y-cierre",
+    "dependencies": [
+      "E4-T5"
+    ],
+    "priority": "p2",
+    "acceptance": [
+      "WHEN `textos.nota_central` runs for OC 4500000001 of `PROVEEDOR CENTRAL S.A.`, expediente `EX-2025-11111111- -INSSJP-GESP#INSSJP`, period `2026-08` THE SYSTEM SHALL return the reference `VALIDACIÓN DE BIENES Y SERVICIOS PROVEEDOR CENTRAL S.A. - EX-2025-11111111- -INSSJP-GESP#INSSJP, período 08-2026` and a body starting `Se envían como archivos embebidos la validación del servicio y remito correspondientes al proveedor PROVEEDOR CENTRAL S.A., del EX-2025-11111111- -INSSJP-GESP#INSSJP, con orden de compra 4500000001, período 08-2026.` followed by `Documentación embebida:` and the lines `- Remito` and `- Factura`.",
+      "WHEN a CENTRALIZADA file has `Factura` unchecked in `datos.checklist` THE SYSTEM SHALL report the error `documentacion_centralizada` with `mensaje` `Falta tildar como auditada la documentación: Factura.`",
+      "WHEN the centralized OC has an empty `leyenda_cv` THE SYSTEM SHALL report the error `leyenda_cv_faltante` with `mensaje` `Falta la leyenda del CV en la OC 4500000001.`",
+      "WHEN the CV of a CENTRALIZADA file is generated THE SYSTEM SHALL write the OC `leyenda_cv` in the `Observaciones:` paragraph.",
+      "WHEN a CENTRALIZADA file has `numero_nota` and `fecha_envio` THE SYSTEM SHALL mark that calendar cell with `centralizada_enviada` true."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_centralizadas -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-27-centralizadas",
+    "files": [
+      "gestor/textos.py",
+      "gestor/controles.py",
+      "gestor/negocio.py",
+      "gestor/server.py",
+      "tests/test_centralizadas.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E5-T2",
+    "title": "Correctivo: estados, informe económico e informe mensual",
+    "epic": "05-especiales-y-cierre",
+    "dependencies": [
+      "E4-T5"
+    ],
+    "priority": "p2",
+    "acceptance": [
+      "WHEN a CORRECTIVO file is created THE SYSTEM SHALL start it in `RECIBIDO_MANTENIMIENTO` and accept, in order, `INFORME_ECONOMICO`, `DEVUELTO`, `PARA_FACTURAR` and `CONTROLADO`, rejecting `PARA_FACTURAR` straight from `RECIBIDO_MANTENIMIENTO` with `mensaje` `No se puede pasar de RECIBIDO_MANTENIMIENTO a PARA_FACTURAR.`",
+      "WHEN the budgets are 500000000 and 870000000 centavos THE SYSTEM SHALL include in the economic report the line `Diferencia entre presupuestos: $ 3.700.000,00 (74 %).`",
+      "WHEN `monto_convalidado` is 500000000 centavos against the corrective row of 500000000 centavos THE SYSTEM SHALL return `porcentaje_convalidado` 100.",
+      "WHEN `GET /api/correctivos/informe-mensual?mes=2026-08` runs with one corrective of period `2026-08` THE SYSTEM SHALL return one row with `expediente`, `oc` `4500587755`, `procedimiento`, `adjudicatario`, `detalle` and `monto`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_correctivo -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-28-correctivos",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/textos.py",
+      "gestor/server.py",
+      "web/app.js",
+      "tests/test_correctivo.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E5-T3",
+    "title": "Pago eventual: estados, solicitud y uno por proveedor y año",
+    "epic": "05-especiales-y-cierre",
+    "dependencies": [
+      "E4-T5"
+    ],
+    "priority": "p2",
+    "acceptance": [
+      "WHEN an EVENTUAL file is created THE SYSTEM SHALL start it in `ARMADO` and accept, in order, `EN_DTO_ECONOMICO_CONTABLE`, `DEVUELTO`, `CONTABILIZADO` and `FINALIZADO`.",
+      "WHEN the invoice `1000-00006268` is for 2210187213 centavos THE SYSTEM SHALL write in paragraph 1 `$ 22.101.872,13.- (PESOS VEINTIDOS MILLONES CIENTO UN MIL OCHOCIENTOS SETENTA Y DOS CON 13/100 CENTAVOS)`.",
+      "WHEN every field of the request is loaded THE SYSTEM SHALL return exactly 8 paragraphs and none of them SHALL contain `[` or `]`.",
+      "WHEN a second non-annulled EVENTUAL file for the same SAP and year is controlled THE SYSTEM SHALL report the error `eventual_repetido` with `mensaje` `Ya hay un pago eventual para el proveedor SAP <sap> en 2026 (expediente <id>).` naming the first file.",
+      "WHEN `textos.caratula_eventual` runs for HBI, razón `PROVEEDOR DE PRUEBA S.A.` and invoice `1000-00006268` THE SYSTEM SHALL return `HBI - PAGO EVENTUAL - PROVEEDOR DE PRUEBA S.A. - FC N° 1000-00006268`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_eventual -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-29-pago-eventual",
+    "files": [
+      "gestor/negocio.py",
+      "gestor/controles.py",
+      "gestor/textos.py",
+      "web/app.js",
+      "tests/test_eventual.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E5-T4",
+    "title": "Modelos de autorización AySA y Edenor del CASPH",
+    "epic": "05-especiales-y-cierre",
+    "dependencies": [
+      "E3-T2"
+    ],
+    "priority": "p2",
+    "acceptance": [
+      "WHEN `textos.autorizacion_servicio_casph(\"AYSA\", \"0001-00012345\", 4512300, \"AGOSTO\", 2026, \"EX-2026-11111111- -INSSJP-GESP#INSSJP\")` runs THE SYSTEM SHALL return as first paragraph exactly `Por medio de la presente se autoriza el pago de la factura N° 0001-00012345 de la empresa AySA (AGUA Y SANEAMIENTOS ARGENTINOS S.A.), SAP 70262, por un monto de PESOS CUARENTA Y CINCO MIL CIENTO VEINTITRES con 00/100 CENTAVOS ($ 45.123,00-) correspondiente al mes de AGOSTO 2026, por el servicio de CLOACA del Centro Ambulatorio de Salud PAMI Hurlingham de acuerdo a la factura vinculada al EX-2026-11111111- -INSSJP-GESP#INSSJP.`",
+      "WHEN the same data runs for `EDENOR` THE SYSTEM SHALL return as first paragraph exactly `Por medio de la presente se autoriza el pago de la factura N° 0001-00012345 de la EMPRESA DISTRIBUIDORA Y COMERCIALIZADORA NORTE S.A. por un monto de PESOS CUARENTA Y CINCO MIL CIENTO VEINTITRES CON 00/100 CENTAVOS ($ 45.123,00-), correspondiente al mes de AGOSTO 2026, por el servicio de provisión de energía eléctrica del Centro Ambulatorio de Salud PAMI Hurlingham, de acuerdo a la factura vinculada al expediente EX-2026-11111111- -INSSJP-GESP#INSSJP.`",
+      "WHEN either text is generated THE SYSTEM SHALL return as second paragraph the same RESOL paragraph, containing `RESOL-2023-926-INSSJP-DE#INSSJP` and ending `Sin más, se eleva para su intervención.`",
+      "WHEN the company is not `AYSA` or `EDENOR` THE SYSTEM SHALL raise `ValueError`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_casph_servicios -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-30-aysa-edenor-casph",
+    "files": [
+      "gestor/textos.py",
+      "gestor/server.py",
+      "web/app.js",
+      "tests/test_casph_servicios.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E5-T5",
+    "title": "Prueba de dos procesos escribiendo la misma base",
+    "epic": "05-especiales-y-cierre",
+    "dependencies": [
+      "E2-T1"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN two Python processes insert 50 suppliers each into the same temporary database at the same time THE SYSTEM SHALL end with 100 rows in `proveedor` and 100 `evento` rows with `accion` `ALTA`.",
+      "WHEN two Python processes update the same OC with `version` 1 at the same time THE SYSTEM SHALL let exactly one succeed, report `ConflictoVersion` in the other, and leave the OC with `version` 2 and one `MODIFICACION` event."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_concurrencia -v  # expect: exit 0; el resumen final dice OK",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-31-concurrencia",
+    "files": [
+      "tests/test_concurrencia.py",
+      "gestor/db.py"
+    ],
+    "status": "pending"
+  },
+  {
+    "id": "E5-T6",
+    "title": "Instructivo, pantallas Ayuda y Centralizadas, gate final",
+    "epic": "05-especiales-y-cierre",
+    "dependencies": [
+      "E4-T1",
+      "E4-T2",
+      "E4-T3",
+      "E4-T4",
+      "E4-T5",
+      "E5-T1",
+      "E5-T2",
+      "E5-T3",
+      "E5-T4",
+      "E5-T5"
+    ],
+    "priority": "p1",
+    "acceptance": [
+      "WHEN `docs/INSTRUCTIVO.md` is read THE SYSTEM SHALL contain the headings `## Instalar Python`, `## Abrir el programa`, `## Dónde está la base`, `## Copias de seguridad`, `## Flujo de un expediente` and `## Revisión manual por pantalla`, in at most 120 lines.",
+      "WHEN `GET /api/ayuda` is requested THE SYSTEM SHALL return the exact content of `docs/INSTRUCTIVO.md` in `datos.markdown`.",
+      "WHEN `GET /` is requested THE SYSTEM SHALL return HTML containing `id=\"pantalla-ayuda\"` in addition to the eight screens.",
+      "WHEN `GET /app.js` is requested THE SYSTEM SHALL serve an `app.js` whose text contains `/api/centralizadas` and `/api/ayuda`."
+    ],
+    "verify": [
+      "python -W error::DeprecationWarning -m unittest tests.test_instructivo -v  # expect: exit 0; el resumen final dice OK",
+      "python app.py --check | grep -q '\"app\": \"gestor-expedientes\"'  # expect: exit 0 — el entry point arranca y /api/salud responde",
+      "python -m compileall -q app.py gestor tests  # expect: exit 0, sin salida (formato/lint del proyecto)",
+      "python -W error::DeprecationWarning -m unittest discover -s tests -t .  # expect: exit 0, OK — los gates de los pasos anteriores siguen en verde"
+    ],
+    "checkpoint": "step-32-instructivo-y-cierre",
+    "files": [
+      "docs/INSTRUCTIVO.md",
+      "gestor/server.py",
+      "web/index.html",
+      "web/app.js",
+      "tests/test_instructivo.py"
+    ],
+    "status": "pending"
+  }
+]

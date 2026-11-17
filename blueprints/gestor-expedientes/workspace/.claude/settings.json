@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sys; assert sys.version_info >= (3, 10), sys.version; print(sys.version)\")",
+      "Bash(python -W error::DeprecationWarning -m unittest:*)",
+      "Bash(python -m compileall -q app.py gestor tests:*)",
+      "Bash(python app.py --check:*)",
+      "Bash(cp -R blueprints/gestor-expedientes/workspace/. .)",
+      "Bash(git init -q)",
+      "Bash(git add -A)",
+      "Bash(git rev-parse:*)",
+      "Bash(git -c user.name=builder -c user.email=builder@localhost commit:*)",
+      "Bash(git commit:*)",
+      "Bash(git tag:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git config user.email:*)",
+      "Bash(git config user.name:*)",
+      "Bash(test:*)",
+      "Bash([:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(tail:*)"
+    ],
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(rm -rf:*)",
+      "Read(./datos/**)"
+    ]
+  }
+}

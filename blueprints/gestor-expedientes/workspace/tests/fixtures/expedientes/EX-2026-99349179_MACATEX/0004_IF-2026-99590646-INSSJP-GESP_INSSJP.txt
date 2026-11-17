@@ -1,0 +1,58 @@
+Factura de Proveedor                                                Cod. Trámite: JMW2053382
+
+Sistema de Autogestión de Comprobantes Electrónicos
+
+Datos de la Factura
+
+   CAE: 86416949757962
+   Fecha de emisión: 09/10/2026
+   Período: 2026-09
+   Monto: $33881600
+   Tipo de Comprobante: FACTURA B
+   Nro Comprobante: 0002 - 00000160
+   Estado de Aprobación: PENDIENTE
+
+Datos del Proveedor
+
+   Razón Social: MACATEX S.A
+   E-mail: macatex@gmail.com
+   CUIT: 30-70934851-1
+   Nro SAP: 118896
+
+Datos del Destino
+
+   UGL: 00 - NIVEL CENTRAL
+   Área: GESP - MESA DE ENTRADAS Y SALIDAS - HOSPITAL DEL BICENTENARIO ITUZAINGO
+   Tipo de Servicio: PROVEEDORES VARIOS
+   Concepto: Todos los conceptos
+   Orden de Compra: 4500594643
+
+                                                     IF-2026-99590646-INSSJP-GESP#INSSJP
+
+                                                     Página 1 de 1
+
+                                                                                  1 de 1
+                            Instituto Nacional de Servicios Sociales para Jubilados y Pensionados
+                                                    Año de la Grandeza Argentina
+                                                      Hoja Adicional de Firmas
+                                                             Informe gráfico
+
+Número: IF-2026-99590646-INSSJP-GESP#INSSJP
+                                                                                            ITUZAINGO CENTRO, BUENOS AIRES
+                                                                                                            Martes 13 de Octubre de 2026
+
+Referencia: CARGA EN SII - MACATEX S.A
+El documento fue importado por el sistema GEDO con un total de 1 pagina/s.
+
+ Digitally signed by GESTION DOCUMENTAL ELECTRONICA - GDE
+ Date: 2026.10.13 14:32:18 -03:00
+
+Eliana Maria Cabrera Giannini
+Auxiliar Administrativa
+Gerencia de Efectores Sanitarios Propios
+Instituto Nacional de Servicios Sociales para Jubilados y Pensionados
+
+                                                                                                                                                                                                              Digitally signed by GESTION DOCUMENTAL
+                                                                                                                                                                                                              ELECTRONICA - GDE
+                                                                                                                                                                                                              Date: 2026.10.13 14:32:19 -03:00
+

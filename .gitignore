@@ -1,0 +1,16 @@
+# Gestor de expedientes de pago — archivos que NO se versionan.
+# Llega a la raiz del proyecto con la copia de workspace/ de Bootstrap, ANTES del primer commit.
+# Plantillas (plantillas/*.docx), fixtures (tests/fixtures/**), config.json y .claude/ SI se versionan:
+# ninguna linea de abajo los alcanza.
+
+# Base de datos y copias de seguridad (se crean en tiempo de ejecucion)
+datos/
+*.db
+*.db-journal
+
+# Documentos generados por el programa
+salidas/
+
+# Bytecode de Python
+__pycache__/
+*.pyc

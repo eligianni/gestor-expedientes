@@ -1,0 +1,56 @@
+{
+  "version_config": 1,
+  "base_datos": "datos/expedientes.db",
+  "carpeta_backups": "datos/backups",
+  "backups_a_conservar": 30,
+  "carpeta_salidas": "salidas",
+  "puerto_preferido": 8765,
+  "puerto_maximo": 8775,
+  "tamano_maximo_subida_mb": 25,
+  "parametros_iniciales": {
+    "efectores": {
+      "HBI": {
+        "nombre": "Hospital del Bicentenario de Ituzaingó",
+        "destino": "al Hospital del Bicentenario de Ituzaingó",
+        "centros": ["1900"],
+        "prefijo_referencia": "",
+        "sigla": "HBI",
+        "plantilla_cv": "plantillas/cv_hbi.docx"
+      },
+      "CASPH": {
+        "nombre": "Centro Ambulatorio de Salud PAMI Hurlingham",
+        "destino": "al Centro Ambulatorio de Salud PAMI Hurlingham",
+        "centros": [],
+        "prefijo_referencia": "CASPH - ",
+        "sigla": "CASPH",
+        "plantilla_cv": "plantillas/cv_casph.docx"
+      }
+    },
+    "partidas_excluidas": ["3490000"],
+    "org_compras_propias": ["1900"],
+    "exclusiones": {
+      "sap": [],
+      "oc": []
+    },
+    "dias_gracia": 10,
+    "dias_aviso_vencimiento_oc": 60,
+    "umbral_por_agotarse_pct": 85,
+    "limite_texto_sap": 50,
+    "email_caratula": "contablehbi@pami.org.ar",
+    "pago_eventual": {
+      "email_caratula": "hbicontable@gmail.com",
+      "telefono": "1161757182"
+    },
+    "sii": {
+      "area": "GESP - MESA DE ENTRADAS Y SALIDAS - HOSPITAL DEL BICENTENARIO ITUZAINGO",
+      "tipo_servicio": "PROVEEDORES VARIOS",
+      "concepto": "Todos los conceptos"
+    },
+    "destinatario_factura": {
+      "nombre": "INSSJP",
+      "domicilio": "PERU 169",
+      "localidad": "CABA"
+    },
+    "nota_comodato": "NO-2026-38484415-INSSJP-GESP#INSSJP"
+  }
+}

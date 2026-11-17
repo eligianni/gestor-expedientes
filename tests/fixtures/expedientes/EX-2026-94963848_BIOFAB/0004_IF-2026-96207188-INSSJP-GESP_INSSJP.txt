@@ -1,0 +1,58 @@
+Factura de Proveedor                                                Cod. Trámite: EPB2037644
+
+Sistema de Autogestión de Comprobantes Electrónicos
+
+Datos de la Factura
+
+   CAE: 86372594419176
+   Fecha de emisión: 11/09/2026
+   Período: 2026-08
+   Monto: $21095000
+   Tipo de Comprobante: FACTURA B
+   Nro Comprobante: 0002 - 00003908
+   Estado de Aprobación: PENDIENTE
+
+Datos del Proveedor
+
+   Razón Social: BIO FAB SRL
+   E-mail: cobranzas@biofabsr.com
+   CUIT: 30-71172660-4
+   Nro SAP: 116467
+
+Datos del Destino
+
+   UGL: 00 - NIVEL CENTRAL
+   Área: GESP - MESA DE ENTRADAS Y SALIDAS - HOSPITAL DEL BICENTENARIO ITUZAINGO
+   Tipo de Servicio: PROVEEDORES VARIOS
+   Concepto: Todos los conceptos
+   Orden de Compra: 4500587121
+
+                                                     IF-2026-96207188-INSSJP-GESP#INSSJP
+
+                                                     Página 1 de 1
+
+                                                                                  1 de 1
+                            Instituto Nacional de Servicios Sociales para Jubilados y Pensionados
+                                                    Año de la Grandeza Argentina
+                                                      Hoja Adicional de Firmas
+                                                             Informe gráfico
+
+Número: IF-2026-96207188-INSSJP-GESP#INSSJP
+                                                                                            ITUZAINGO CENTRO, BUENOS AIRES
+                                                                                                             Viernes 2 de Octubre de 2026
+
+Referencia: CARGA EN SII - BIO FAB S.R.L
+El documento fue importado por el sistema GEDO con un total de 1 pagina/s.
+
+ Digitally signed by GESTION DOCUMENTAL ELECTRONICA - GDE
+ Date: 2026.10.02 10:17:34 -03:00
+
+Eliana Maria Cabrera Giannini
+Auxiliar Administrativa
+Gerencia de Efectores Sanitarios Propios
+Instituto Nacional de Servicios Sociales para Jubilados y Pensionados
+
+                                                                                                                                                                                                              Digitally signed by GESTION DOCUMENTAL
+                                                                                                                                                                                                              ELECTRONICA - GDE
+                                                                                                                                                                                                              Date: 2026.10.02 10:17:34 -03:00
+
