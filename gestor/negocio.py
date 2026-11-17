@@ -6,7 +6,7 @@ import copy
 import getpass
 import json
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from gestor import db, util
 
@@ -761,3 +761,167 @@ def listar_expedientes(con, estado=None, tipo=None, periodo=None, sap=None, entr
         dic["razon_social"] = dic["razon_social"] or ""
         filas.append(dic)
     return filas
+
+
+# --- Consumo y saldo -------------------------------------------------------
+
+SIN_PERIODO = "sin_periodo"
+COLUMNA_UNICA = "unica"
+
+
+def _cantidad(valor):
+    """Texto/int/Decimal de cantidad → Decimal exacto; vacío o inválido → 0."""
+    if valor is None or valor == "":
+        return Decimal(0)
+    try:
+        return util.a_decimal(valor if isinstance(valor, (int, Decimal)) else str(valor), decimales=None)
+    except (TypeError, ValueError):
+        return Decimal(0)
+
+
+def _cantidad_texto(numero):
+    """Decimal → texto sin ceros de más ni exponente: Decimal("8.000") → "8"."""
+    if numero == 0:
+        return "0"
+    return format(numero.normalize(), "f")
+
+
+def cantidades_del_expediente(exp):
+    """Suma por posición de los ítems de los remitos que no son del equipo en comodato."""
+    datos = exp.get("datos")
+    if isinstance(datos, str):
+        datos = _datos_de(exp)
+    cantidades = {}
+    for remito in (datos or {}).get("remitos") or []:
+        if remito.get("es_equipo_comodato"):
+            continue
+        for item in remito.get("items") or []:
+            try:
+                pos = int(item.get("pos"))
+            except (TypeError, ValueError):
+                continue
+            cantidades[pos] = cantidades.get(pos, Decimal(0)) + _cantidad(item.get("cantidad"))
+    return cantidades
+
+
+def _fin_vigencia(oc):
+    hasta = oc.get("vig_hasta")
+    prorroga = oc.get("prorroga")
+    try:
+        if prorroga and (not hasta or util.fecha_desde_texto(prorroga) > util.fecha_desde_texto(hasta)):
+            return prorroga
+    except ValueError:
+        pass
+    return hasta
+
+
+def periodos_de_vigencia(oc):
+    """Períodos AAAA-MM de la vigencia de la OC (según su día de inicio); [] si falta el inicio o el fin."""
+    desde, hasta = oc.get("vig_desde"), _fin_vigencia(oc)
+    if not desde or not hasta:
+        return []
+    dia = int(oc.get("dia_inicio_periodo") or 1)
+    primero = util.periodo_de_fecha(util.fecha_desde_texto(desde), dia).periodo
+    ultimo = util.periodo_de_fecha(util.fecha_desde_texto(hasta), dia).periodo
+    periodos = []
+    anio, mes = (int(p) for p in primero.split("-"))
+    while "%04d-%02d" % (anio, mes) <= ultimo:
+        periodos.append("%04d-%02d" % (anio, mes))
+        anio, mes = (anio + 1, 1) if mes == 12 else (anio, mes + 1)
+    return periodos
+
+
+def _validado_por_renglon(con, numero):
+    """{pos: {período: cantidad}} de los expedientes no anulados de la OC."""
+    resultado = {}
+    filas = con.execute(
+        "SELECT periodo, datos FROM expediente WHERE oc = ? AND estado <> 'ANULADO' ORDER BY periodo, id", (numero,),
+    )
+    for fila in filas:
+        periodo = fila["periodo"] or SIN_PERIODO
+        for pos, cantidad in cantidades_del_expediente({"datos": fila["datos"]}).items():
+            por_periodo = resultado.setdefault(pos, {})
+            por_periodo[periodo] = por_periodo.get(periodo, Decimal(0)) + cantidad
+    return resultado
+
+
+def _consumo(con, oc):
+    renglones = [dict(f) for f in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (oc["numero"],))]
+    validados = _validado_por_renglon(con, oc["numero"])
+    umbral = Decimal(str(db.leer_parametros(con).get("umbral_por_agotarse_pct", 85)))
+    meses_vigencia = len(periodos_de_vigencia(oc)) or 1
+    filas = []
+    for r in renglones:
+        con_desglose = r.get("desglose_cantidad") not in (None, "")
+        cantidad_oc = _cantidad(r["desglose_cantidad"] if con_desglose else r["cantidad"])
+        unidad = (r.get("desglose_unidad") if con_desglose else r.get("unidad")) or ""
+        previo = _cantidad(r.get("consumo_previo"))
+        por_periodo = validados.get(r["pos"], {})
+        validado = sum(por_periodo.values(), Decimal(0))
+        saldo = cantidad_oc - previo - validado
+        if con_desglose and unidad == "MES":
+            ideal = Decimal(1)
+        else:
+            ideal = (cantidad_oc / meses_vigencia).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if cantidad_oc > 0:
+            pct = int(((previo + validado) * 100 / cantidad_oc).to_integral_value(rounding=ROUND_HALF_UP))
+        else:
+            pct = 0
+        filas.append({
+            "pos": r["pos"],
+            "descripcion": r.get("descripcion") or "",
+            "cantidad_oc": _cantidad_texto(cantidad_oc),
+            "unidad": unidad,
+            "consumo_previo": _cantidad_texto(previo),
+            "validado": _cantidad_texto(validado),
+            "saldo": _cantidad_texto(saldo),
+            "ideal_mes": _cantidad_texto(ideal),
+            "pct_consumido": pct,
+            "por_agotarse": cantidad_oc > 0 and (saldo < ideal or pct >= umbral),
+            "por_periodo": {p: _cantidad_texto(c) for p, c in sorted(por_periodo.items())},
+        })
+    return filas
+
+
+def consumo_por_renglon(con, oc):
+    """Cantidad de la OC, consumo previo, validado, saldo, ideal por mes y alerta de agotamiento por renglón."""
+    if not isinstance(oc, dict):
+        oc = _leer_oc(con, oc)
+    return _consumo(con, oc)
+
+
+def _grilla_desde(oc, filas):
+    periodos = periodos_de_vigencia(oc)
+    if not periodos:
+        columnas = [COLUMNA_UNICA]
+    else:
+        # un consumo fuera de la vigencia (o sin período) también se muestra, en su propia columna
+        con_consumo = {p for f in filas for p in f["por_periodo"]}
+        columnas = sorted((set(periodos) | con_consumo) - {SIN_PERIODO})
+        if SIN_PERIODO in con_consumo:
+            columnas.append(SIN_PERIODO)
+    resultado = []
+    for f in filas:
+        if columnas == [COLUMNA_UNICA]:
+            celdas = {COLUMNA_UNICA: f["validado"]}
+        else:
+            celdas = {p: f["por_periodo"].get(p, "0") for p in columnas}
+        resultado.append({
+            "pos": f["pos"], "descripcion": f["descripcion"], "cantidad_oc": f["cantidad_oc"], "unidad": f["unidad"],
+            "celdas": celdas, "saldo": f["saldo"], "por_agotarse": f["por_agotarse"],
+        })
+    return {"periodos": columnas, "filas": resultado}
+
+
+def grilla(con, oc):
+    """Grilla renglón × período: una columna por período de la vigencia (sin fin de vigencia → una sola, "unica")."""
+    if not isinstance(oc, dict):
+        oc = _leer_oc(con, oc)
+    return _grilla_desde(oc, _consumo(con, oc))
+
+
+def consumo_oc(con, numero):
+    """Renglones con su consumo y la grilla, para GET /api/oc/<numero>/consumo."""
+    oc = _leer_oc(con, numero)
+    filas = _consumo(con, oc)
+    return {"renglones": filas, "grilla": _grilla_desde(oc, filas)}

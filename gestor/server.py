@@ -211,6 +211,10 @@ def oc_ficha(h, m, cuerpo):
     return 200, _ok(negocio.ficha_oc(h.conexion(), m.group("numero")))
 
 
+def oc_consumo(h, m, cuerpo):
+    return 200, _ok(negocio.consumo_oc(h.conexion(), m.group("numero")))
+
+
 def oc_editar(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.actualizar_oc(h.conexion(), m.group("numero"), datos.get("version"), datos.get("cambios")))
@@ -280,6 +284,7 @@ RUTAS = [
     ("POST", re.compile(r"/api/oc"), oc_crear),
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_ficha),
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_editar),
+    ("GET", re.compile(r"/api/oc/(?P<numero>\d+)/consumo"), oc_consumo),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)"), renglon_editar),
     ("GET", re.compile(r"/api/expedientes"), expedientes_listar),
