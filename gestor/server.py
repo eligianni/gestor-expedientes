@@ -241,6 +241,13 @@ def expediente_editar(h, m, cuerpo):
     return 200, _ok(negocio.actualizar_expediente(h.conexion(), m.group("id"), datos.get("version"), datos.get("cambios")))
 
 
+def remitos_pegar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.pegar_remitos(
+        h.conexion(), m.group("id"), datos.get("version"), datos.get("texto"), datos.get("es_equipo_comodato", False),
+    ))
+
+
 def expediente_anular(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.anular_expediente(h.conexion(), m.group("id"), datos.get("version"), datos.get("motivo")))
@@ -273,6 +280,7 @@ RUTAS = [
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)"), expediente_obtener),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)"), expediente_editar),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/anular"), expediente_anular),
+    ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/remitos/pegar"), remitos_pegar),
 ]
 
 

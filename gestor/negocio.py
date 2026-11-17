@@ -566,9 +566,15 @@ def actualizar_expediente(con, id_expediente, version, cambios):
         raise ErrorValidacion("No se puede editar: %s." % ", ".join(sorted(desconocidos)))
     columnas = {c: _validar_campo_expediente(c, v) for c, v in cambios.items() if c != "datos"}
     nuevos_datos = _validar_datos(cambios.get("datos") or {})
+    if "periodo" in columnas and "periodo_manual" not in columnas:
+        columnas["periodo_manual"] = 1  # cambiar el período a mano lo fija
     with db.transaccion(con):
         actual = _leer_expediente(con, id_expediente)
         _no_anulado(actual)
+        if columnas.get("periodo") and ("periodo_desde" not in columnas or "periodo_hasta" not in columnas):
+            limites = limites_de_periodo(columnas["periodo"], _dia_inicio(con, actual))
+            columnas.setdefault("periodo_desde", util.iso(limites.desde))
+            columnas.setdefault("periodo_hasta", util.iso(limites.hasta))
         contenido = _datos_de(actual)
         contenido.update(copy.deepcopy(nuevos_datos))
         if "factura" in nuevos_datos:
@@ -579,6 +585,132 @@ def actualizar_expediente(con, id_expediente, version, cambios):
         columnas["actualizado"] = db.ahora_utc()
         db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, columnas)
     return obtener_expediente(con, id_expediente)
+
+
+# --- Remitos y período -----------------------------------------------------
+
+_ERROR_LINEA_REMITO = 'Línea %d: se esperaba "numero;fecha[;fecha_firma]".'
+
+
+def parsear_remitos_pegados(texto):
+    """Una línea por remito: numero;fecha[;fecha_firma] (fechas dd/mm/aaaa). Devuelve remitos con fechas ISO."""
+    remitos = []
+    for numero_linea, linea in enumerate((texto or "").splitlines(), start=1):
+        if not linea.strip():
+            continue
+        partes = [p.strip() for p in linea.split(";")]
+        if len(partes) not in (2, 3) or not partes[0] or not partes[1]:
+            raise ErrorValidacion(_ERROR_LINEA_REMITO % numero_linea)
+        try:
+            fecha = util.iso(util.fecha_desde_texto(partes[1]))
+            fecha_firma = util.iso(util.fecha_desde_texto(partes[2])) if len(partes) == 3 and partes[2] else None
+        except ValueError:
+            raise ErrorValidacion(_ERROR_LINEA_REMITO % numero_linea) from None
+        remitos.append({
+            "numero": partes[0],
+            "fecha": fecha,
+            "fecha_firma": fecha_firma,
+            "es_equipo_comodato": False,
+            "aclara_periodo": False,
+            "items": [],
+        })
+    return remitos
+
+
+def fecha_base(remito):
+    """Fecha que define el período: la de firma si existe, si no la del remito."""
+    return remito.get("fecha_firma") or remito.get("fecha")
+
+
+def _remitos_de_periodo(remitos):
+    return [r for r in remitos if not r.get("es_equipo_comodato") and fecha_base(r)]
+
+
+def periodo_sugerido(oc, remitos):
+    """Período del remito (no de equipo) con la fecha base más reciente; None si no hay remitos."""
+    candidatos = _remitos_de_periodo(remitos)
+    if not candidatos:
+        return None
+    mas_reciente = max(fecha_base(r) for r in candidatos)
+    dia = int((oc or {}).get("dia_inicio_periodo") or 1)
+    return util.periodo_de_fecha(util.fecha_desde_texto(mas_reciente), dia)
+
+
+def remitos_fuera_de_periodo(periodo, remitos):
+    """Números de remito (no de equipo, sin aclaración de período) con fecha base fuera del período."""
+    if periodo is None:
+        return []
+    desde, hasta = util.iso(periodo.desde), util.iso(periodo.hasta)
+    return [
+        r["numero"] for r in _remitos_de_periodo(remitos)
+        if not r.get("aclara_periodo") and not desde <= fecha_base(r) <= hasta
+    ]
+
+
+def limites_de_periodo(periodo, dia_inicio=1):
+    """"2026-11" con día 17 → Periodo("2026-11", 2026-10-17, 2026-11-16); con día 1 → el mes calendario."""
+    anio, mes = (int(p) for p in _periodo(periodo).split("-"))
+    if dia_inicio == 1:
+        return util.periodo_de_fecha(util.fecha_desde_texto("%04d-%02d-01" % (anio, mes)), 1)
+    # el período se nombra por el mes en que termina: su último día es dia_inicio - 1 de ese mes
+    return util.periodo_de_fecha(util.fecha_desde_texto("%04d-%02d-%02d" % (anio, mes, dia_inicio - 1)), dia_inicio)
+
+
+def _dia_inicio(con, expediente):
+    if not expediente.get("oc"):
+        return 1
+    oc = db.leer_fila(con, "oc", {"numero": expediente["oc"]})
+    return int(oc["dia_inicio_periodo"]) if oc else 1
+
+
+def _periodo_dict(periodo):
+    if periodo is None:
+        return None
+    return {"periodo": periodo.periodo, "desde": util.iso(periodo.desde), "hasta": util.iso(periodo.hasta)}
+
+
+def _periodo_del_expediente(fila):
+    if not fila.get("periodo") or not fila.get("periodo_desde") or not fila.get("periodo_hasta"):
+        return None
+    return util.Periodo(fila["periodo"], util.fecha_desde_texto(fila["periodo_desde"]),
+                        util.fecha_desde_texto(fila["periodo_hasta"]))
+
+
+def pegar_remitos(con, id_expediente, version, texto, es_equipo_comodato=False):
+    """Agrega los remitos pegados (un mismo número reemplaza al anterior) y, si el período no es manual, lo sugiere."""
+    version = _version(version)
+    nuevos = parsear_remitos_pegados(texto)
+    if not nuevos:
+        raise ErrorValidacion("Pegá al menos un remito (numero;fecha[;fecha_firma]).")
+    equipo = _bandera(es_equipo_comodato if es_equipo_comodato is not None else 0, "es_equipo_comodato") == 1
+    for remito in nuevos:
+        remito["es_equipo_comodato"] = equipo
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        contenido = _datos_de(actual)
+        por_numero = {r["numero"]: i for i, r in enumerate(contenido["remitos"])}
+        for remito in nuevos:
+            if remito["numero"] in por_numero:
+                contenido["remitos"][por_numero[remito["numero"]]] = remito
+            else:
+                por_numero[remito["numero"]] = len(contenido["remitos"])
+                contenido["remitos"].append(remito)
+        oc = db.leer_fila(con, "oc", {"numero": actual["oc"]}) if actual.get("oc") else None
+        sugerido = periodo_sugerido(oc, contenido["remitos"])
+        columnas = {}
+        if sugerido is not None and not actual["periodo_manual"]:
+            columnas.update(periodo=sugerido.periodo, periodo_desde=util.iso(sugerido.desde),
+                            periodo_hasta=util.iso(sugerido.hasta))
+        contenido["historial"].append(_entrada_historial("REMITOS", actual["estado"]))
+        columnas["datos"] = contenido
+        columnas["actualizado"] = db.ahora_utc()
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, columnas)
+    expediente = obtener_expediente(con, id_expediente)
+    expediente["periodo_sugerido"] = _periodo_dict(sugerido)
+    expediente["fuera_de_periodo"] = remitos_fuera_de_periodo(
+        _periodo_del_expediente(expediente), expediente["datos"]["remitos"])
+    return expediente
 
 
 def anular_expediente(con, id_expediente, version, motivo):
