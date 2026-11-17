@@ -14,6 +14,12 @@ def normalizar_texto(s):
     return " ".join(sin_marcas.lower().split())
 
 
+def normalizar_domicilio(s):
+    """Mayúsculas, sin tildes, sin . , ; : - / y espacios colapsados: "Perú 169, C.A.B.A." → "PERU 169 CABA"."""
+    texto = normalizar_texto(re.sub(r"[.,;:\-/]", "", str(s or "")))
+    return texto.upper()
+
+
 def clave_encabezado(s):
     """Encabezado del Excel normalizado para buscar columnas por nombre: "N° O/C" → "n o c"."""
     texto = normalizar_texto(str(s).replace("º", "°"))
