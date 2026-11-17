@@ -965,3 +965,37 @@ def contexto_controles(con, id_expediente):
 
 
 controles.registrar_armador(contexto_controles)
+
+
+# --- Notas aclaratorias ----------------------------------------------------
+
+def guardar_nota(con, id_expediente, version, codigo, referencia, texto):
+    """Agrega o reemplaza la nota aclaratoria de un control salvable (misma clave = código + referencia)."""
+    version = _version(version)
+    if codigo == "importe_factura":
+        raise ErrorNegocio("Un error de importe no se salva con nota aclaratoria.")
+    if codigo not in controles.NOTAS:
+        raise ErrorNegocio("Ese control no admite nota aclaratoria.")
+    if not isinstance(texto, str) or not texto.strip():
+        raise ErrorValidacion("Escribí el texto de la nota aclaratoria.")
+    if referencia is not None and not isinstance(referencia, (str, int)):
+        raise ErrorValidacion("La referencia de la nota no es válida.")
+    referencia = "" if referencia is None else str(referencia)
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        contenido = _datos_de(actual)
+        notas = [
+            n for n in contenido["notas_aclaratorias"]
+            if (n.get("codigo"), "" if n.get("referencia") is None else str(n.get("referencia"))) != (codigo, referencia)
+        ]
+        notas.append({
+            "codigo": codigo, "referencia": referencia, "texto": texto.strip(),
+            "usuario": getpass.getuser(), "fecha": db.ahora_utc(),
+        })
+        contenido["notas_aclaratorias"] = notas
+        contenido["historial"].append(_entrada_historial("NOTA_ACLARATORIA", actual["estado"]))
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, {
+            "datos": contenido, "actualizado": db.ahora_utc(),
+        })
+    return obtener_expediente(con, id_expediente)

@@ -249,6 +249,17 @@ def expediente_controles(h, m, cuerpo):
     return 200, _ok(controles.controlar(h.conexion(), m.group("id")))
 
 
+def expediente_nota(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    con = h.conexion()
+    expediente = negocio.guardar_nota(
+        con, m.group("id"), datos.get("version"), datos.get("codigo"), datos.get("referencia"), datos.get("texto"),
+    )
+    respuesta = controles.controlar(con, expediente["id"])
+    respuesta["expediente"] = expediente
+    return 200, _ok(respuesta)
+
+
 def comprobantes_analizar(h, m, cuerpo):
     texto = leer_json(h, cuerpo).get("texto")
     if not isinstance(texto, str) or not texto.strip():
@@ -299,6 +310,7 @@ RUTAS = [
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/remitos/pegar"), remitos_pegar),
     ("POST", re.compile(r"/api/comprobantes/analizar"), comprobantes_analizar),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/controles"), expediente_controles),
+    ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/notas"), expediente_nota),
 ]
 
 

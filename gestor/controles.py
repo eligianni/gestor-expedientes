@@ -494,16 +494,89 @@ CONTROLES = [
 ]
 
 
+# --- Notas aclaratorias (controles salvables) ---------------------------------------
+
+def _nota_codigo_remito_distinto(resultado, ctx):
+    pos = int(resultado.referencia)
+    renglon = _renglones(ctx)[pos]
+    for remito in _remitos_de_consumo(ctx):
+        for item in remito.get("items") or []:
+            codigo = str(item.get("codigo") or "").strip()
+            if str(item.get("pos")) == str(pos) and codigo and \
+                    util.sap_sin_ceros(codigo) != util.sap_sin_ceros(renglon.get("codigo") or ""):
+                return (
+                    "Se deja constancia de que en el remito N° %s el renglón %d figura con el código %s, cuando el "
+                    "código correcto según la Orden de Compra N° %s es %s. Se trata de un error de tipeo que no afecta "
+                    "lo entregado." % (remito["numero"], pos, codigo, ctx["oc"]["numero"], renglon.get("codigo") or "")
+                )
+    return ""
+
+
+def periodo_de_factura_texto(desde, hasta):
+    """"2026-07" si desde y hasta caen en el mismo mes; si no, "dd/mm/aaaa al dd/mm/aaaa"."""
+    f_desde, f_hasta = util.fecha_desde_texto(desde), util.fecha_desde_texto(hasta)
+    if (f_desde.year, f_desde.month) == (f_hasta.year, f_hasta.month):
+        return util.iso(f_desde)[:7]
+    return "%s al %s" % (util.ddmmaaaa(f_desde), util.ddmmaaaa(f_hasta))
+
+
+def _nota_periodo_factura(resultado, ctx):
+    factura = _factura(ctx)
+    return (
+        "Se deja constancia de que la factura N° %s indica el período %s, cuando el período validado según remito es %s."
+        % (factura.get("numero"), periodo_de_factura_texto(factura["periodo_desde"], factura["periodo_hasta"]),
+           ctx["expediente"]["periodo"])
+    )
+
+
+_DATO_MENCION = {"oc": "la Orden de Compra N°", "expediente": "el expediente", "remito": "el remito N°"}
+
+
+def _nota_menciones_factura(resultado, ctx):
+    clave = resultado.referencia
+    factura = _factura(ctx)
+    real = ", ".join(_menciones_reales(ctx)[clave])
+    return "Se deja constancia de que la factura N° %s menciona %s %s, cuando corresponde %s." % (
+        factura.get("numero"), _DATO_MENCION[clave], factura["menciona"][clave], real)
+
+
+NOTAS = {
+    "codigo_remito_distinto": _nota_codigo_remito_distinto,
+    "periodo_factura": _nota_periodo_factura,
+    "menciones_factura": _nota_menciones_factura,
+}
+
+
+def _referencia(valor):
+    return "" if valor is None else str(valor)
+
+
 def evaluar(ctx):
-    """Corre todos los controles sobre un contexto ya armado."""
+    """Corre todos los controles sobre un contexto ya armado; los salvables traen su nota sugerida y la guardada."""
     resultados = []
     for control in CONTROLES:
         for resultado in control(ctx):
             if resultado.nivel not in NIVELES:
                 raise ValueError("Nivel inválido %r en %s." % (resultado.nivel, resultado.codigo))
             resultados.append(resultado)
+    guardadas = {
+        (n.get("codigo"), _referencia(n.get("referencia"))): n
+        for n in _datos(ctx).get("notas_aclaratorias") or []
+    }
+    salida = []
+    con_nota = 0
+    for resultado in resultados:
+        fila = resultado._asdict()
+        if resultado.nivel == "salvable":
+            redactor = NOTAS.get(resultado.codigo)
+            fila["nota_sugerida"] = redactor(resultado, ctx) if redactor else ""
+            fila["nota_guardada"] = guardadas.get((resultado.codigo, _referencia(resultado.referencia)))
+            if fila["nota_guardada"] is not None:
+                con_nota += 1
+        salida.append(fila)
     resumen = {nivel: sum(1 for r in resultados if r.nivel == nivel) for nivel in NIVELES}
-    return {"resultados": [r._asdict() for r in resultados], "resumen": resumen}
+    resumen["salvable_con_nota"] = con_nota
+    return {"resultados": salida, "resumen": resumen}
 
 
 def controlar(con, expediente_id):
