@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Gestor de expedientes de pago</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <a class="saltar" href="#contenido">Saltar al contenido</a>
+
+  <header class="encabezado">
+    <p class="encabezado-titulo">Gestor de expedientes de pago</p>
+    <label class="encabezado-efector" for="selector-efector">Efector
+      <select id="selector-efector">
+        <option value="HBI">HBI</option>
+        <option value="CASPH">CASPH</option>
+        <option value="Ambos">Ambos</option>
+      </select>
+    </label>
+  </header>
+
+  <div class="marco">
+    <nav class="menu" aria-label="Pantallas">
+      <ul>
+        <li><button type="button" data-pantalla="pantalla-inicio">Inicio</button></li>
+        <li><button type="button" data-pantalla="pantalla-calendario">Calendario</button></li>
+        <li><button type="button" data-pantalla="pantalla-oc">Órdenes de compra</button></li>
+        <li><button type="button" data-pantalla="pantalla-expedientes">Expedientes</button></li>
+        <li><button type="button" data-pantalla="pantalla-centralizadas">Centralizadas</button></li>
+        <li><button type="button" data-pantalla="pantalla-entregas">Entregas</button></li>
+        <li><button type="button" data-pantalla="pantalla-importar">Importar</button></li>
+        <li><button type="button" data-pantalla="pantalla-configuracion">Configuración</button></li>
+      </ul>
+    </nav>
+
+    <main id="contenido" tabindex="-1">
+      <div id="avisos" aria-live="polite"></div>
+
+      <section id="pantalla-inicio" aria-labelledby="titulo-inicio">
+        <h1 id="titulo-inicio">Inicio</h1>
+        <div id="inicio-estado" class="panel"><p>Cargando…</p></div>
+      </section>
+
+      <section id="pantalla-calendario" aria-labelledby="titulo-calendario" hidden>
+        <h1 id="titulo-calendario">Calendario</h1>
+        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+      </section>
+
+      <section id="pantalla-oc" aria-labelledby="titulo-oc" hidden>
+        <h1 id="titulo-oc">Órdenes de compra</h1>
+        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+      </section>
+
+      <section id="pantalla-expedientes" aria-labelledby="titulo-expedientes" hidden>
+        <h1 id="titulo-expedientes">Expedientes</h1>
+        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+      </section>
+
+      <section id="pantalla-centralizadas" aria-labelledby="titulo-centralizadas" hidden>
+        <h1 id="titulo-centralizadas">Centralizadas</h1>
+        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+      </section>
+
+      <section id="pantalla-entregas" aria-labelledby="titulo-entregas" hidden>
+        <h1 id="titulo-entregas">Entregas</h1>
+        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+      </section>
+
+      <section id="pantalla-importar" aria-labelledby="titulo-importar" hidden>
+        <h1 id="titulo-importar">Importar z_compras2</h1>
+        <form id="form-importar" class="panel formulario" novalidate>
+          <div class="campo">
+            <label for="importar-archivo">Reporte z_compras2 (.xlsx)</label>
+            <input id="importar-archivo" name="archivo" type="file" accept=".xlsx" required>
+          </div>
+          <div class="campo">
+            <label for="importar-efector">Efector</label>
+            <select id="importar-efector" name="efector">
+              <option value="HBI">HBI</option>
+              <option value="CASPH">CASPH</option>
+            </select>
+          </div>
+          <div id="importar-centros" class="campo" hidden>
+            <label for="importar-centros-valor">Centros SAP de CASPH (separados por coma)</label>
+            <input id="importar-centros-valor" type="text" inputmode="numeric" aria-describedby="importar-centros-ayuda">
+            <p id="importar-centros-ayuda" class="texto-suave">CASPH todavía no tiene centros configurados. Cargalos para poder importar.</p>
+            <button type="button" id="importar-centros-guardar" class="secundario">Guardar centros</button>
+          </div>
+          <div class="acciones">
+            <button type="submit" id="importar-vista-previa">Vista previa</button>
+            <button type="button" id="importar-confirmar" disabled>Confirmar importación</button>
+          </div>
+        </form>
+        <div id="importar-resultado"></div>
+        <h2>Importaciones anteriores</h2>
+        <div id="importar-historial"><p>Cargando…</p></div>
+      </section>
+
+      <section id="pantalla-configuracion" aria-labelledby="titulo-configuracion" hidden>
+        <h1 id="titulo-configuracion">Configuración</h1>
+        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

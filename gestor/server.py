@@ -1,6 +1,9 @@
 """Servidor HTTP local del gestor: ThreadingHTTPServer en 127.0.0.1 y despacho por la lista RUTAS."""
+import email.parser
+import email.policy
 import getpass
 import http.server
+import io
 import json
 import os
 import re
@@ -9,31 +12,97 @@ import sqlite3
 import urllib.request
 from urllib.parse import urlsplit
 
-from gestor import APP_ID, __version__, config, db
+from gestor import APP_ID, __version__, config, db, importar, xlsx
+
+WEB = config.RAIZ / "web"
+
+# Únicos archivos que se sirven fuera de /api/ (nada fuera de web/).
+ESTATICOS = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/style.css": ("style.css", "text/css; charset=utf-8"),
+}
+
+_TAMANO_DESCARTE = 64 * 1024
 
 
 class SinPuertoLibre(Exception):
     """Ningún puerto del rango está libre ni tiene al gestor corriendo."""
 
 
-def responder_json(h, estado, dic):
-    cuerpo = json.dumps(dic, ensure_ascii=False).encode("utf-8")
+class ErrorHTTP(Exception):
+    """Error con estado HTTP, código y mensaje para la usuaria."""
+
+    def __init__(self, estado, codigo, mensaje):
+        super().__init__(mensaje)
+        self.estado = estado
+        self.codigo = codigo
+        self.mensaje = mensaje
+
+
+def validacion(mensaje):
+    return ErrorHTTP(400, "validacion", mensaje)
+
+
+def responder(h, estado, cuerpo, tipo):
     h.send_response(estado)
-    h.send_header("Content-Type", "application/json; charset=utf-8")
+    h.send_header("Content-Type", tipo)
     h.send_header("Content-Length", str(len(cuerpo)))
+    h.send_header("Cache-Control", "no-store")
     h.end_headers()
     h.wfile.write(cuerpo)
+
+
+def responder_json(h, estado, dic):
+    responder(h, estado, json.dumps(dic, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
 
 def _error(codigo, mensaje):
     return {"ok": False, "error": {"codigo": codigo, "mensaje": mensaje}}
 
 
-# --- Rutas -----------------------------------------------------------------
-
 def _ok(datos):
     return {"ok": True, "datos": datos}
 
+
+# --- Cuerpos ---------------------------------------------------------------
+
+def leer_json(h, cuerpo):
+    if not cuerpo:
+        return {}
+    try:
+        datos = json.loads(cuerpo.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise validacion("El cuerpo del pedido no es JSON válido.") from None
+    if not isinstance(datos, dict):
+        raise validacion("El cuerpo del pedido debe ser un objeto JSON.")
+    return datos
+
+
+def leer_multipart(h, cuerpo):
+    """multipart/form-data → (campos de texto, {nombre: (nombre_de_archivo, bytes)})."""
+    tipo = h.headers.get("Content-Type") or ""
+    if not tipo.lower().startswith("multipart/form-data"):
+        raise validacion("Se esperaba un formulario con un archivo (multipart/form-data).")
+    crudo = b"Content-Type: " + tipo.encode("latin-1") + b"\r\nMIME-Version: 1.0\r\n\r\n" + cuerpo
+    mensaje = email.parser.BytesParser(policy=email.policy.default).parsebytes(crudo)
+    if not mensaje.is_multipart():
+        raise validacion("El formulario enviado no se pudo leer.")
+    campos, archivos = {}, {}
+    for parte in mensaje.iter_parts():
+        nombre = parte.get_param("name", header="content-disposition")
+        if not nombre:
+            continue
+        contenido = parte.get_payload(decode=True) or b""
+        nombre_archivo = parte.get_filename()
+        if nombre_archivo is not None:
+            archivos[nombre] = (nombre_archivo, contenido)
+        else:
+            campos[nombre] = contenido.decode("utf-8")
+    return campos, archivos
+
+
+# --- Rutas -----------------------------------------------------------------
 
 def salud(h, m, cuerpo):
     return 200, {
@@ -65,10 +134,72 @@ def base_restaurar(h, m, cuerpo):
     return 200, _ok({"restaurado": ultimo.name})
 
 
+def _datos_parametros(con):
+    return {"parametros": db.leer_parametros(con), "versiones": db.versiones_parametros(con)}
+
+
+def parametros_leer(h, m, cuerpo):
+    return 200, _ok(_datos_parametros(h.conexion()))
+
+
+def parametros_guardar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    clave = datos.get("clave")
+    if not isinstance(clave, str) or not clave:
+        raise validacion("Falta la clave del parámetro.")
+    if "valor" not in datos:
+        raise validacion("Falta el valor del parámetro.")
+    version = datos.get("version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise validacion("Falta la versión del parámetro.")
+    con = h.conexion()
+    if clave not in db.versiones_parametros(con):
+        raise ErrorHTTP(404, "no_encontrado", "No existe el parámetro %s." % clave)
+    db.guardar_parametro(con, clave, datos["valor"], version)
+    return 200, _ok(_datos_parametros(con))
+
+
+def _pedido_importacion(h, cuerpo):
+    """Valida el formulario de importación y devuelve (efector, nombre_archivo, contenido, parametros)."""
+    campos, archivos = leer_multipart(h, cuerpo)
+    efector = (campos.get("efector") or "").strip()
+    if efector not in ("HBI", "CASPH"):
+        raise validacion("Elegí el efector (HBI o CASPH) antes de importar.")
+    if "archivo" not in archivos or not archivos["archivo"][1]:
+        raise validacion("Elegí el archivo z_compras2 (.xlsx) a importar.")
+    nombre, contenido = archivos["archivo"]
+    parametros = db.leer_parametros(h.conexion())
+    centros = ((parametros.get("efectores") or {}).get(efector) or {}).get("centros") or []
+    if not centros:
+        raise ErrorHTTP(422, "negocio", "Configurá los centros SAP de %s antes de importar." % efector)
+    return efector, nombre, contenido, parametros
+
+
+def importar_vista_previa(h, m, cuerpo):
+    efector, _, contenido, parametros = _pedido_importacion(h, cuerpo)
+    informe = importar.analizar(io.BytesIO(contenido), efector, parametros, con=h.conexion())
+    return 200, _ok(informe)
+
+
+def importar_confirmar(h, m, cuerpo):
+    efector, nombre, contenido, parametros = _pedido_importacion(h, cuerpo)
+    informe = importar.importar(h.conexion(), io.BytesIO(contenido), efector, parametros, archivo=nombre)
+    return 200, _ok(informe)
+
+
+def importaciones(h, m, cuerpo):
+    return 200, _ok(db.listar_importaciones(h.conexion()))
+
+
 RUTAS = [
     ("GET", re.compile(r"/api/salud"), salud),
     ("GET", re.compile(r"/api/base/estado"), base_estado),
     ("POST", re.compile(r"/api/base/restaurar"), base_restaurar),
+    ("GET", re.compile(r"/api/parametros"), parametros_leer),
+    ("PUT", re.compile(r"/api/parametros"), parametros_guardar),
+    ("POST", re.compile(r"/api/importar/vista-previa"), importar_vista_previa),
+    ("POST", re.compile(r"/api/importar/confirmar"), importar_confirmar),
+    ("GET", re.compile(r"/api/importaciones"), importaciones),
 ]
 
 
@@ -80,8 +211,27 @@ class Manejador(http.server.BaseHTTPRequestHandler):
         # Con pythonw no hay consola: no se escribe nada.
         pass
 
+    def _largo(self):
+        try:
+            return max(0, int(self.headers.get("Content-Length") or 0))
+        except ValueError:
+            raise validacion("Content-Length inválido.") from None
+
+    def _descartar_cuerpo(self, largo):
+        """Consume el cuerpo sin guardarlo, para que el cliente reciba la respuesta de error."""
+        restante = largo
+        while restante > 0:
+            leido = self.rfile.read(min(_TAMANO_DESCARTE, restante))
+            if not leido:
+                break
+            restante -= len(leido)
+
     def _leer_cuerpo(self):
-        largo = int(self.headers.get("Content-Length") or 0)
+        largo = self._largo()
+        maximo_mb = self.server.cfg.get("tamano_maximo_subida_mb", 25)
+        if largo > maximo_mb * 1024 * 1024:
+            self._descartar_cuerpo(largo)
+            raise ErrorHTTP(413, "demasiado_grande", "El archivo supera el máximo de %s MB." % ("%g" % maximo_mb))
         return self.rfile.read(largo) if largo > 0 else b""
 
     def conexion(self):
@@ -90,8 +240,20 @@ class Manejador(http.server.BaseHTTPRequestHandler):
             self._con = db.conectar(config.ruta(self.server.cfg, "base_datos"))
         return self._con
 
+    def _estatico(self, ruta):
+        nombre, tipo = ESTATICOS[ruta]
+        try:
+            contenido = (WEB / nombre).read_bytes()
+        except OSError:
+            responder_json(self, 404, _error("no_encontrado", "Ruta no encontrada: %s" % ruta))
+            return
+        responder(self, 200, contenido, tipo)
+
     def _despachar(self, metodo):
         ruta = urlsplit(self.path).path
+        if metodo == "GET" and ruta in ESTATICOS:
+            self._estatico(ruta)
+            return
         self._con = None
         try:
             cuerpo = self._leer_cuerpo() if metodo in ("POST", "PUT") else b""
@@ -104,8 +266,12 @@ class Manejador(http.server.BaseHTTPRequestHandler):
                     break
             else:
                 estado, dic = 404, _error("no_encontrado", "Ruta no encontrada: %s" % ruta)
+        except ErrorHTTP as error:
+            estado, dic = error.estado, _error(error.codigo, error.mensaje)
         except db.ConflictoVersion as error:
             estado, dic = 409, _error("conflicto_version", str(error))
+        except (importar.ErrorImportacion, xlsx.XlsxError) as error:
+            estado, dic = 400, _error("validacion", str(error))
         except Exception as error:  # noqa: BLE001 — cualquier falla imprevista es un 500
             estado, dic = 500, _error("interno", "Error interno: %s" % type(error).__name__)
         finally:

@@ -384,6 +384,17 @@ def leer_parametros(con):
     return {fila["clave"]: json.loads(fila["valor"]) for fila in con.execute("SELECT clave, valor FROM config ORDER BY clave")}
 
 
+def versiones_parametros(con):
+    """clave → version de cada parámetro compartido (para el control optimista desde la interfaz)."""
+    return {fila["clave"]: fila["version"] for fila in con.execute("SELECT clave, version FROM config ORDER BY clave")}
+
+
+def listar_importaciones(con):
+    """Historial de importaciones, la más nueva primero (sin el informe completo)."""
+    filas = con.execute("SELECT id, fecha, archivo, efector, usuario FROM importacion ORDER BY id DESC")
+    return [_fila_a_dict(fila) for fila in filas]
+
+
 def guardar_parametro(con, clave, valor, version_esperada):
     with transaccion(con):
         actualizar_con_version(con, "config", {"clave": clave}, version_esperada, {"valor": _json(valor)})
