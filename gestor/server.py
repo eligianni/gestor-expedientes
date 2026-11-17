@@ -10,9 +10,9 @@ import re
 import socket
 import sqlite3
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
-from gestor import APP_ID, __version__, config, db, importar, xlsx
+from gestor import APP_ID, __version__, config, db, importar, negocio, xlsx
 
 WEB = config.RAIZ / "web"
 
@@ -191,6 +191,42 @@ def importaciones(h, m, cuerpo):
     return 200, _ok(db.listar_importaciones(h.conexion()))
 
 
+def _consulta(h):
+    return {clave: valores[-1] for clave, valores in parse_qs(urlsplit(h.path).query).items()}
+
+
+def oc_listar(h, m, cuerpo):
+    q = _consulta(h)
+    efector = q.get("efector") or None
+    return 200, _ok(negocio.listar_oc(
+        h.conexion(), efector=efector, texto=q.get("q", ""), incluir_excluidas=q.get("excluidas") == "1",
+    ))
+
+
+def oc_crear(h, m, cuerpo):
+    return 200, _ok(negocio.crear_oc_manual(h.conexion(), leer_json(h, cuerpo)))
+
+
+def oc_ficha(h, m, cuerpo):
+    return 200, _ok(negocio.ficha_oc(h.conexion(), m.group("numero")))
+
+
+def oc_editar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.actualizar_oc(h.conexion(), m.group("numero"), datos.get("version"), datos.get("cambios")))
+
+
+def renglon_agregar(h, m, cuerpo):
+    return 200, _ok(negocio.agregar_renglon(h.conexion(), m.group("numero"), leer_json(h, cuerpo)))
+
+
+def renglon_editar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.actualizar_renglon(
+        h.conexion(), m.group("numero"), int(m.group("pos")), datos.get("version"), datos.get("cambios"),
+    ))
+
+
 RUTAS = [
     ("GET", re.compile(r"/api/salud"), salud),
     ("GET", re.compile(r"/api/base/estado"), base_estado),
@@ -200,6 +236,12 @@ RUTAS = [
     ("POST", re.compile(r"/api/importar/vista-previa"), importar_vista_previa),
     ("POST", re.compile(r"/api/importar/confirmar"), importar_confirmar),
     ("GET", re.compile(r"/api/importaciones"), importaciones),
+    ("GET", re.compile(r"/api/oc"), oc_listar),
+    ("POST", re.compile(r"/api/oc"), oc_crear),
+    ("GET", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_ficha),
+    ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_editar),
+    ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
+    ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)"), renglon_editar),
 ]
 
 
@@ -270,8 +312,12 @@ class Manejador(http.server.BaseHTTPRequestHandler):
             estado, dic = error.estado, _error(error.codigo, error.mensaje)
         except db.ConflictoVersion as error:
             estado, dic = 409, _error("conflicto_version", str(error))
-        except (importar.ErrorImportacion, xlsx.XlsxError) as error:
+        except (importar.ErrorImportacion, xlsx.XlsxError, negocio.ErrorValidacion) as error:
             estado, dic = 400, _error("validacion", str(error))
+        except negocio.NoEncontrado as error:
+            estado, dic = 404, _error("no_encontrado", str(error))
+        except negocio.ErrorNegocio as error:
+            estado, dic = 422, _error("negocio", str(error))
         except Exception as error:  # noqa: BLE001 — cualquier falla imprevista es un 500
             estado, dic = 500, _error("interno", "Error interno: %s" % type(error).__name__)
         finally:

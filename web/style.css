@@ -154,6 +154,9 @@ input[type="file"] { padding: 8px; }
 .formulario { display: flex; flex-direction: column; gap: 16px; }
 .campo { display: flex; flex-direction: column; gap: 4px; max-width: 480px; }
 .campo label { font-weight: 600; }
+.campo-casilla { flex-direction: row; align-items: center; gap: 12px; }
+.campo-casilla input { width: 24px; height: 24px; min-height: 24px; margin: 0; }
+.campo-casilla label { font-weight: 400; }
 .acciones { display: flex; flex-wrap: wrap; gap: 12px; }
 
 .texto-suave { color: var(--texto-suave); }
