@@ -5,10 +5,11 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import urllib.request
 from urllib.parse import urlsplit
 
-from gestor import APP_ID, __version__, config
+from gestor import APP_ID, __version__, config, db
 
 
 class SinPuertoLibre(Exception):
@@ -30,19 +31,44 @@ def _error(codigo, mensaje):
 
 # --- Rutas -----------------------------------------------------------------
 
+def _ok(datos):
+    return {"ok": True, "datos": datos}
+
+
 def salud(h, m, cuerpo):
-    cfg = h.server.cfg
-    hay_base = config.ruta(cfg, "base_datos").is_file()
     return 200, {
         "app": APP_ID,
         "version": __version__,
-        "db": "ok" if hay_base else "sin_base",
+        "db": h.server.estado_db,
         "usuario": getpass.getuser(),
     }
 
 
+def base_estado(h, m, cuerpo):
+    ultimo = db.ultimo_backup(config.ruta(h.server.cfg, "carpeta_backups"))
+    return 200, _ok({
+        "integridad": "ok" if h.server.integridad else "falla",
+        "ultimo_backup": ultimo.name if ultimo is not None else None,
+    })
+
+
+def base_restaurar(h, m, cuerpo):
+    cfg = h.server.cfg
+    ultimo = db.ultimo_backup(config.ruta(cfg, "carpeta_backups"))
+    if ultimo is None:
+        return 422, _error("negocio", "No hay copias de seguridad para restaurar.")
+    ruta_base = config.ruta(cfg, "base_datos")
+    db.restaurar_backup(ultimo, ruta_base)
+    con = h.conexion()
+    h.server.integridad = db.verificar_integridad(con)
+    h.server.estado_db = "ok"
+    return 200, _ok({"restaurado": ultimo.name})
+
+
 RUTAS = [
     ("GET", re.compile(r"/api/salud"), salud),
+    ("GET", re.compile(r"/api/base/estado"), base_estado),
+    ("POST", re.compile(r"/api/base/restaurar"), base_restaurar),
 ]
 
 
@@ -58,8 +84,15 @@ class Manejador(http.server.BaseHTTPRequestHandler):
         largo = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(largo) if largo > 0 else b""
 
+    def conexion(self):
+        """Conexión propia de este pedido; se abre al primer uso y se cierra al responder."""
+        if self._con is None:
+            self._con = db.conectar(config.ruta(self.server.cfg, "base_datos"))
+        return self._con
+
     def _despachar(self, metodo):
         ruta = urlsplit(self.path).path
+        self._con = None
         try:
             cuerpo = self._leer_cuerpo() if metodo in ("POST", "PUT") else b""
             for metodo_ruta, patron, funcion in RUTAS:
@@ -71,8 +104,14 @@ class Manejador(http.server.BaseHTTPRequestHandler):
                     break
             else:
                 estado, dic = 404, _error("no_encontrado", "Ruta no encontrada: %s" % ruta)
+        except db.ConflictoVersion as error:
+            estado, dic = 409, _error("conflicto_version", str(error))
         except Exception as error:  # noqa: BLE001 — cualquier falla imprevista es un 500
             estado, dic = 500, _error("interno", "Error interno: %s" % type(error).__name__)
+        finally:
+            if self._con is not None:
+                self._con.close()
+                self._con = None
         responder_json(self, estado, dic)
 
     def do_GET(self):
@@ -96,6 +135,19 @@ def crear_servidor(puerto, cfg):
     httpd = _Servidor(("127.0.0.1", puerto), Manejador)
     httpd.daemon_threads = True
     httpd.cfg = cfg
+    httpd.estado_db = "sin_base"
+    httpd.integridad = False
+    ruta_base = config.ruta(cfg, "base_datos")
+    try:
+        db.inicializar(ruta_base, cfg["parametros_iniciales"])
+        con = db.conectar(ruta_base)
+        try:
+            httpd.integridad = db.verificar_integridad(con)
+        finally:
+            con.close()
+        httpd.estado_db = "ok"
+    except (sqlite3.Error, OSError, db.BaseNoDisponible):
+        httpd.estado_db = "sin_base"
     return httpd
 
 

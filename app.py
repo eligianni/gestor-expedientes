@@ -5,7 +5,7 @@ import sys
 import threading
 import webbrowser
 
-from gestor import APP_ID, config, server
+from gestor import APP_ID, config, db, server
 
 
 def _check(cfg):
@@ -47,6 +47,14 @@ def main(argv=None):
         return 0
 
     httpd = server.crear_servidor(puerto, cfg)
+    try:
+        db.hacer_backup(
+            config.ruta(cfg, "base_datos"),
+            config.ruta(cfg, "carpeta_backups"),
+            cfg["backups_a_conservar"],
+        )
+    except Exception:  # noqa: BLE001 — un backup fallido no impide arrancar; se ve en /api/base/estado
+        pass
     if not args.no_browser:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
