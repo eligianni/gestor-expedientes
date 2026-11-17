@@ -8,7 +8,7 @@ import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-from gestor import db, util
+from gestor import controles, db, util
 
 EFECTORES = ("HBI", "CASPH")
 TIPOS_OC = ("SERVICIO", "BIEN", "PROVISION")
@@ -925,3 +925,43 @@ def consumo_oc(con, numero):
     oc = _leer_oc(con, numero)
     filas = _consumo(con, oc)
     return {"renglones": filas, "grilla": _grilla_desde(oc, filas)}
+
+
+# --- Contexto de controles -------------------------------------------------
+
+def contexto_controles(con, id_expediente):
+    """Todo lo que los controles necesitan, leído una sola vez (los controles no leen la base)."""
+    expediente = obtener_expediente(con, id_expediente)
+    oc = proveedor = None
+    renglones, consumo, otros_oc = [], [], []
+    if expediente.get("oc"):
+        ficha = ficha_oc(con, expediente["oc"])
+        oc, proveedor, renglones = ficha["oc"], ficha["proveedor"], ficha["renglones"]
+        consumo = _consumo(con, oc)
+        otros_oc = [
+            dict(f) for f in con.execute(
+                "SELECT id, estado, periodo, factura FROM expediente WHERE oc = ? AND id <> ? AND estado <> 'ANULADO' "
+                "ORDER BY id", (oc["numero"], expediente["id"]),
+            )
+        ]
+    otros_proveedor = []
+    if expediente.get("sap"):
+        otros_proveedor = [
+            dict(f) for f in con.execute(
+                "SELECT id, estado, periodo, factura FROM expediente WHERE sap = ? AND id <> ? AND estado <> 'ANULADO' "
+                "AND factura <> '' ORDER BY id", (expediente["sap"], expediente["id"]),
+            )
+        ]
+    return {
+        "expediente": expediente,
+        "oc": oc,
+        "proveedor": proveedor,
+        "renglones": renglones,
+        "consumo": consumo,
+        "parametros": db.leer_parametros(con),
+        "otros_de_la_oc": otros_oc,
+        "otros_del_proveedor": otros_proveedor,
+    }
+
+
+controles.registrar_armador(contexto_controles)

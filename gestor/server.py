@@ -12,7 +12,7 @@ import sqlite3
 import urllib.request
 from urllib.parse import parse_qs, urlsplit
 
-from gestor import APP_ID, __version__, comprobantes, config, db, importar, negocio, xlsx
+from gestor import APP_ID, __version__, comprobantes, config, controles, db, importar, negocio, xlsx
 
 WEB = config.RAIZ / "web"
 
@@ -245,6 +245,10 @@ def expediente_editar(h, m, cuerpo):
     return 200, _ok(negocio.actualizar_expediente(h.conexion(), m.group("id"), datos.get("version"), datos.get("cambios")))
 
 
+def expediente_controles(h, m, cuerpo):
+    return 200, _ok(controles.controlar(h.conexion(), m.group("id")))
+
+
 def comprobantes_analizar(h, m, cuerpo):
     texto = leer_json(h, cuerpo).get("texto")
     if not isinstance(texto, str) or not texto.strip():
@@ -294,6 +298,7 @@ RUTAS = [
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/anular"), expediente_anular),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/remitos/pegar"), remitos_pegar),
     ("POST", re.compile(r"/api/comprobantes/analizar"), comprobantes_analizar),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/controles"), expediente_controles),
 ]
 
 

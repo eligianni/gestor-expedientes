@@ -2,7 +2,7 @@
 
 Todo se carga sobre la base temporal de tests/ayudas.py; nunca sobre datos/ del proyecto.
 """
-from gestor import db, importar, negocio
+from gestor import comprobantes, db, importar, negocio, util
 from tests import ayudas
 
 # OC EFIA cargada a mano: todavía no figura en el z_compras2.
@@ -72,3 +72,58 @@ def preparar_macatex(con):
     """Importa y deja la OC MACATEX 4500594643 tal como viene (objeto vacío)."""
     _asegurar_importado(con, OC_MACATEX)
     return negocio.ficha_oc(con, OC_MACATEX)
+
+
+# --- Expedientes reales armados (paso 13) -----------------------------------
+
+def _remito(numero, fecha, items=(), equipo=False):
+    return {
+        "numero": numero, "fecha": fecha, "fecha_firma": None, "es_equipo_comodato": equipo, "aclara_periodo": False,
+        "items": [{"pos": pos, "cantidad": cantidad, "codigo": codigo} for pos, cantidad, codigo in items],
+    }
+
+
+def _factura(numero, fecha, centavos, cae, vto_cae=None):
+    return {
+        "numero": numero, "fecha": fecha, "centavos": centavos, "cae": cae, "vto_cae": vto_cae,
+        "destinatario": "INSSJP", "domicilio": "Perú 169 CABA",
+    }
+
+
+def _armar(con, oc, remito_principal, remitos, factura, carpeta_sii):
+    """Alta del expediente, período sugerido por el remito principal y carga de remitos, factura y SII."""
+    exp = negocio.crear_expediente(con, {"tipo": "COMUN", "oc": oc})
+    linea = "%s;%s" % (remito_principal["numero"], util.ddmmaaaa(util.fecha_desde_texto(remito_principal["fecha"])))
+    exp = negocio.pegar_remitos(con, exp["id"], exp["version"], linea)
+    sii = comprobantes.analizar_texto_sii(ayudas.texto_fixture(carpeta_sii, "0004_IF-*.txt"))
+    return negocio.actualizar_expediente(con, exp["id"], exp["version"], {
+        "datos": {"remitos": remitos, "factura": factura, "sii": sii},
+    })
+
+
+def armar_expediente_efia(con, centavos=122499000):
+    """EFIA 2026-08: remito 00001-00029461 (1 mes), factura 0003B00031812, CAE sin vencimiento."""
+    cargar_efia(con)
+    remito = _remito("00001-00029461", "2026-08-31", [(1, "1", "")])
+    factura = _factura("0003B00031812", "2026-09-10", centavos, "86372407008783")
+    return _armar(con, OC_EFIA_MANUAL["numero"], remito, [remito], factura, "EX-2026-89654857_EFIA")
+
+
+def armar_expediente_biofab(con, con_equipo=True):
+    """BIO FAB 2026-08: remito 0001-00003354 (código 5002383 en el renglón 2) y, si corresponde, el del equipo."""
+    preparar_biofab(con)
+    remito = _remito("0001-00003354", "2026-08-25", [(1, "1000", ""), (2, "400", "5002383"), (3, "200", ""), (4, "150", "")])
+    remitos = [remito]
+    if con_equipo:
+        remitos.append(_remito("0001-00003281", "2026-08-25", equipo=True))
+    factura = _factura("00002B00003908", "2026-09-11", 2109500000, "86372594419176", "2026-09-21")
+    return _armar(con, OC_BIOFAB, remito, remitos, factura, "EX-2026-94963848_BIOFAB")
+
+
+def armar_expediente_macatex(con):
+    """MACATEX 2026-09: remito 0001-00004409 con las cantidades totales de los 6 renglones."""
+    preparar_macatex(con)
+    remito = _remito("0001-00004409", "2026-09-07",
+                     [(1, "2000", ""), (2, "650", ""), (3, "600", ""), (4, "1400", ""), (5, "1400", ""), (6, "550", "")])
+    factura = _factura("0002B00000160", "2026-10-09", 3388160000, "86416949757962", "2026-10-19")
+    return _armar(con, OC_MACATEX, remito, [remito], factura, "EX-2026-99349179_MACATEX")
