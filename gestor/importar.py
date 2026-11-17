@@ -1,0 +1,362 @@
+"""Importador del reporte z_compras2 de SAP: mapeo por encabezado, limpieza, descartes, upsert e informe.
+
+Las columnas se buscan por NOMBRE normalizado (util.clave_encabezado), nunca por posición.
+"""
+import getpass
+import json
+from decimal import ROUND_HALF_UP, Decimal
+
+from gestor import db, util, xlsx
+
+MAPA = {
+    "numero de expediente gde": "expediente_contratacion",
+    "clase de pedido": "clase",
+    "licitacion": "licitacion",
+    "ano licit": "anio_licit",
+    "precio unitario": "precio",
+    "proveedor": "sap",
+    "razon social proveed": "razon_social",
+    "n o c": "oc",
+    "f o compra": "fecha_oc",
+    "in periodo validez": "vig_desde",
+    "fin periodo validez": "vig_hasta",
+    "posicion": "pos",
+    "codigo": "codigo",
+    "elemento": "descripcion",
+    "cant": "cantidad",
+    "importe": "importe",
+    "org compras": "org_compras",
+    "centro": "centro",
+    "entrega final": "entrega_final",
+    "factura final": "factura_final",
+    "por entregar cantid": "sap_por_entregar",
+    "entregadas cantidad": "sap_entregado",
+    "facturadas cantidad": "sap_facturado",
+    "partida presupuestar": "partida",
+}
+
+OBLIGATORIAS = ("N° O/C", "Posición.", "Elemento", "Cant", "Importe", "Centro", "Proveedor", "Razón Social Proveed")
+
+AVISO_SIN_PARTIDA = (
+    "Este reporte no tiene la partida presupuestaria; no se pueden descartar honorarios (3490000). "
+    "Agregá la columna al layout del z_compras2."
+)
+
+MOTIVOS_DESCARTE = ("sin_oc", "partida", "centro", "exclusion_manual")
+
+# Campos de la OC que vienen del reporte (los demás se cargan a mano o se infieren).
+CAMPOS_OC = (
+    "efector", "sap", "clase", "org_compras", "centro", "ca", "expediente_contratacion",
+    "fecha_oc", "vig_desde", "vig_hasta", "cerrada_sap",
+)
+# Campos del renglón que vienen del reporte.
+CAMPOS_RENGLON = (
+    "codigo", "descripcion", "cantidad", "precio_centavos", "importe_centavos", "partida",
+    "sap_entregado", "sap_facturado", "sap_por_entregar", "revisar_importe", "crudo",
+)
+# Campos que, si cambian, se listan en informe["cambios"].
+CAMPOS_CAMBIO_RENGLON = ("precio_centavos", "cantidad")
+CAMPOS_CAMBIO_OC = ("vig_desde", "vig_hasta")
+
+
+class ErrorImportacion(Exception):
+    """El reporte no se puede importar (columna faltante, efector inválido, etc.)."""
+
+
+# --- Conversión de celdas --------------------------------------------------
+
+def _texto(valor):
+    return "" if valor is None else str(valor).strip()
+
+
+def _texto_decimal(numero):
+    """Decimal → texto sin ceros de más: Decimal("3600.00") → "3600", Decimal("1.50") → "1.5"."""
+    texto = format(numero, "f")
+    if "." in texto:
+        texto = texto.rstrip("0").rstrip(".")
+    return "0" if texto in ("", "-0") else texto
+
+
+def _decimal(valor):
+    texto = _texto(valor)
+    return util.a_decimal(texto) if texto else Decimal("0.00")
+
+
+def _fecha(valor):
+    texto = _texto(valor)
+    if not texto:
+        return None
+    try:
+        return util.fecha_desde_serial_excel(texto)
+    except (ValueError, ArithmeticError):
+        return util.fecha_desde_texto(texto)
+
+
+def _centavos_de_decimal(numero):
+    return int((numero * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+# --- Lectura y limpieza ----------------------------------------------------
+
+def _columnas(encabezados):
+    """campo → encabezado original, para las columnas de MAPA presentes en el reporte."""
+    presentes = {}
+    for encabezado in encabezados:
+        campo = MAPA.get(util.clave_encabezado(encabezado))
+        if campo is not None and campo not in presentes:
+            presentes[campo] = encabezado
+    claves = {util.clave_encabezado(e) for e in encabezados}
+    for nombre in OBLIGATORIAS:
+        if util.clave_encabezado(nombre) not in claves:
+            raise ErrorImportacion('Falta la columna obligatoria "%s" en el reporte.' % nombre)
+    return presentes
+
+
+def _validar_efector(efector, parametros):
+    efectores = parametros.get("efectores") or {}
+    if efector not in efectores:
+        raise ErrorImportacion("Elegí el efector (HBI o CASPH) antes de importar.")
+    centros = [str(c) for c in efectores[efector].get("centros") or []]
+    if not centros:
+        raise ErrorImportacion("Configurá los centros SAP de %s antes de importar." % efector)
+    return set(centros)
+
+
+def _limpiar_fila(fila, columnas):
+    """Fila del Excel → (datos de OC, datos de renglón) ya limpios."""
+    def celda(campo):
+        encabezado = columnas.get(campo)
+        return fila.get(encabezado) if encabezado is not None else None
+
+    cantidad = _decimal(celda("cantidad"))
+    importe_exacto = util.a_decimal(_texto(celda("importe")) or 0, decimales=None)
+    importe_centavos = _centavos_de_decimal(importe_exacto)
+    if "precio" in columnas and _texto(celda("precio")):
+        precio_centavos = util.a_centavos(_texto(celda("precio")))
+    elif cantidad != 0:
+        precio_centavos = _centavos_de_decimal(importe_exacto / cantidad)
+    else:
+        precio_centavos = 0
+    revisar_importe = 1 if abs(cantidad * precio_centavos - importe_centavos) > 1 else 0
+
+    licitacion = _texto(celda("licitacion"))
+    anio_licit = _texto(celda("anio_licit"))
+    ca = "%s-%s" % (licitacion, anio_licit) if licitacion and anio_licit else licitacion
+
+    expediente = _texto(celda("expediente_contratacion"))
+    vig_desde = _fecha(celda("vig_desde"))
+    vig_hasta = _fecha(celda("vig_hasta"))
+    fecha_oc = _fecha(celda("fecha_oc"))
+    cerrada = 1 if (_texto(celda("entrega_final")).upper() == "X" or _texto(celda("factura_final")).upper() == "X") else 0
+
+    oc = {
+        "numero": util.sap_sin_ceros(_texto(celda("oc"))),
+        "sap": util.sap_sin_ceros(_texto(celda("sap"))),
+        "razon_social": _texto(celda("razon_social")),
+        "clase": _texto(celda("clase")),
+        "org_compras": _texto(celda("org_compras")),
+        "centro": _texto(celda("centro")),
+        "ca": ca,
+        "expediente_contratacion": util.normalizar_gde(expediente) if expediente else "",
+        "fecha_oc": util.iso(fecha_oc) if fecha_oc else None,
+        "vig_desde": util.iso(vig_desde) if vig_desde else None,
+        "vig_hasta": util.iso(vig_hasta) if vig_hasta else None,
+        "cerrada_sap": cerrada,
+    }
+    renglon = {
+        "oc": oc["numero"],
+        "pos": int(util.a_decimal(util.sap_sin_ceros(_texto(celda("pos"))) or "0", decimales=0)),
+        "codigo": _texto(celda("codigo")),
+        "descripcion": _texto(celda("descripcion")),
+        "cantidad": _texto_decimal(cantidad),
+        "precio_centavos": precio_centavos,
+        "importe_centavos": importe_centavos,
+        "sap_entregado": _texto_decimal(_decimal(celda("sap_entregado"))),
+        "sap_facturado": _texto_decimal(_decimal(celda("sap_facturado"))),
+        "sap_por_entregar": _texto_decimal(_decimal(celda("sap_por_entregar"))),
+        "revisar_importe": revisar_importe,
+        "crudo": {encabezado: valor for encabezado, valor in fila.items()},
+    }
+    if "partida" in columnas:
+        renglon["partida"] = _texto(celda("partida"))
+    return oc, renglon
+
+
+def _leer(origen, efector, parametros):
+    """Lee y limpia el reporte. Devuelve (informe sin comparar con la base, OC por número, renglones por (oc, pos))."""
+    centros = _validar_efector(efector, parametros)
+    encabezados, filas = xlsx.leer_tabla(origen)
+    columnas = _columnas(encabezados)
+
+    excluidas = {str(p) for p in parametros.get("partidas_excluidas") or []}
+    exclusiones = parametros.get("exclusiones") or {}
+    sap_excluidos = {util.sap_sin_ceros(str(s)) for s in exclusiones.get("sap") or []}
+    oc_excluidas = {util.sap_sin_ceros(str(o)) for o in exclusiones.get("oc") or []}
+
+    informe = {
+        "filas": len(filas),
+        "descartes": {motivo: 0 for motivo in MOTIVOS_DESCARTE},
+        "quedan": 0,
+        "oc_distintas": 0,
+        "duplicados": 0,
+        "altas": 0,
+        "actualizadas": 0,
+        "sin_cambios": 0,
+        "cambios": [],
+        "avisos": [],
+        "errores": [],
+    }
+    if "partida" not in columnas:
+        informe["avisos"].append(AVISO_SIN_PARTIDA)
+
+    ocs = {}
+    renglones = {}
+    for indice, fila in enumerate(filas):
+        numero_fila = indice + 2  # fila 1 = encabezados
+        if not _texto(fila.get(columnas["oc"])):
+            informe["descartes"]["sin_oc"] += 1
+            continue
+        if "partida" in columnas and _texto(fila.get(columnas["partida"])) in excluidas:
+            informe["descartes"]["partida"] += 1
+            continue
+        if _texto(fila.get(columnas["centro"])) not in centros:
+            informe["descartes"]["centro"] += 1
+            continue
+        oc_txt = util.sap_sin_ceros(_texto(fila.get(columnas["oc"])))
+        sap_txt = util.sap_sin_ceros(_texto(fila.get(columnas["sap"])))
+        if sap_txt in sap_excluidos or oc_txt in oc_excluidas:
+            informe["descartes"]["exclusion_manual"] += 1
+            continue
+        informe["quedan"] += 1
+        try:
+            oc, renglon = _limpiar_fila(fila, columnas)
+        except (ValueError, ArithmeticError) as error:
+            informe["errores"].append({"fila": numero_fila, "oc": oc_txt, "mensaje": "Valor inválido: %s" % error})
+            continue
+        if oc["vig_desde"] and oc["vig_hasta"] and oc["vig_hasta"] < oc["vig_desde"]:
+            informe["errores"].append({
+                "fila": numero_fila,
+                "oc": oc["numero"],
+                "mensaje": "La vigencia termina (%s) antes de empezar (%s)." % (oc["vig_hasta"], oc["vig_desde"]),
+            })
+            continue
+        oc["efector"] = efector
+        previa = ocs.get(oc["numero"])
+        if previa is not None:
+            oc["cerrada_sap"] = max(oc["cerrada_sap"], previa["cerrada_sap"])
+        ocs[oc["numero"]] = oc
+        clave = (renglon["oc"], renglon["pos"])
+        if clave in renglones:
+            informe["duplicados"] += 1
+        renglones[clave] = renglon
+    informe["oc_distintas"] = len(ocs)
+    return informe, ocs, renglones
+
+
+# --- Comparación con la base y upsert --------------------------------------
+
+def _manuales(fila):
+    try:
+        return set(json.loads(fila.get("campos_manuales") or "[]"))
+    except ValueError:
+        return set()
+
+
+def _normalizar_para_comparar(campo, valor):
+    if campo == "crudo" and not isinstance(valor, str):
+        return json.dumps(valor, ensure_ascii=False, sort_keys=True)
+    return valor
+
+
+def _diferencias(actual, nuevo, campos):
+    """Cambios de `nuevo` contra la fila `actual`, sin tocar los campos manuales."""
+    manuales = _manuales(actual)
+    cambios = {}
+    for campo in campos:
+        if campo not in nuevo or campo in manuales:
+            continue
+        valor = _normalizar_para_comparar(campo, nuevo[campo])
+        if actual.get(campo) != valor:
+            cambios[campo] = valor
+    return cambios
+
+
+def _planificar(con, ocs, renglones, informe):
+    """Compara contra la base y devuelve la lista de operaciones; completa altas/actualizadas/cambios del informe."""
+    operaciones = []
+    proveedores_vistos = set()
+    for numero, oc in ocs.items():
+        if oc["sap"] not in proveedores_vistos:
+            proveedores_vistos.add(oc["sap"])
+            if con is None or db.leer_fila(con, "proveedor", {"sap": oc["sap"]}) is None:
+                operaciones.append(("alta", "proveedor", {"sap": oc["sap"], "razon_social": oc["razon_social"]}))
+        actual = db.leer_fila(con, "oc", {"numero": numero}) if con is not None else None
+        if actual is None:
+            fila = {campo: oc[campo] for campo in CAMPOS_OC}
+            fila["numero"] = numero
+            fila["origen"] = "SAP"
+            operaciones.append(("alta", "oc", fila))
+        else:
+            cambios = _diferencias(actual, oc, CAMPOS_OC)
+            for campo in CAMPOS_CAMBIO_OC:
+                if campo in cambios:
+                    informe["cambios"].append({
+                        "oc": numero, "pos": None, "campo": campo, "antes": actual.get(campo), "despues": cambios[campo],
+                    })
+            if cambios:
+                operaciones.append(("modificacion", "oc", {"numero": numero}, actual["version"], cambios))
+
+    for (numero, pos), renglon in renglones.items():
+        actual = db.leer_fila(con, "renglon", {"oc": numero, "pos": pos}) if con is not None else None
+        if actual is None:
+            informe["altas"] += 1
+            operaciones.append(("alta", "renglon", dict(renglon)))
+            continue
+        cambios = _diferencias(actual, renglon, CAMPOS_RENGLON)
+        if not cambios:
+            informe["sin_cambios"] += 1
+            continue
+        informe["actualizadas"] += 1
+        for campo in CAMPOS_CAMBIO_RENGLON:
+            if campo in cambios:
+                informe["cambios"].append({
+                    "oc": numero, "pos": pos, "campo": campo, "antes": actual.get(campo), "despues": cambios[campo],
+                })
+        operaciones.append(("modificacion", "renglon", {"oc": numero, "pos": pos}, actual["version"], cambios))
+    return operaciones
+
+
+def analizar(origen, efector, parametros, con=None):
+    """Vista previa: lee, limpia y (si hay conexión) compara con la base. No escribe nada."""
+    informe, ocs, renglones = _leer(origen, efector, parametros)
+    _planificar(con, ocs, renglones, informe)
+    return informe
+
+
+def importar(con, origen, efector, parametros, archivo=""):
+    """Importa el reporte (upsert) en una sola transacción y guarda el informe en `importacion`."""
+    informe, ocs, renglones = _leer(origen, efector, parametros)
+    ahora = db.ahora_utc()
+    with db.transaccion(con):
+        operaciones = _planificar(con, ocs, renglones, informe)
+        for operacion in operaciones:
+            if operacion[0] == "alta":
+                _, tabla, fila = operacion
+                if tabla == "oc":
+                    fila = dict(fila, ultima_importacion=ahora)
+                db.insertar(con, tabla, fila)
+            else:
+                _, tabla, clave, version, cambios = operacion
+                if tabla == "oc":
+                    cambios = dict(cambios, ultima_importacion=ahora)
+                db.actualizar_con_version(con, tabla, clave, version, cambios)
+        usuario = getpass.getuser()
+        cursor = con.execute(
+            "INSERT INTO importacion (fecha, archivo, efector, usuario, informe) VALUES (?, ?, ?, ?, ?)",
+            (ahora, archivo, efector, usuario, json.dumps(informe, ensure_ascii=False, sort_keys=True)),
+        )
+        db.registrar_evento(
+            con, "IMPORTACION", "importacion", {"id": cursor.lastrowid}, None,
+            {"archivo": archivo, "efector": efector, "altas": informe["altas"], "actualizadas": informe["actualizadas"]},
+        )
+    return informe
