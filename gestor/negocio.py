@@ -2,7 +2,10 @@
 
 Toda escritura va dentro de `db.transaccion`, con control de versión y evento de auditoría.
 """
+import copy
+import getpass
 import json
+import re
 from decimal import Decimal, InvalidOperation
 
 from gestor import db, util
@@ -389,3 +392,240 @@ def actualizar_renglon(con, numero, pos, version, cambios):
         validos["campos_manuales"] = _con_manuales(actual, [c for c in validos if c != "campos_manuales"])
         db.actualizar_con_version(con, "renglon", {"oc": oc["numero"], "pos": pos}, version, validos)
     return ficha_oc(con, numero)
+
+
+# --- Expedientes -----------------------------------------------------------
+
+TIPOS_EXPEDIENTE = ("COMUN", "CENTRALIZADA", "CORRECTIVO", "EVENTUAL")
+
+# Estructura con la que nace todo expediente (blueprint §4, expediente.datos).
+DATOS_INICIALES = {
+    "remitos": [],
+    "factura": {},
+    "sii": {},
+    "gde": {},
+    "sap": {},
+    "notas_aclaratorias": [],
+    "checklist": {},
+    "correctivo": {},
+    "eventual": {},
+    "centralizada": {},
+    "historial": [],
+}
+# Claves de `datos` que se pueden reemplazar al editar (el historial lo escribe el sistema).
+CLAVES_DATOS_EDITABLES = tuple(c for c in DATOS_INICIALES if c != "historial")
+_TIPOS_DATOS = {clave: type(valor) for clave, valor in DATOS_INICIALES.items()}
+
+CAMPOS_EDITABLES_EXPEDIENTE = (
+    "periodo", "periodo_desde", "periodo_hasta", "periodo_manual", "motivo_pendiente", "fecha_seguimiento",
+)
+_RE_PERIODO = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
+
+
+def _periodo(valor):
+    if valor is None or valor == "":
+        return None
+    if not isinstance(valor, str) or _RE_PERIODO.fullmatch(valor.strip()) is None:
+        raise ErrorValidacion("El período debe tener la forma AAAA-MM (por ejemplo 2026-08).")
+    return valor.strip()
+
+
+def _validar_campo_expediente(campo, valor):
+    if campo == "periodo":
+        return _periodo(valor)
+    if campo in ("periodo_desde", "periodo_hasta"):
+        return _fecha(valor, "del período" + (" (desde)" if campo == "periodo_desde" else " (hasta)"))
+    if campo == "fecha_seguimiento":
+        return _fecha(valor, "de seguimiento")
+    if campo == "periodo_manual":
+        return _bandera(valor, "período manual")
+    return _texto(valor, campo)
+
+
+def _validar_datos(datos):
+    if not isinstance(datos, dict):
+        raise ErrorValidacion("Los datos del expediente deben ser un objeto.")
+    for clave, valor in datos.items():
+        if clave not in CLAVES_DATOS_EDITABLES:
+            raise ErrorValidacion("No se puede editar datos.%s." % clave)
+        if not isinstance(valor, _TIPOS_DATOS[clave]):
+            tipo = "una lista" if _TIPOS_DATOS[clave] is list else "un objeto"
+            raise ErrorValidacion("datos.%s debe ser %s." % (clave, tipo))
+    return datos
+
+
+def numero_factura_normalizado(numero):
+    """"0003B00031812" → "0003B00031812"; "0002 - 00003908" → "000200003908"; vacío → ""."""
+    texto = numero.strip() if isinstance(numero, str) else ""
+    if not texto:
+        return ""
+    try:
+        pv, letra, nro = util.normalizar_factura(texto)
+    except ValueError:
+        raise ErrorValidacion("El número de factura %s no es válido." % texto) from None
+    return "%04d%s%08d" % (pv, letra or "", nro)
+
+
+def _entrada_historial(accion, estado):
+    return {"fecha": db.ahora_utc(), "usuario": getpass.getuser(), "accion": accion, "estado": estado}
+
+
+def _leer_expediente(con, id_expediente):
+    try:
+        id_expediente = int(id_expediente)
+    except (TypeError, ValueError):
+        raise NoEncontrado("No existe el expediente %s." % id_expediente) from None
+    fila = db.leer_fila(con, "expediente", {"id": id_expediente})
+    if fila is None:
+        raise NoEncontrado("No existe el expediente %s." % id_expediente)
+    return fila
+
+
+def _datos_de(fila):
+    datos = copy.deepcopy(DATOS_INICIALES)
+    try:
+        guardados = json.loads(fila.get("datos") or "{}")
+    except ValueError:
+        guardados = {}
+    datos.update(guardados if isinstance(guardados, dict) else {})
+    return datos
+
+
+def obtener_expediente(con, id_expediente):
+    """Expediente con `datos` decodificado y la razón social del proveedor."""
+    fila = _leer_expediente(con, id_expediente)
+    fila["datos"] = _datos_de(fila)
+    proveedor = db.leer_fila(con, "proveedor", {"sap": fila["sap"]}) if fila["sap"] else None
+    fila["razon_social"] = proveedor["razon_social"] if proveedor else ""
+    return fila
+
+
+def crear_expediente(con, datos):
+    """Alta en BORRADOR; el SAP se copia de la OC (salvo EVENTUAL, que puede no tener OC)."""
+    if not isinstance(datos, dict):
+        raise ErrorValidacion("Faltan los datos del expediente.")
+    permitidos = ("tipo", "efector", "oc", "sap", "datos") + CAMPOS_EDITABLES_EXPEDIENTE
+    desconocidos = [c for c in datos if c not in permitidos]
+    if desconocidos:
+        raise ErrorValidacion("Campos desconocidos: %s." % ", ".join(sorted(desconocidos)))
+    tipo = datos.get("tipo", "COMUN")
+    if tipo not in TIPOS_EXPEDIENTE:
+        raise ErrorValidacion("El tipo de expediente debe ser COMUN, CENTRALIZADA, CORRECTIVO o EVENTUAL.")
+    numero_oc = util.sap_sin_ceros(_texto(datos.get("oc"), "OC"))
+    efector = datos.get("efector")
+    if numero_oc:
+        oc = _leer_oc(con, numero_oc)
+        if efector is None:
+            efector = oc["efector"]
+        elif efector != oc["efector"]:
+            raise ErrorValidacion("La OC %s es de %s, no de %s." % (numero_oc, oc["efector"], efector))
+        sap = oc["sap"]
+    elif tipo != "EVENTUAL":
+        raise ErrorValidacion("Elegí la OC del expediente.")
+    else:
+        sap = util.sap_sin_ceros(_texto(datos.get("sap"), "SAP"))
+    if efector not in EFECTORES:
+        raise ErrorValidacion("Elegí el efector (HBI o CASPH).")
+
+    contenido = copy.deepcopy(DATOS_INICIALES)
+    contenido.update(copy.deepcopy(_validar_datos(datos.get("datos") or {})))
+    contenido["historial"] = [_entrada_historial("ALTA", "BORRADOR")]
+    ahora = db.ahora_utc()
+    fila = {
+        "tipo": tipo,
+        "efector": efector,
+        "oc": numero_oc or None,
+        "sap": sap,
+        "estado": "BORRADOR",
+        "datos": contenido,
+        "factura": numero_factura_normalizado((contenido.get("factura") or {}).get("numero")),
+        "creado": ahora,
+        "actualizado": ahora,
+        "usuario": getpass.getuser(),
+    }
+    for campo in CAMPOS_EDITABLES_EXPEDIENTE:
+        if campo in datos:
+            fila[campo] = _validar_campo_expediente(campo, datos[campo])
+    with db.transaccion(con):
+        nuevo_id = db.insertar(con, "expediente", fila)
+    return obtener_expediente(con, nuevo_id)
+
+
+def _no_anulado(fila):
+    if fila["estado"] == "ANULADO":
+        raise ErrorNegocio("El expediente está anulado.")
+
+
+def actualizar_expediente(con, id_expediente, version, cambios):
+    """Edita columnas de período/seguimiento y reemplaza claves de primer nivel de `datos`."""
+    version = _version(version)
+    if not isinstance(cambios, dict) or not cambios:
+        raise ErrorValidacion("No hay cambios para guardar.")
+    desconocidos = [c for c in cambios if c not in CAMPOS_EDITABLES_EXPEDIENTE + ("datos",)]
+    if desconocidos:
+        raise ErrorValidacion("No se puede editar: %s." % ", ".join(sorted(desconocidos)))
+    columnas = {c: _validar_campo_expediente(c, v) for c, v in cambios.items() if c != "datos"}
+    nuevos_datos = _validar_datos(cambios.get("datos") or {})
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        contenido = _datos_de(actual)
+        contenido.update(copy.deepcopy(nuevos_datos))
+        if "factura" in nuevos_datos:
+            columnas["factura"] = numero_factura_normalizado(nuevos_datos["factura"].get("numero"))
+        accion = "PERIODO_MANUAL" if columnas.get("periodo_manual") == 1 and "periodo" in columnas else "EDICION"
+        contenido["historial"].append(_entrada_historial(accion, actual["estado"]))
+        columnas["datos"] = contenido
+        columnas["actualizado"] = db.ahora_utc()
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, columnas)
+    return obtener_expediente(con, id_expediente)
+
+
+def anular_expediente(con, id_expediente, version, motivo):
+    """Pasa a ANULADO con motivo (la fila nunca se borra) y registra el evento ANULACION."""
+    version = _version(version)
+    motivo = motivo.strip() if isinstance(motivo, str) else ""
+    if not motivo:
+        raise ErrorValidacion("Indicá el motivo de la anulación.")
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        contenido = _datos_de(actual)
+        contenido["historial"].append(_entrada_historial("ANULACION", "ANULADO"))
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, {
+            "estado": "ANULADO",
+            "motivo_anulacion": motivo,
+            "datos": contenido,
+            "actualizado": db.ahora_utc(),
+        }, accion="ANULACION")
+    return obtener_expediente(con, id_expediente)
+
+
+def listar_expedientes(con, estado=None, tipo=None, periodo=None, sap=None, entrega=None, efector=None):
+    """Expedientes (sin `datos`) con la razón social del proveedor, filtrados por los parámetros dados."""
+    sql = (
+        "SELECT e.id, e.tipo, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.periodo_desde, e.periodo_hasta, "
+        "e.factura, e.estado, e.motivo_pendiente, e.fecha_seguimiento, e.entrega_id, e.creado, e.actualizado, "
+        "e.usuario, e.version "
+        "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap"
+    )
+    condiciones, parametros = [], []
+    for columna, valor in (("e.estado", estado), ("e.tipo", tipo), ("e.periodo", periodo), ("e.efector", efector)):
+        if valor:
+            condiciones.append("%s = ?" % columna)
+            parametros.append(valor)
+    if sap:
+        condiciones.append("e.sap = ?")
+        parametros.append(util.sap_sin_ceros(str(sap)))
+    if entrega not in (None, ""):
+        condiciones.append("e.entrega_id = ?")
+        parametros.append(_entero(entrega, "entrega"))
+    if condiciones:
+        sql += " WHERE " + " AND ".join(condiciones)
+    sql += " ORDER BY e.periodo DESC, e.id DESC"
+    filas = []
+    for fila in con.execute(sql, parametros):
+        dic = dict(fila)
+        dic["razon_social"] = dic["razon_social"] or ""
+        filas.append(dic)
+    return filas

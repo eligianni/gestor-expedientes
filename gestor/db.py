@@ -353,8 +353,8 @@ def insertar(con, tabla, fila):
     return rowid
 
 
-def actualizar_con_version(con, tabla, clave, version_esperada, cambios):
-    """UPDATE … SET cambios, version = version + 1 WHERE clave AND version = ?; evento MODIFICACION.
+def actualizar_con_version(con, tabla, clave, version_esperada, cambios, accion="MODIFICACION"):
+    """UPDATE … SET cambios, version = version + 1 WHERE clave AND version = ?; evento `accion` (MODIFICACION por defecto).
 
     rowcount 0 → ConflictoVersion sin escribir nada. El llamador envuelve todo en `transaccion`.
     """
@@ -374,7 +374,7 @@ def actualizar_con_version(con, tabla, clave, version_esperada, cambios):
     if cursor.rowcount == 0:
         raise ConflictoVersion()
     despues = leer_fila(con, tabla, clave)
-    registrar_evento(con, "MODIFICACION", tabla, clave, antes, despues)
+    registrar_evento(con, accion, tabla, clave, antes, despues)
     return despues
 
 

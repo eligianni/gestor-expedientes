@@ -220,6 +220,32 @@ def renglon_agregar(h, m, cuerpo):
     return 200, _ok(negocio.agregar_renglon(h.conexion(), m.group("numero"), leer_json(h, cuerpo)))
 
 
+def expedientes_listar(h, m, cuerpo):
+    q = _consulta(h)
+    filtros = {clave: q.get(clave) or None for clave in ("estado", "tipo", "periodo", "sap", "entrega", "efector")}
+    if filtros["efector"] == "Ambos":
+        filtros["efector"] = None
+    return 200, _ok(negocio.listar_expedientes(h.conexion(), **filtros))
+
+
+def expediente_crear(h, m, cuerpo):
+    return 200, _ok(negocio.crear_expediente(h.conexion(), leer_json(h, cuerpo)))
+
+
+def expediente_obtener(h, m, cuerpo):
+    return 200, _ok(negocio.obtener_expediente(h.conexion(), m.group("id")))
+
+
+def expediente_editar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.actualizar_expediente(h.conexion(), m.group("id"), datos.get("version"), datos.get("cambios")))
+
+
+def expediente_anular(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.anular_expediente(h.conexion(), m.group("id"), datos.get("version"), datos.get("motivo")))
+
+
 def renglon_editar(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.actualizar_renglon(
@@ -242,6 +268,11 @@ RUTAS = [
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_editar),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)"), renglon_editar),
+    ("GET", re.compile(r"/api/expedientes"), expedientes_listar),
+    ("POST", re.compile(r"/api/expedientes"), expediente_crear),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)"), expediente_obtener),
+    ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)"), expediente_editar),
+    ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/anular"), expediente_anular),
 ]
 
 
