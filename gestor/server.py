@@ -10,9 +10,9 @@ import re
 import socket
 import sqlite3
 import urllib.request
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
-from gestor import APP_ID, __version__, comprobantes, config, controles, db, importar, negocio, textos, xlsx
+from gestor import APP_ID, __version__, comprobantes, config, controles, db, docx_gen, importar, negocio, textos, xlsx
 
 WEB = config.RAIZ / "web"
 
@@ -55,6 +55,26 @@ def responder(h, estado, cuerpo, tipo):
 
 def responder_json(h, estado, dic):
     responder(h, estado, json.dumps(dic, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+
+
+TIPO_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+class Archivo:
+    """Respuesta binaria de una ruta (descarga) en lugar del sobre JSON."""
+
+    def __init__(self, contenido, tipo, nombre):
+        self.contenido, self.tipo, self.nombre = contenido, tipo, nombre
+
+
+def responder_archivo(h, archivo):
+    h.send_response(200)
+    h.send_header("Content-Type", archivo.tipo)
+    h.send_header("Content-Length", str(len(archivo.contenido)))
+    h.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(archivo.nombre, safe=""))
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(archivo.contenido)
 
 
 def _error(codigo, mensaje):
@@ -264,6 +284,18 @@ def expediente_textos(h, m, cuerpo):
     return 200, _ok(negocio.textos_del_expediente(h.conexion(), m.group("id")))
 
 
+def expediente_cv_docx(h, m, cuerpo):
+    cv = negocio.datos_cv(h.conexion(), m.group("id"))
+    contenido = docx_gen.generar_cv(config.RAIZ / cv["plantilla"], cv["datos"])
+    return 200, Archivo(contenido, TIPO_DOCX, cv["archivo"])
+
+
+def expediente_autorizacion_docx(h, m, cuerpo):
+    autorizacion = negocio.datos_autorizacion(h.conexion(), m.group("id"))
+    contenido = docx_gen.generar_autorizacion_docx(autorizacion["referencia"], autorizacion["cuerpo"])
+    return 200, Archivo(contenido, TIPO_DOCX, autorizacion["archivo"])
+
+
 def comprobantes_analizar(h, m, cuerpo):
     texto = leer_json(h, cuerpo).get("texto")
     if not isinstance(texto, str) or not texto.strip():
@@ -316,6 +348,8 @@ RUTAS = [
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/controles"), expediente_controles),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/notas"), expediente_nota),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/textos"), expediente_textos),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/autorizacion\.docx"), expediente_autorizacion_docx),
 ]
 
 
@@ -390,7 +424,7 @@ class Manejador(http.server.BaseHTTPRequestHandler):
             estado, dic = 400, _error("validacion", str(error))
         except negocio.NoEncontrado as error:
             estado, dic = 404, _error("no_encontrado", str(error))
-        except (negocio.ErrorNegocio, textos.TextoIncompleto) as error:
+        except (negocio.ErrorNegocio, textos.TextoIncompleto, docx_gen.ErrorPlantilla) as error:
             estado, dic = 422, _error("negocio", str(error))
         except Exception as error:  # noqa: BLE001 — cualquier falla imprevista es un 500
             estado, dic = 500, _error("interno", "Error interno: %s" % type(error).__name__)
@@ -398,7 +432,10 @@ class Manejador(http.server.BaseHTTPRequestHandler):
             if self._con is not None:
                 self._con.close()
                 self._con = None
-        responder_json(self, estado, dic)
+        if isinstance(dic, Archivo):
+            responder_archivo(self, dic)
+        else:
+            responder_json(self, estado, dic)
 
     def do_GET(self):
         self._despachar("GET")

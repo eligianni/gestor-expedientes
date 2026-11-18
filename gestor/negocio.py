@@ -1063,3 +1063,102 @@ def textos_del_expediente(con, id_expediente):
         except textos.TextoIncompleto as error:
             resultado["constancia_comodato_error"] = str(error)
     return resultado
+
+
+# --- Documentos Word -------------------------------------------------------
+
+def _texto_periodo_cv(ctx):
+    """"agosto 2026" (mes calendario) o "17/10/2026 al 16/11/2026" (período específico)."""
+    if int(ctx.get("dia_inicio") or 1) == 1:
+        anio, mes = (int(p) for p in ctx["periodo"].split("-"))
+        return "%s %04d" % (util.MESES[mes - 1], anio)
+    return "%s al %s" % (util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_desde"])),
+                         util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_hasta"])))
+
+
+def _nombre_docx(referencia):
+    return textos.nombre_archivo(referencia)[:-len(".pdf")] + ".docx"
+
+
+def datos_cv(con, id_expediente):
+    """Datos ya formateados para `docx_gen.generar_cv`, la plantilla del efector y el nombre del archivo."""
+    ctx = contexto_textos(con, id_expediente)
+    if not ctx["oc"]:
+        raise textos.TextoIncompleto("El expediente no tiene OC: no se puede armar el certificado de validación.")
+    if not (ctx["objeto"] or "").strip():
+        raise textos.TextoIncompleto("Falta el objeto de la contratación en la OC %s" % ctx["oc"])
+    if not ctx["periodo"]:
+        raise textos.TextoIncompleto("Falta cargar el período validado.")
+    if not ctx["remitos"]:
+        raise textos.TextoIncompleto("Falta cargar al menos un remito.")
+    exp = obtener_expediente(con, id_expediente)
+    oc = _leer_oc(con, ctx["oc"])
+    renglones = {int(r["pos"]): dict(r) for r in con.execute("SELECT * FROM renglon WHERE oc = ?", (oc["numero"],))}
+    cantidades = cantidades_del_expediente(exp)
+    fechas = {}
+    for remito in exp["datos"]["remitos"]:
+        if remito.get("es_equipo_comodato") or not remito.get("fecha"):
+            continue
+        for item in remito.get("items") or []:
+            try:
+                pos = int(item.get("pos"))
+            except (TypeError, ValueError):
+                continue
+            fecha = util.ddmmaaaa(util.fecha_desde_texto(remito["fecha"]))
+            if fecha not in fechas.setdefault(pos, []):
+                fechas[pos].append(fecha)
+    filas, completa = [], True
+    for pos, renglon in sorted(renglones.items()):
+        con_desglose = renglon.get("desglose_cantidad") not in (None, "")
+        cantidad_oc = _cantidad(renglon["desglose_cantidad"] if con_desglose else renglon["cantidad"])
+        entregada = cantidades.get(pos, Decimal(0))
+        if entregada != cantidad_oc:
+            completa = False
+        if entregada == 0:
+            continue
+        unidad = (renglon.get("desglose_unidad") if con_desglose else renglon.get("unidad")) or ""
+        filas.append({
+            "renglon": str(pos),
+            "descripcion": renglon.get("descripcion") or "",
+            "cantidad_oc": _cantidad_texto(cantidad_oc) + (" " + unidad if unidad else ""),
+            "cantidad_entregada": _cantidad_texto(entregada),
+            "fecha_entrega": ", ".join(fechas.get(pos, [])),
+        })
+    hasta = util.fecha_desde_texto(ctx["periodo_hasta"]) if ctx.get("periodo_hasta") else None
+    hoy = util.fecha_desde_texto(db.ahora_utc()[:10])
+    fin_vigencia = _fin_vigencia(oc)
+    vigencia = "%s a %s" % (
+        util.ddmmaaaa(util.fecha_desde_texto(oc["vig_desde"])) if oc.get("vig_desde") else "—",
+        util.ddmmaaaa(util.fecha_desde_texto(fin_vigencia)) if fin_vigencia else "sin fin")
+    if oc["tipo"] == "SERVICIO":
+        entrega = "Mensual"
+    else:
+        entrega = "Única" if completa else "Parcial"
+    referencia = next(r["referencia"] for r in textos.referencias(ctx) if r["clave"] == "cv")
+    datos = {
+        "fecha": max(hoy, hasta) if hasta else hoy,
+        "proveedor": ctx["razon"],
+        "sap": ctx["sap"],
+        "expediente": ctx["expediente_contratacion"],
+        "ca": ctx["ca"],
+        "oc": ctx["oc"],
+        "vigencia": vigencia,
+        "rubro": "Servicios" if oc["tipo"] == "SERVICIO" else "Bienes",
+        "entrega": entrega,
+        "periodo_texto": _texto_periodo_cv(ctx),
+        "objeto": ctx["objeto"].strip(),
+        "renglones": filas,
+        "observacion": "",
+        "remitos": ctx["remitos"],
+    }
+    plantilla = (ctx["parametros_efector"] or {}).get("plantilla_cv")
+    if not plantilla:
+        raise textos.TextoIncompleto("Falta la plantilla del CV de %s en la configuración." % ctx["efector"])
+    return {"datos": datos, "plantilla": plantilla, "archivo": _nombre_docx(referencia)}
+
+
+def datos_autorizacion(con, id_expediente):
+    """Referencia, cuerpo y nombre del archivo .docx de la autorización de pago."""
+    autorizacion = textos.autorizacion(contexto_textos(con, id_expediente))
+    autorizacion["archivo"] = _nombre_docx(autorizacion["referencia"])
+    return autorizacion
