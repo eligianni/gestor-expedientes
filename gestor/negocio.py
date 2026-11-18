@@ -1023,6 +1023,8 @@ def contexto_textos(con, id_expediente):
     return {
         "efector": exp["efector"],
         "parametros_efector": (parametros.get("efectores") or {}).get(exp["efector"], {}),
+        "destino": ((parametros.get("efectores") or {}).get(exp["efector"]) or {}).get("destino", ""),
+        "nota_comodato": parametros.get("nota_comodato", ""),
         "sap": exp["sap"],
         "razon": exp.get("razon_social") or "",
         "oc": exp.get("oc") or "",
@@ -1034,6 +1036,8 @@ def contexto_textos(con, id_expediente):
         "dia_inicio": int(oc["dia_inicio_periodo"]) if oc else 1,
         "remitos": [r["numero"] for r in remitos if not r.get("es_equipo_comodato")],
         "remito_equipo": equipo,
+        "orden_remito_equipo": (datos.get("gde") or {}).get("orden_remito_equipo") or None,
+        "comodato": bool(oc["comodato"]) if oc else False,
         "primera_validacion": primera,
         "tipo_oc": oc["tipo"] if oc else "",
         "objeto": oc["objeto"] if oc else "",
@@ -1048,4 +1052,14 @@ def contexto_textos(con, id_expediente):
 def textos_del_expediente(con, id_expediente):
     """Carátula y referencias GDE (los pasos 17 y 19 agregan más claves)."""
     ctx = contexto_textos(con, id_expediente)
-    return {"caratula": textos.caratula(ctx), "referencias": textos.referencias(ctx)}
+    resultado = {"caratula": textos.caratula(ctx), "referencias": textos.referencias(ctx)}
+    try:
+        resultado["autorizacion"] = textos.autorizacion(ctx)
+    except textos.TextoIncompleto as error:
+        resultado["autorizacion_error"] = str(error)
+    if ctx["comodato"] and ctx["primera_validacion"] and ctx["remito_equipo"]:
+        try:
+            resultado["constancia_comodato"] = textos.constancia_comodato(ctx)
+        except textos.TextoIncompleto as error:
+            resultado["constancia_comodato_error"] = str(error)
+    return resultado

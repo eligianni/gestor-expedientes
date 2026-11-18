@@ -224,3 +224,4 @@ textarea { font-family: var(--fuente-mono); font-size: 15px; min-height: 120px; 
 .nivel-verificar .nivel { color: var(--primario-texto); background: var(--info); }
 .resumen-controles { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 0; list-style: none; }
 .nota-guardada { color: var(--exito); font-weight: 600; }
+.texto-generado { text-align: justify; max-width: 820px; white-space: pre-line; }

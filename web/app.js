@@ -824,7 +824,7 @@ function mostrarPaso(paso) {
     if (n === paso) boton.setAttribute("aria-current", "step"); else boton.removeAttribute("aria-current");
     boton.disabled = !expEstado.exp && n !== 1;
   }
-  const pintores = { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4 };
+  const pintores = { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4, 5: pintarPaso5 };
   if (pintores[paso]) pintores[paso]();
 }
 
@@ -1225,6 +1225,81 @@ async function guardarNota(resultado, texto) {
   pintarEncabezadoAsistente();
   pintarControles(datos);
   mostrarAviso("Nota aclaratoria guardada.", "exito");
+}
+
+// Copiar al portapapeles.
+
+function escaparHtml(texto) {
+  return String(texto).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function copiarTexto(texto) {
+  try {
+    await navigator.clipboard.writeText(texto);
+    mostrarAviso("Texto copiado.", "exito");
+  } catch (error) {
+    mostrarAviso("No se pudo copiar. Seleccioná el texto y copialo a mano.", "error");
+  }
+}
+
+/** Copia como HTML justificado (un <p> por párrafo) y también como texto plano, para pegar en GDE. */
+async function copiarConFormato(texto) {
+  const html = texto.split("\n").map((p) => '<p style="text-align: justify">' + escaparHtml(p) + "</p>").join("");
+  try {
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/html": new Blob([html], { type: "text/html" }),
+      "text/plain": new Blob([texto], { type: "text/plain" }),
+    })]);
+    mostrarAviso("Texto copiado con formato.", "exito");
+  } catch (error) {
+    await copiarTexto(texto);
+  }
+}
+
+function bloqueTexto(titulo, texto, conFormato) {
+  return el("div", { clase: "panel" },
+    el("h4", { texto: titulo }),
+    el("p", { clase: "texto-generado", texto }),
+    el("div", { clase: "acciones" },
+      conFormato ? el("button", { type: "button", texto: "Copiar con formato", "aria-label": "Copiar con formato: " + titulo,
+        onclick: () => copiarConFormato(texto) }) : null,
+      el("button", { type: "button", clase: conFormato ? "secundario" : null, texto: "Copiar", "aria-label": "Copiar: " + titulo,
+        onclick: () => copiarTexto(texto) })));
+}
+
+// Paso 5: textos generados.
+
+async function pintarPaso5() {
+  const contenedor = document.getElementById("asistente-paso-5");
+  cargando(contenedor);
+  const textos = await api("GET", "/api/expedientes/" + expEstado.exp.id + "/textos");
+  if (!textos) {
+    vaciar(contenedor, el("h3", { texto: "5. Textos" }),
+      el("p", { clase: "texto-suave", texto: "Completá los datos que faltan (ver el mensaje de arriba) para generar los textos." }));
+    return;
+  }
+  const partes = [el("h3", { texto: "5. Textos" }), bloqueTexto("Carátula", textos.caratula, false)];
+  if (textos.autorizacion) {
+    partes.push(bloqueTexto("Referencia de la autorización", textos.autorizacion.referencia, false));
+    partes.push(bloqueTexto("Autorización de pago", textos.autorizacion.cuerpo, true));
+  } else if (textos.autorizacion_error) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "Autorización: " + textos.autorizacion_error })));
+  }
+  if (textos.constancia_comodato) {
+    partes.push(bloqueTexto("Referencia de la constancia de comodato", textos.constancia_comodato.referencia, false));
+    partes.push(bloqueTexto("Constancia de recepción de comodato", textos.constancia_comodato.cuerpo, true));
+  } else if (textos.constancia_comodato_error) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "Constancia de comodato: " + textos.constancia_comodato_error })));
+  }
+  partes.push(el("h4", { texto: "Referencias GDE y nombres de archivo" }));
+  partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {},
+    el("thead", {}, el("tr", {}, ...["Referencia", "Archivo", ""].map((t) => el("th", { scope: "col", texto: t })))),
+    el("tbody", {}, ...textos.referencias.map((r) => el("tr", {},
+      el("td", { texto: r.referencia }),
+      el("td", { clase: "mono", texto: r.archivo }),
+      el("td", {}, el("button", { type: "button", clase: "secundario", texto: "Copiar",
+        "aria-label": "Copiar la referencia " + r.referencia, onclick: () => copiarTexto(r.referencia) }))))))));
+  vaciar(contenedor, ...partes);
 }
 
 function iniciarExpedientes() {
