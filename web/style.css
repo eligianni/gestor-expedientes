@@ -196,3 +196,31 @@ th { font-weight: 600; background: var(--fondo); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
 }
+
+/* --- Asistente del expediente ------------------------------------------- */
+.filtros { flex-direction: row; flex-wrap: wrap; align-items: flex-end; }
+.filtros .campo { min-width: 160px; }
+.pasos { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.pasos button { background: var(--superficie); color: var(--primario); }
+.pasos button[aria-current="step"] { background: var(--primario); color: var(--primario-texto); }
+.paso h3:first-child { margin-top: 0; }
+textarea { font-family: var(--fuente-mono); font-size: 15px; min-height: 120px; width: 100%; max-width: 720px;
+  padding: 8px; border: 1px solid var(--borde-control); border-radius: 4px; color: var(--texto); background: var(--superficie); }
+.campo-ancho { max-width: 720px; }
+.entrada-corta { width: 120px; }
+
+/* Semáforo de controles: color + palabra (nunca solo color). */
+.resultado { border-left: 6px solid var(--borde); border-radius: 6px; padding: 12px 16px; margin: 0 0 12px;
+  background: var(--superficie); box-shadow: var(--sombra-panel); }
+.resultado p { margin: 0 0 8px; }
+.nivel { display: inline-block; font-weight: 600; padding: 0 8px; border-radius: 4px; margin-right: 8px; }
+.nivel-error { border-left-color: var(--error); }
+.nivel-error .nivel { color: var(--primario-texto); background: var(--error); }
+.nivel-salvable { border-left-color: var(--violeta); }
+.nivel-salvable .nivel { color: var(--primario-texto); background: var(--violeta); }
+.nivel-aviso { border-left-color: var(--pendiente-plazo); background: var(--aviso-fondo); }
+.nivel-aviso .nivel { color: var(--texto); background: var(--pendiente-plazo); }
+.nivel-verificar { border-left-color: var(--info); }
+.nivel-verificar .nivel { color: var(--primario-texto); background: var(--info); }
+.resumen-controles { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 0; list-style: none; }
+.nota-guardada { color: var(--exito); font-weight: 600; }

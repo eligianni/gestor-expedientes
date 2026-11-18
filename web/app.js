@@ -108,6 +108,7 @@ async function api(metodo, ruta, cuerpo) {
 const AL_MOSTRAR = {
   "pantalla-inicio": cargarInicio,
   "pantalla-oc": cargarOC,
+  "pantalla-expedientes": cargarExpedientes,
   "pantalla-importar": cargarImportar,
 };
 
@@ -730,10 +731,516 @@ async function crearOC(evento) {
   listarOC();
 }
 
+// --- Expedientes: lista ------------------------------------------------------
+
+const ESTADOS_TEXTO = {
+  BORRADOR: "Borrador", CONTROLADO: "Controlado", EN_FIRMA: "En firma", FIRMADO: "Firmado", ENVIADO: "Enviado",
+  CONTABILIZADO: "Contabilizado", CERRADO: "Cerrado", PENDIENTE: "Pendiente", ANULADO: "Anulado",
+};
+const TIPOS_EXPEDIENTE = [["COMUN", "Común"], ["CENTRALIZADA", "Centralizada"], ["CORRECTIVO", "Correctivo"], ["EVENTUAL", "Pago eventual"]];
+
+const expEstado = { exp: null, ficha: null, paso: 1, sugerido: null, fuera: [], sii: null };
+
+function cargarExpedientes() {
+  if (expEstado.exp) {
+    abrirExpediente(expEstado.exp.id, expEstado.paso);
+  } else {
+    mostrarLista();
+  }
+}
+
+function mostrarLista() {
+  expEstado.exp = null;
+  expEstado.ficha = null;
+  document.getElementById("asistente").hidden = true;
+  document.getElementById("expedientes-lista-bloque").hidden = false;
+  estado.recargar = cargarExpedientes;
+  listarExpedientes();
+}
+
+async function listarExpedientes() {
+  const lista = document.getElementById("expedientes-lista");
+  cargando(lista);
+  const parametros = new URLSearchParams();
+  if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
+  for (const [clave, id] of [["estado", "filtro-estado"], ["periodo", "filtro-periodo"], ["sap", "filtro-sap"]]) {
+    const valor = document.getElementById(id).value.trim();
+    if (valor) parametros.set(clave, valor);
+  }
+  const expedientes = await api("GET", "/api/expedientes?" + parametros.toString());
+  if (!expedientes) { vaciar(lista); return; }
+  if (!expedientes.length) {
+    vaciar(lista, el("p", { clase: "texto-suave", texto: "No hay expedientes con esos filtros." }));
+    return;
+  }
+  const encabezados = ["N°", "Tipo", "OC", "Proveedor", "Período", "Factura", "Estado"];
+  const filas = expedientes.map((x) => el("tr", {},
+    el("td", {}, el("button", { type: "button", clase: "secundario", texto: String(x.id),
+      "aria-label": "Abrir el expediente " + x.id, onclick: () => abrirExpediente(x.id, 1) })),
+    el("td", { texto: x.tipo }),
+    el("td", { texto: x.oc || "—" }),
+    el("td", { texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
+    el("td", { texto: x.periodo || "—" }),
+    el("td", { texto: x.factura || "—" }),
+    el("td", { texto: ESTADOS_TEXTO[x.estado] || x.estado })));
+  vaciar(lista,
+    el("p", { clase: "texto-suave", texto: expedientes.length + (expedientes.length === 1 ? " expediente" : " expedientes") }),
+    el("div", { clase: "tabla-desplazable" }, el("table", {},
+      el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
+      el("tbody", {}, ...filas))));
+}
+
+// --- Expedientes: asistente ------------------------------------------------
+
+function mostrarAsistente() {
+  document.getElementById("expedientes-lista-bloque").hidden = true;
+  document.getElementById("asistente").hidden = false;
+}
+
+function pintarEncabezadoAsistente() {
+  const { exp, ficha } = expEstado;
+  const titulo = document.getElementById("asistente-titulo");
+  const resumen = document.getElementById("asistente-resumen");
+  if (!exp) {
+    titulo.textContent = "Nuevo expediente";
+    resumen.textContent = "Elegí el tipo y la OC para empezar.";
+    return;
+  }
+  titulo.textContent = "Expediente " + exp.id + " — " + (exp.razon_social || "sin proveedor");
+  resumen.textContent = [
+    exp.oc ? "OC " + exp.oc : "sin OC",
+    "período " + (exp.periodo || "sin definir") + (exp.periodo_manual ? " (manual)" : ""),
+    "estado " + (ESTADOS_TEXTO[exp.estado] || exp.estado),
+    ficha && ficha.oc.comodato ? "OC con comodato" : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function mostrarPaso(paso) {
+  if (!expEstado.exp && paso !== 1) paso = 1;
+  expEstado.paso = paso;
+  for (let n = 1; n <= 7; n++) document.getElementById("asistente-paso-" + n).hidden = n !== paso;
+  for (const boton of document.querySelectorAll(".pasos button[data-paso]")) {
+    const n = Number(boton.dataset.paso);
+    if (n === paso) boton.setAttribute("aria-current", "step"); else boton.removeAttribute("aria-current");
+    boton.disabled = !expEstado.exp && n !== 1;
+  }
+  const pintores = { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4 };
+  if (pintores[paso]) pintores[paso]();
+}
+
+function nuevoExpediente() {
+  limpiarAvisos();
+  expEstado.exp = null;
+  expEstado.ficha = null;
+  expEstado.sugerido = null;
+  expEstado.fuera = [];
+  expEstado.sii = null;
+  mostrarAsistente();
+  pintarEncabezadoAsistente();
+  mostrarPaso(1);
+  document.getElementById("asistente-titulo").focus();
+}
+
+async function abrirExpediente(id, paso) {
+  mostrarAsistente();
+  estado.recargar = () => abrirExpediente(id, expEstado.paso);
+  const exp = await api("GET", "/api/expedientes/" + id);
+  if (!exp) return;
+  if (!expEstado.exp || expEstado.exp.id !== exp.id) {
+    expEstado.sugerido = null;
+    expEstado.fuera = [];
+    expEstado.sii = null;
+  }
+  expEstado.exp = exp;
+  expEstado.ficha = exp.oc ? await api("GET", "/api/oc/" + encodeURIComponent(exp.oc)) : null;
+  pintarEncabezadoAsistente();
+  mostrarPaso(paso || 1);
+}
+
+/** Guarda cambios del expediente con su versión; devuelve el expediente actualizado o null. */
+async function guardarExpediente(cambios, mensaje) {
+  const exp = expEstado.exp;
+  estado.recargar = () => abrirExpediente(exp.id, expEstado.paso);
+  const actualizado = await api("PUT", "/api/expedientes/" + exp.id, { version: exp.version, cambios });
+  if (!actualizado) return null;
+  expEstado.exp = actualizado;
+  pintarEncabezadoAsistente();
+  if (mensaje) mostrarAviso(mensaje, "exito");
+  return actualizado;
+}
+
+// Paso 1: tipo, OC y período.
+
+async function pintarPaso1() {
+  const contenedor = document.getElementById("asistente-paso-1");
+  const exp = expEstado.exp;
+  if (!exp) {
+    const parametros = new URLSearchParams();
+    if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
+    const ocs = (await api("GET", "/api/oc?" + parametros.toString())) || [];
+    const opciones = el("datalist", { id: "lista-oc" },
+      ...ocs.map((oc) => el("option", { value: oc.numero, texto: oc.numero + " — " + oc.razon_social + (oc.objeto ? " — " + oc.objeto : "") })));
+    const formulario = el("form", { clase: "formulario", novalidate: true, onsubmit: crearExpediente },
+      el("h3", { texto: "1. Tipo y OC" }),
+      campoFormulario("nuevo-tipo", "Tipo de expediente", selector("COMUN", TIPOS_EXPEDIENTE)),
+      campoFormulario("nuevo-oc", "N° de OC", entrada("", { list: "lista-oc", inputmode: "numeric", autocomplete: "off" }),
+        "Escribí el número o elegilo de la lista."),
+      opciones,
+      el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Crear expediente" })));
+    vaciar(contenedor, formulario);
+    return;
+  }
+  const partes = [el("h3", { texto: "1. OC y período" })];
+  const oc = expEstado.ficha ? expEstado.ficha.oc : null;
+  partes.push(el("p", { texto: "Tipo " + exp.tipo + (oc ? " · OC " + oc.numero + " · " + (oc.objeto || "sin objeto cargado")
+    + " · día de inicio del período " + oc.dia_inicio_periodo : "") }));
+  partes.push(el("p", { texto: exp.periodo
+    ? "Período: " + exp.periodo + " (del " + exp.periodo_desde + " al " + exp.periodo_hasta + ")"
+      + (exp.periodo_manual ? " — corregido a mano" : " — sugerido por los remitos")
+    : "Todavía no hay período: se sugiere solo al pegar los remitos (paso 2), o cargalo a mano." }));
+  if (expEstado.sugerido && expEstado.sugerido.periodo !== exp.periodo) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" },
+      el("p", { texto: "Según los remitos, el período sugerido es " + expEstado.sugerido.periodo + "." }),
+      el("button", { type: "button", texto: "Usar " + expEstado.sugerido.periodo, onclick: async () => {
+        limpiarAvisos();
+        const s = expEstado.sugerido;
+        if (await guardarExpediente({ periodo: s.periodo, periodo_desde: s.desde, periodo_hasta: s.hasta, periodo_manual: 0 },
+          "Período " + s.periodo + " guardado.")) pintarPaso1();
+      } })));
+  }
+  partes.push(el("form", { clase: "formulario", novalidate: true, onsubmit: corregirPeriodo },
+    campoFormulario("exp-periodo", "Corregir el período (AAAA-MM)", entrada(exp.periodo || "", { inputmode: "numeric", clase: "entrada-corta" }),
+      "Al corregirlo a mano queda fijo: pegar más remitos ya no lo cambia."),
+    el("div", { clase: "acciones" },
+      el("button", { type: "submit", texto: "Guardar período" }),
+      el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 2", onclick: () => mostrarPaso(2) }))));
+  vaciar(contenedor, ...partes);
+}
+
+async function crearExpediente(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const datos = { tipo: document.getElementById("nuevo-tipo").value, oc: document.getElementById("nuevo-oc").value.trim() };
+  const exp = await api("POST", "/api/expedientes", datos);
+  if (!exp) return;
+  mostrarAviso("Expediente " + exp.id + " creado.", "exito");
+  await abrirExpediente(exp.id, 2);
+}
+
+async function corregirPeriodo(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const periodo = document.getElementById("exp-periodo").value.trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodo)) {
+    mostrarAviso("El período debe tener la forma AAAA-MM (por ejemplo 2026-08).", "error");
+    return;
+  }
+  if (periodo === expEstado.exp.periodo) { mostrarAviso("No hay cambios para guardar.", "aviso"); return; }
+  if (await guardarExpediente({ periodo }, "Período " + periodo + " guardado (corregido a mano).")) pintarPaso1();
+}
+
+// Paso 2: remitos.
+
+function pintarPaso2() {
+  const contenedor = document.getElementById("asistente-paso-2");
+  const exp = expEstado.exp;
+  const renglones = expEstado.ficha ? expEstado.ficha.renglones : [];
+  const partes = [
+    el("h3", { texto: "2. Remitos" }),
+    el("form", { clase: "formulario", novalidate: true, onsubmit: pegarRemitos },
+      el("div", { clase: "campo campo-ancho" },
+        el("label", { for: "remitos-texto", texto: "Pegar remitos, uno por línea: numero;fecha[;fecha_firma]" }),
+        el("textarea", { id: "remitos-texto", rows: "6", spellcheck: "false", "aria-describedby": "remitos-ayuda" }),
+        el("p", { id: "remitos-ayuda", clase: "texto-suave", texto: "Por ejemplo 0001-00003354;25/08/2026 o 0001-00000002;28/08/2026;02/09/2026. Un número que ya está reemplaza al anterior." })),
+      casilla("remitos-equipo", "Son remitos del equipo en comodato", false),
+      el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Agregar remitos" }))),
+  ];
+  if (expEstado.fuera.length) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" },
+      el("p", { texto: "Fuera del período: " + expEstado.fuera.join(", ") + ". Si el remito lo aclara, marcá «Aclara el período»." })));
+  }
+  const remitos = exp.datos.remitos;
+  if (!remitos.length) {
+    partes.push(el("p", { clase: "texto-suave", texto: "Todavía no hay remitos cargados." }));
+    vaciar(contenedor, ...partes);
+    return;
+  }
+  const formulario = el("form", { clase: "formulario", novalidate: true, onsubmit: guardarRemitos });
+  remitos.forEach((remito, i) => {
+    const bloque = el("fieldset", { clase: "panel" },
+      el("legend", { texto: "Remito " + remito.numero + " — " + remito.fecha
+        + (remito.fecha_firma ? " (firmado " + remito.fecha_firma + ")" : "")
+        + (remito.es_equipo_comodato ? " — equipo en comodato" : "") }));
+    if (!remito.es_equipo_comodato) {
+      const items = new Map((remito.items || []).map((it) => [Number(it.pos), it]));
+      const filas = renglones.map((r) => {
+        const item = items.get(Number(r.pos)) || {};
+        const idBase = "rem-" + i + "-" + r.pos;
+        return el("tr", {},
+          el("td", { clase: "numero", texto: r.pos }),
+          el("td", { texto: (r.codigo ? r.codigo + " · " : "") + r.descripcion }),
+          el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
+            "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + remito.numero })),
+          el("td", {}, entrada(item.codigo || "", { id: idBase + "-codigo", clase: "entrada-corta mono", placeholder: r.codigo || "",
+            "aria-label": "Código del renglón " + r.pos + " como figura en el remito " + remito.numero })));
+      });
+      bloque.append(el("div", { clase: "tabla-desplazable" }, el("table", {},
+        el("thead", {}, el("tr", {}, ...["Pos.", "Renglón de la OC", "Cantidad", "Código en el remito (vacío = igual)"]
+          .map((t) => el("th", { scope: "col", texto: t })))),
+        el("tbody", {}, ...filas))));
+      bloque.append(casilla("rem-" + i + "-aclara", "Aclara el período (no se informa fuera de período)", remito.aclara_periodo));
+    }
+    bloque.append(el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario",
+      texto: "Quitar este remito", onclick: () => quitarRemito(i) })));
+    formulario.append(bloque);
+  });
+  formulario.append(el("div", { clase: "acciones" },
+    el("button", { type: "submit", texto: "Guardar cantidades" }),
+    el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 3", onclick: () => mostrarPaso(3) })));
+  partes.push(formulario);
+  vaciar(contenedor, ...partes);
+}
+
+async function pegarRemitos(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const texto = document.getElementById("remitos-texto").value;
+  if (!texto.trim()) { mostrarAviso("Pegá al menos un remito.", "error"); return; }
+  const exp = expEstado.exp;
+  estado.recargar = () => abrirExpediente(exp.id, 2);
+  const datos = await api("POST", "/api/expedientes/" + exp.id + "/remitos/pegar", {
+    version: exp.version, texto, es_equipo_comodato: document.getElementById("remitos-equipo").checked,
+  });
+  if (!datos) return;
+  expEstado.sugerido = datos.periodo_sugerido;
+  expEstado.fuera = datos.fuera_de_periodo || [];
+  delete datos.periodo_sugerido;
+  delete datos.fuera_de_periodo;
+  expEstado.exp = datos;
+  pintarEncabezadoAsistente();
+  pintarPaso2();
+  mostrarAviso("Remitos agregados." + (datos.periodo_manual ? "" : (datos.periodo ? " Período sugerido: " + datos.periodo + "." : "")), "exito");
+}
+
+function remitosDelFormulario() {
+  const renglones = expEstado.ficha ? expEstado.ficha.renglones : [];
+  return expEstado.exp.datos.remitos.map((remito, i) => {
+    if (remito.es_equipo_comodato) return remito;
+    const items = [];
+    for (const r of renglones) {
+      const cantidad = document.getElementById("rem-" + i + "-" + r.pos + "-cantidad").value.trim().replace(",", ".");
+      const codigo = document.getElementById("rem-" + i + "-" + r.pos + "-codigo").value.trim();
+      if (cantidad) items.push({ pos: r.pos, cantidad, codigo });
+    }
+    return Object.assign({}, remito, { items, aclara_periodo: document.getElementById("rem-" + i + "-aclara").checked });
+  });
+}
+
+async function guardarRemitos(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const remitos = remitosDelFormulario();
+  const invalida = remitos.flatMap((r) => r.items || []).find((it) => !/^\d+(\.\d+)?$/.test(it.cantidad));
+  if (invalida) { mostrarAviso("La cantidad del renglón " + invalida.pos + " no es un número válido.", "error"); return; }
+  if (await guardarExpediente({ datos: { remitos } }, "Cantidades guardadas.")) pintarPaso2();
+}
+
+async function quitarRemito(indice) {
+  limpiarAvisos();
+  const remito = expEstado.exp.datos.remitos[indice];
+  if (!window.confirm("¿Quitar el remito " + remito.numero + " del expediente?")) return;
+  const remitos = expEstado.exp.datos.remitos.filter((_, i) => i !== indice);
+  if (await guardarExpediente({ datos: { remitos } }, "Remito " + remito.numero + " quitado.")) pintarPaso2();
+}
+
+// Paso 3: factura y SII.
+
+const CAMPOS_FACTURA = [
+  ["numero", "N° de factura (tal cual figura, por ejemplo 0003B00031812)", "texto"],
+  ["fecha", "Fecha de emisión", "fecha"],
+  ["centavos", "Importe total $", "pesos"],
+  ["cae", "CAE", "texto"],
+  ["vto_cae", "Vencimiento del CAE", "fecha"],
+  ["destinatario", "Destinatario", "texto"],
+  ["domicilio", "Domicilio del destinatario", "texto"],
+  ["periodo_desde", "Período de la factura: desde (si lo indica)", "fecha"],
+  ["periodo_hasta", "Período de la factura: hasta (si lo indica)", "fecha"],
+];
+
+const ETIQUETAS_SII = [
+  ["cae", "CAE"], ["fecha_emision", "Fecha de emisión"], ["periodo", "Período"], ["monto_centavos", "Monto"],
+  ["tipo_comprobante", "Tipo de comprobante"], ["nro_comprobante", "N° de comprobante"], ["razon_social", "Razón social"],
+  ["cuit", "CUIT"], ["sap", "N° SAP"], ["area", "Área"], ["tipo_servicio", "Tipo de servicio"], ["concepto", "Concepto"],
+  ["orden_compra", "Orden de compra"], ["cod_tramite", "Código de trámite"],
+];
+
+function controlFactura(campo, tipo, valor) {
+  const atributos = { id: "fac-" + campo };
+  if (tipo === "fecha") atributos.type = "date";
+  if (tipo === "pesos") atributos.inputmode = "decimal";
+  if (campo === "numero" || campo === "cae") atributos.clase = "mono";
+  return entrada(tipo === "pesos" ? formatoPesos(valor) : valor, atributos);
+}
+
+function pintarSii(sii) {
+  const bloque = document.getElementById("sii-resultado");
+  if (!sii || !Object.keys(sii).length) {
+    vaciar(bloque, el("p", { clase: "texto-suave", texto: "Todavía no se cargó el texto del SII." }));
+    return;
+  }
+  const filas = ETIQUETAS_SII.map(([clave, etiqueta]) => [etiqueta,
+    clave === "monto_centavos" ? (sii[clave] === null || sii[clave] === undefined ? "" : "$ " + formatoPesos(sii[clave])) : (sii[clave] ?? "")]);
+  const partes = [tabla(["Dato del SII", "Valor"], filas)];
+  if (sii.faltantes && sii.faltantes.length) {
+    partes.unshift(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "No se encontró en el texto: " + sii.faltantes.join(", ") + "." })));
+  }
+  vaciar(bloque, ...partes);
+}
+
+async function pintarPaso3() {
+  const contenedor = document.getElementById("asistente-paso-3");
+  const factura = expEstado.exp.datos.factura || {};
+  let destino = { nombre: "INSSJP", domicilio: "PERU 169", localidad: "CABA" };
+  const parametros = await api("GET", "/api/parametros");
+  if (parametros && parametros.parametros.destinatario_factura) destino = parametros.parametros.destinatario_factura;
+  const valores = Object.assign({ destinatario: destino.nombre, domicilio: destino.domicilio + " " + destino.localidad }, factura);
+  const campos = CAMPOS_FACTURA.map(([campo, etiqueta, tipo]) =>
+    campoFormulario("fac-" + campo, etiqueta, controlFactura(campo, tipo, valores[campo])));
+  expEstado.sii = null;
+  vaciar(contenedor,
+    el("h3", { texto: "3. Factura y SII" }),
+    el("form", { clase: "formulario", novalidate: true, onsubmit: guardarFactura },
+      ...campos,
+      el("div", { clase: "campo campo-ancho" },
+        el("label", { for: "sii-texto", texto: "Pegar texto de SII" }),
+        el("textarea", { id: "sii-texto", rows: "8", spellcheck: "false", "aria-describedby": "sii-ayuda" }),
+        el("p", { id: "sii-ayuda", clase: "texto-suave", texto: "Copiá todo el texto de la factura cargada en el SII y pegalo acá; los datos se completan solos." })),
+      el("div", { clase: "acciones" },
+        el("button", { type: "button", clase: "secundario", texto: "Analizar texto del SII", onclick: analizarSii })),
+      el("div", { id: "sii-resultado" }),
+      el("div", { clase: "acciones" },
+        el("button", { type: "submit", texto: "Guardar factura y SII" }),
+        el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 4", onclick: () => mostrarPaso(4) }))));
+  pintarSii(expEstado.exp.datos.sii);
+}
+
+async function analizarSii() {
+  limpiarAvisos();
+  const texto = document.getElementById("sii-texto").value;
+  if (!texto.trim()) { mostrarAviso("Pegá el texto de la factura cargada en el SII.", "error"); return; }
+  const sii = await api("POST", "/api/comprobantes/analizar", { texto });
+  if (!sii) return;
+  expEstado.sii = sii;
+  pintarSii(sii);
+  const completar = (campo, valor) => {
+    const control = document.getElementById("fac-" + campo);
+    if (control && !control.value && valor !== null && valor !== undefined) control.value = valor;
+  };
+  completar("cae", sii.cae);
+  completar("fecha", sii.fecha_emision);
+  completar("centavos", sii.monto_centavos === null ? null : formatoPesos(sii.monto_centavos));
+  mostrarAviso("Texto del SII analizado. Revisá los datos y guardá.", "exito");
+}
+
+async function guardarFactura(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const factura = Object.assign({}, expEstado.exp.datos.factura || {});
+  for (const [campo, , tipo] of CAMPOS_FACTURA) {
+    const valor = document.getElementById("fac-" + campo).value.trim();
+    if (tipo === "pesos") {
+      const centavos = pesosACentavos(valor);
+      if (Number.isNaN(centavos)) { mostrarAviso("El importe de la factura no es un importe válido.", "error"); return; }
+      factura[campo] = centavos;
+    } else {
+      factura[campo] = valor || null;
+    }
+  }
+  const datos = { factura };
+  if (expEstado.sii) datos.sii = expEstado.sii;
+  if (await guardarExpediente({ datos }, "Factura" + (expEstado.sii ? " y SII guardados." : " guardada."))) {
+    expEstado.sii = null;
+    pintarPaso3();
+  }
+}
+
+// Paso 4: controles.
+
+const NIVELES_TEXTO = { error: "Error", salvable: "Salvable", aviso: "Aviso", verificar: "Verificar" };
+
+async function pintarPaso4() {
+  const contenedor = document.getElementById("asistente-paso-4");
+  cargando(contenedor);
+  const informe = await api("GET", "/api/expedientes/" + expEstado.exp.id + "/controles");
+  if (!informe) { vaciar(contenedor); return; }
+  pintarControles(informe);
+}
+
+function pintarControles(informe) {
+  const contenedor = document.getElementById("asistente-paso-4");
+  const r = informe.resumen;
+  const partes = [
+    el("h3", { texto: "4. Controles" }),
+    el("ul", { clase: "resumen-controles", "aria-label": "Resumen de controles" },
+      el("li", { texto: "Errores: " + r.error }),
+      el("li", { texto: "Salvables: " + r.salvable + " (con nota: " + r.salvable_con_nota + ")" }),
+      el("li", { texto: "Avisos: " + r.aviso }),
+      el("li", { texto: "Para verificar: " + r.verificar })),
+  ];
+  if (!informe.resultados.length) {
+    partes.push(el("p", { clase: "nota-guardada", texto: "Sin observaciones: el expediente pasa todos los controles." }));
+  }
+  informe.resultados.forEach((resultado, i) => {
+    const bloque = el("div", { clase: "resultado nivel-" + resultado.nivel },
+      el("p", {}, el("span", { clase: "nivel", texto: NIVELES_TEXTO[resultado.nivel] || resultado.nivel }), resultado.mensaje));
+    if (resultado.nivel === "salvable") {
+      const id = "nota-" + i;
+      const area = el("textarea", { id, rows: "4" });
+      area.value = resultado.nota_guardada ? resultado.nota_guardada.texto : (resultado.nota_sugerida || "");
+      bloque.append(
+        el("div", { clase: "campo campo-ancho" }, el("label", { for: id, texto: "Nota aclaratoria (editable)" }), area),
+        resultado.nota_guardada
+          ? el("p", { clase: "nota-guardada", texto: "Nota guardada por " + resultado.nota_guardada.usuario + "." })
+          : el("p", { clase: "texto-suave", texto: "Falta guardar la nota para poder pasar a CONTROLADO." }),
+        el("div", { clase: "acciones" }, el("button", { type: "button", texto: "Guardar nota",
+          onclick: () => guardarNota(resultado, area.value) })));
+    }
+    partes.push(bloque);
+  });
+  partes.push(el("div", { clase: "acciones" },
+    el("button", { type: "button", clase: "secundario", texto: "Volver a controlar", onclick: pintarPaso4 })));
+  vaciar(contenedor, ...partes);
+}
+
+async function guardarNota(resultado, texto) {
+  limpiarAvisos();
+  if (!texto.trim()) { mostrarAviso("Escribí el texto de la nota aclaratoria.", "error"); return; }
+  const exp = expEstado.exp;
+  estado.recargar = () => abrirExpediente(exp.id, 4);
+  const datos = await api("POST", "/api/expedientes/" + exp.id + "/notas", {
+    version: exp.version, codigo: resultado.codigo, referencia: resultado.referencia, texto,
+  });
+  if (!datos) return;
+  expEstado.exp = datos.expediente;
+  pintarEncabezadoAsistente();
+  pintarControles(datos);
+  mostrarAviso("Nota aclaratoria guardada.", "exito");
+}
+
+function iniciarExpedientes() {
+  document.getElementById("expedientes-filtros").addEventListener("submit", (e) => { e.preventDefault(); listarExpedientes(); });
+  document.getElementById("expediente-nuevo").addEventListener("click", nuevoExpediente);
+  document.getElementById("asistente-volver").addEventListener("click", () => { limpiarAvisos(); mostrarLista(); });
+  for (const boton of document.querySelectorAll(".pasos button[data-paso]")) {
+    boton.addEventListener("click", () => { limpiarAvisos(); mostrarPaso(Number(boton.dataset.paso)); });
+  }
+}
+
 // --- Arranque ---------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
   iniciarEfector();
   iniciarImportar();
+  iniciarExpedientes();
   iniciarNavegacion();
 });
