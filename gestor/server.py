@@ -12,7 +12,7 @@ import sqlite3
 import urllib.request
 from urllib.parse import parse_qs, urlsplit
 
-from gestor import APP_ID, __version__, comprobantes, config, controles, db, importar, negocio, xlsx
+from gestor import APP_ID, __version__, comprobantes, config, controles, db, importar, negocio, textos, xlsx
 
 WEB = config.RAIZ / "web"
 
@@ -260,6 +260,10 @@ def expediente_nota(h, m, cuerpo):
     return 200, _ok(respuesta)
 
 
+def expediente_textos(h, m, cuerpo):
+    return 200, _ok(negocio.textos_del_expediente(h.conexion(), m.group("id")))
+
+
 def comprobantes_analizar(h, m, cuerpo):
     texto = leer_json(h, cuerpo).get("texto")
     if not isinstance(texto, str) or not texto.strip():
@@ -311,6 +315,7 @@ RUTAS = [
     ("POST", re.compile(r"/api/comprobantes/analizar"), comprobantes_analizar),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/controles"), expediente_controles),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/notas"), expediente_nota),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/textos"), expediente_textos),
 ]
 
 
@@ -385,7 +390,7 @@ class Manejador(http.server.BaseHTTPRequestHandler):
             estado, dic = 400, _error("validacion", str(error))
         except negocio.NoEncontrado as error:
             estado, dic = 404, _error("no_encontrado", str(error))
-        except negocio.ErrorNegocio as error:
+        except (negocio.ErrorNegocio, textos.TextoIncompleto) as error:
             estado, dic = 422, _error("negocio", str(error))
         except Exception as error:  # noqa: BLE001 — cualquier falla imprevista es un 500
             estado, dic = 500, _error("interno", "Error interno: %s" % type(error).__name__)

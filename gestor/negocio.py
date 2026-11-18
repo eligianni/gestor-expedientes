@@ -8,7 +8,7 @@ import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-from gestor import controles, db, util
+from gestor import controles, db, textos, util
 
 EFECTORES = ("HBI", "CASPH")
 TIPOS_OC = ("SERVICIO", "BIEN", "PROVISION")
@@ -999,3 +999,53 @@ def guardar_nota(con, id_expediente, version, codigo, referencia, texto):
             "datos": contenido, "actualizado": db.ahora_utc(),
         })
     return obtener_expediente(con, id_expediente)
+
+
+# --- Textos del expediente -------------------------------------------------
+
+def contexto_textos(con, id_expediente):
+    """Datos que necesitan los generadores de `gestor.textos` (que son puros)."""
+    exp = obtener_expediente(con, id_expediente)
+    datos = exp["datos"]
+    parametros = db.leer_parametros(con)
+    oc = db.leer_fila(con, "oc", {"numero": exp["oc"]}) if exp.get("oc") else None
+    remitos = datos.get("remitos") or []
+    equipo = next((r["numero"] for r in remitos if r.get("es_equipo_comodato")), None)
+    primera = True
+    if oc is not None:
+        fila = con.execute(
+            "SELECT COUNT(*) FROM expediente WHERE oc = ? AND id <> ? AND estado IN (%s)"
+            % ", ".join("?" * len(controles.ESTADOS_VALIDADOS)),
+            (oc["numero"], exp["id"]) + controles.ESTADOS_VALIDADOS,
+        ).fetchone()
+        primera = fila[0] == 0
+    factura = datos.get("factura") or {}
+    return {
+        "efector": exp["efector"],
+        "parametros_efector": (parametros.get("efectores") or {}).get(exp["efector"], {}),
+        "sap": exp["sap"],
+        "razon": exp.get("razon_social") or "",
+        "oc": exp.get("oc") or "",
+        "factura": factura.get("numero") or "",
+        "centavos": factura.get("centavos"),
+        "periodo": exp.get("periodo"),
+        "periodo_desde": exp.get("periodo_desde"),
+        "periodo_hasta": exp.get("periodo_hasta"),
+        "dia_inicio": int(oc["dia_inicio_periodo"]) if oc else 1,
+        "remitos": [r["numero"] for r in remitos if not r.get("es_equipo_comodato")],
+        "remito_equipo": equipo,
+        "primera_validacion": primera,
+        "tipo_oc": oc["tipo"] if oc else "",
+        "objeto": oc["objeto"] if oc else "",
+        "articulo": oc["objeto_articulo"] if oc else "",
+        "concepto_corto": oc["concepto_corto"] if oc else "",
+        "expediente": (datos.get("gde") or {}).get("expediente") or "",
+        "expediente_contratacion": oc["expediente_contratacion"] if oc else "",
+        "ca": oc["ca"] if oc else "",
+    }
+
+
+def textos_del_expediente(con, id_expediente):
+    """Carátula y referencias GDE (los pasos 17 y 19 agregan más claves)."""
+    ctx = contexto_textos(con, id_expediente)
+    return {"caratula": textos.caratula(ctx), "referencias": textos.referencias(ctx)}
