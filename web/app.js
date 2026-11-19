@@ -127,6 +127,7 @@ const AL_MOSTRAR = {
   "pantalla-configuracion": cargarConfiguracion,
   "pantalla-centralizadas": cargarCentralizadas,
   "pantalla-ayuda": cargarAyuda,
+  "pantalla-tablas": cargarTablas,
 };
 
 function mostrarPantalla(id, enfocar) {
@@ -608,6 +609,7 @@ function pintarFichaOC(ficha) {
     el("h2", { id: "oc-ficha-titulo", tabindex: "-1", texto: "OC " + oc.numero + " — " + (proveedor ? proveedor.razon_social : "") }),
     el("p", { texto: "Efector " + oc.efector + " · SAP " + oc.sap + " · " + (oc.origen === "MANUAL" ? "cargada a mano" : "importada de SAP")
       + (oc.fecha_oc ? " · fecha OC " + oc.fecha_oc : "") + (oc.cerrada_sap ? " · cerrada en SAP" : "") }),
+    seccionPdfOC(ficha, (nueva) => { ocEstado.ficha = nueva; pintarFichaOC(nueva); }),
     formulario,
     el("h3", { texto: "Renglones" }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
@@ -625,6 +627,181 @@ function pintarFichaOC(ficha) {
     ? tabla(["N°", "Tipo", "Período", "Estado", "Factura"], expedientes.map((x) => [x.id, x.tipo, x.periodo || "", x.estado, x.factura]))
     : el("p", { clase: "texto-suave", texto: "Todavía no hay expedientes para esta OC." }));
   vaciar(document.getElementById("oc-detalle"), el("div", { clase: "panel" }, ...partes));
+}
+
+// --- PDF de la OC ------------------------------------------------------------
+// Antes de validar, cada OC se carga desde su PDF digital: objeto, cantidades, unidades y subrenglones (los servicios
+// medidos en meses), que en el z_compras2 suelen venir mal. Se compara con lo cargado y se aplica solo lo marcado.
+
+const CAMPOS_MONEDA_PDF = new Set(["precio_centavos", "importe_centavos", "desglose_precio_centavos"]);
+
+function valorPdf(campo, valor) {
+  if (valor === null || valor === undefined || valor === "") return "—";
+  if (CAMPOS_MONEDA_PDF.has(campo)) return "$ " + formatoPesos(valor);
+  return String(valor);
+}
+
+function textoCargaPdf(pdf) {
+  return "Datos tomados del PDF el " + formatoFechaHora(pdf.fecha) + " por " + pdf.usuario
+    + (pdf.archivo ? " (" + pdf.archivo + ")" : "") + ".";
+}
+
+/** Panel para subir el PDF de la OC; `alTerminar(ficha)` se llama después de aplicar los cambios. */
+function seccionPdfOC(ficha, alTerminar) {
+  const { oc, pdf_oc: pdf } = ficha;
+  const prefijo = "pdf-" + oc.numero;
+  const archivo = el("input", { type: "file", accept: "application/pdf,.pdf" });
+  const texto = el("textarea", { rows: "6", spellcheck: "false" });
+  texto.id = prefijo + "-texto";
+  const revision = el("div", { id: prefijo + "-revision", "aria-live": "polite" });
+  const formulario = el("form", { clase: "formulario", novalidate: true,
+    onsubmit: (e) => { e.preventDefault(); leerPdfOC(oc.numero, archivo, texto, revision, alTerminar); } },
+    campoFormulario(prefijo + "-archivo", "PDF digital de la OC (el firmado en GDE)", archivo,
+      "Se lee el texto del PDF; no sirve un escaneo."),
+    el("details", {}, el("summary", { texto: "¿El PDF no se puede leer? Pegá su texto" }),
+      el("div", { clase: "campo campo-ancho" }, el("label", { for: texto.id, texto: "Texto de la OC copiado del visor de PDF" }), texto)),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: pdf ? "Volver a leer el PDF" : "Leer y comparar" })));
+  const estadoPdf = pdf
+    ? el("p", { clase: "texto-suave", texto: "✓ " + textoCargaPdf(pdf) })
+    : el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto:
+      "Todavía no se cargó el PDF de esta OC. Subilo antes de validar: de ahí salen el objeto de la contratación, "
+      + "las cantidades y los subrenglones." }));
+  return el("section", { clase: "panel seccion-pdf-oc", "aria-labelledby": prefijo + "-titulo" },
+    el("h3", { id: prefijo + "-titulo", texto: "PDF de la OC" }), estadoPdf, formulario, revision);
+}
+
+async function leerPdfOC(numero, archivo, texto, destino, alTerminar) {
+  limpiarAvisos();
+  const datos = new FormData();
+  if (archivo.files[0]) datos.append("archivo", archivo.files[0], archivo.files[0].name);
+  else if (texto.value.trim()) datos.append("texto", texto.value);
+  else { mostrarAviso("Elegí el PDF de la OC o pegá su texto.", "error"); return; }
+  cargando(destino);
+  const comparacion = await api("POST", "/api/oc/" + encodeURIComponent(numero) + "/pdf", datos);
+  if (!comparacion) { vaciar(destino); return; }
+  pintarRevisionPdf(destino, comparacion, alTerminar);
+}
+
+function casillaTomar(id, etiqueta, marcada) {
+  const control = el("input", { type: "checkbox", id, "aria-label": etiqueta });
+  control.checked = !!marcada;
+  return control;
+}
+
+function pintarRevisionPdf(destino, comparacion, alTerminar) {
+  const { oc, leido } = comparacion;
+  const partes = [el("h4", { id: "pdf-revision-titulo", tabindex: "-1", texto: "Lo que dice el PDF de la OC " + oc.numero })];
+  const resumen = [leido.razon_social && leido.razon_social + (leido.sap ? " (SAP " + leido.sap + ")" : ""),
+    leido.procedimiento, leido.importe_total_centavos !== null && leido.importe_total_centavos !== undefined
+      ? "importe total $ " + formatoPesos(leido.importe_total_centavos) : "",
+    leido.prorroga ? "prórroga: " + leido.prorroga : ""].filter(Boolean).join(" · ");
+  if (resumen) partes.push(el("p", { texto: resumen }));
+  if (comparacion.avisos.length) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso", role: "status" },
+      el("ul", { clase: "lista-avisos" }, ...comparacion.avisos.map((a) => el("li", { texto: a })))));
+  }
+
+  // Datos de la OC
+  const filasOc = comparacion.campos_oc.map((c) => {
+    const id = "pdf-oc-" + c.campo;
+    let valorNuevo = el("span", { texto: valorPdf(c.campo, c.pdf) });
+    if (!c.distinto) {
+      // igual en el gestor y en el PDF: solo se muestra
+    } else if (c.campo === "objeto") {
+      const editor = entrada(c.pdf, { id: id + "-valor", "aria-label": "Objeto a guardar", clase: "entrada-objeto" });
+      valorNuevo = el("div", {}, editor, leido.objeto_completo
+        ? el("details", {}, el("summary", { texto: "Texto completo del PDF" }), el("p", { clase: "texto-suave", texto: leido.objeto_completo }))
+        : null);
+    } else if (c.campo === "objeto_articulo") {
+      valorNuevo = selector(c.pdf, [["al", "al"], ["a la", "a la"], ["a los", "a los"], ["a las", "a las"]]);
+      valorNuevo.id = id + "-valor";
+      valorNuevo.setAttribute("aria-label", "Artículo del objeto a guardar");
+    }
+    const tomar = c.distinto
+      ? casillaTomar(id, "Tomar del PDF: " + c.etiqueta, !c.manual || c.actual === "" || c.actual === null)
+      : el("span", { clase: "texto-suave", texto: "Igual" });
+    return el("tr", {}, el("td", {}, tomar), el("th", { scope: "row", texto: c.etiqueta + (c.manual ? " (editado a mano)" : "") }),
+      el("td", { texto: valorPdf(c.campo, c.actual) }), el("td", {}, valorNuevo));
+  });
+  partes.push(el("h5", { texto: "Datos de la OC" }),
+    el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-revision" },
+      el("thead", {}, el("tr", {}, ...["Tomar", "Dato", "En el gestor", "En el PDF"].map((t) => el("th", { scope: "col", texto: t })))),
+      el("tbody", {}, ...filasOc))));
+
+  // Renglones
+  const filasRenglones = [];
+  for (const r of comparacion.renglones) {
+    const subrenglones = r.subrenglones.map((s) => "Subrenglón " + s.pos + ": " + s.cantidad + " " + s.unidad
+      + (s.precio_centavos !== null ? " × $ " + formatoPesos(s.precio_centavos) : "")
+      + (s.importe_centavos !== null ? " = $ " + formatoPesos(s.importe_centavos) : "")).join(" · ");
+    const encabezado = el("th", { scope: "row", rowspan: String(Math.max(1, r.existe ? r.diferencias.length : 1)) },
+      el("span", { texto: "Renglón " + r.pos }), el("br"), el("span", { clase: "texto-suave", texto: r.descripcion }),
+      subrenglones ? el("p", { clase: "texto-suave subrenglones", texto: subrenglones }) : null);
+    if (!r.existe) {
+      const p = r.propuesta;
+      filasRenglones.push(el("tr", {},
+        el("td", {}, casillaTomar("pdf-r" + r.pos + "-nuevo", "Agregar el renglón " + r.pos + " del PDF", true)), encabezado,
+        el("td", { texto: "Renglón nuevo" }), el("td", { texto: "No está en el gestor" }),
+        el("td", { texto: p.cantidad + " " + p.unidad + " × $ " + formatoPesos(p.precio_centavos) + " = $ " + formatoPesos(p.importe_centavos)
+          + (p.desglose_cantidad ? " (desglose " + p.desglose_cantidad + " " + p.desglose_unidad + " × $ " + formatoPesos(p.desglose_precio_centavos) + ")" : "") })));
+      continue;
+    }
+    if (!r.diferencias.length) {
+      filasRenglones.push(el("tr", {}, el("td", {}, el("span", { clase: "texto-suave", texto: "Igual" })), encabezado,
+        el("td", { colspan: "3", texto: "Sin diferencias con el gestor." })));
+      continue;
+    }
+    r.diferencias.forEach((d, i) => {
+      const celdas = [el("td", {}, casillaTomar("pdf-r" + r.pos + "-" + d.campo, "Tomar del PDF: renglón " + r.pos + ", " + d.etiqueta, true))];
+      if (i === 0) celdas.push(encabezado);
+      celdas.push(el("td", { texto: d.etiqueta }), el("td", { texto: valorPdf(d.campo, d.actual) }), el("td", { texto: valorPdf(d.campo, d.pdf) }));
+      filasRenglones.push(el("tr", {}, ...celdas));
+    });
+  }
+  partes.push(el("h5", { texto: "Renglones" }),
+    el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-revision" },
+      el("thead", {}, el("tr", {}, ...["Tomar", "Renglón", "Dato", "En el gestor", "En el PDF"].map((t) => el("th", { scope: "col", texto: t })))),
+      el("tbody", {}, ...filasRenglones))));
+
+  partes.push(el("div", { clase: "acciones" },
+    el("button", { type: "button", texto: "Aplicar lo marcado", onclick: () => aplicarPdfOC(destino, comparacion, alTerminar) }),
+    el("button", { type: "button", clase: "secundario", texto: "Descartar", onclick: () => vaciar(destino) })));
+  vaciar(destino, el("div", { clase: "revision-pdf" }, ...partes));
+  document.getElementById("pdf-revision-titulo").focus();
+}
+
+async function aplicarPdfOC(destino, comparacion, alTerminar) {
+  limpiarAvisos();
+  const marcado = (id) => { const c = document.getElementById(id); return !!(c && c.checked); };
+  const cambiosOc = {};
+  for (const c of comparacion.campos_oc) {
+    if (!c.distinto || !marcado("pdf-oc-" + c.campo)) continue;
+    const editor = document.getElementById("pdf-oc-" + c.campo + "-valor");
+    cambiosOc[c.campo] = editor ? editor.value.trim() : c.pdf;
+  }
+  if ("objeto" in cambiosOc && !cambiosOc.objeto) { mostrarAviso("El objeto no puede quedar vacío.", "error"); return; }
+  const renglones = [];
+  for (const r of comparacion.renglones) {
+    if (!r.existe) {
+      if (marcado("pdf-r" + r.pos + "-nuevo")) {
+        const cambios = Object.fromEntries(Object.entries(r.propuesta).filter(([, v]) => v !== null && v !== ""));
+        renglones.push({ pos: r.pos, version: null, cambios });
+      }
+      continue;
+    }
+    const cambios = {};
+    for (const d of r.diferencias) if (marcado("pdf-r" + r.pos + "-" + d.campo)) cambios[d.campo] = d.pdf;
+    if (Object.keys(cambios).length) renglones.push({ pos: r.pos, version: r.version, cambios });
+  }
+  estado.recargar = () => vaciar(destino);
+  const ficha = await api("POST", "/api/oc/" + encodeURIComponent(comparacion.oc.numero) + "/pdf/aplicar", {
+    version: comparacion.oc.version, archivo: comparacion.archivo || "", leido: comparacion.leido, oc: cambiosOc, renglones });
+  if (!ficha) return;
+  const cantidad = Object.keys(cambiosOc).length + renglones.length;
+  await alTerminar(ficha);
+  mostrarAviso(cantidad
+    ? "Datos del PDF aplicados a la OC " + ficha.oc.numero + "."
+    : "Quedó registrado que la OC " + ficha.oc.numero + " coincide con su PDF.", "exito");
 }
 
 async function guardarOC(evento) {
@@ -788,6 +965,19 @@ const ESTADOS_TEXTO = {
   PARA_FACTURAR: "Para facturar", ARMADO: "Armado", EN_DTO_ECONOMICO_CONTABLE: "En Dto. Económico Contable",
   FINALIZADO: "Finalizado",
 };
+const TONO_ESTADO = {
+  BORRADOR: "", CONTROLADO: "info", EN_FIRMA: "violeta", FIRMADO: "violeta", ENVIADO: "info", CONTABILIZADO: "exito",
+  CERRADO: "exito", FINALIZADO: "exito", PENDIENTE: "aviso", ANULADO: "error", DEVUELTO: "aviso",
+  RECIBIDO_MANTENIMIENTO: "info", INFORME_ECONOMICO: "info", PARA_FACTURAR: "info", ARMADO: "info",
+  EN_DTO_ECONOMICO_CONTABLE: "violeta",
+};
+
+/** Estado del expediente como pastilla: la palabra siempre está; el color solo acompaña. */
+function pastillaEstado(estadoExp) {
+  const tono = TONO_ESTADO[estadoExp];
+  return el("span", { clase: "pastilla" + (tono ? " pastilla-" + tono : ""), texto: ESTADOS_TEXTO[estadoExp] || estadoExp });
+}
+
 const TIPOS_EXPEDIENTE = [["COMUN", "Común"], ["CENTRALIZADA", "Centralizada"], ["CORRECTIVO", "Correctivo"], ["EVENTUAL", "Pago eventual"]];
 
 const expEstado = { exp: null, ficha: null, paso: 1, sugerido: null, fuera: [], sii: null };
@@ -835,7 +1025,7 @@ async function listarExpedientes() {
     el("td", { texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
     el("td", { texto: x.periodo || "—" }),
     el("td", { texto: x.factura || "—" }),
-    el("td", { texto: ESTADOS_TEXTO[x.estado] || x.estado })));
+    el("td", {}, pastillaEstado(x.estado))));
   vaciar(lista,
     el("p", { clase: "texto-suave", texto: expedientes.length + (expedientes.length === 1 ? " expediente" : " expedientes") }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
@@ -949,6 +1139,11 @@ async function pintarPaso1() {
   const oc = expEstado.ficha ? expEstado.ficha.oc : null;
   partes.push(el("p", { texto: "Tipo " + exp.tipo + (oc ? " · OC " + oc.numero + " · " + (oc.objeto || "sin objeto cargado")
     + " · día de inicio del período " + oc.dia_inicio_periodo : "") }));
+  if (expEstado.ficha) {
+    partes.push(expEstado.ficha.pdf_oc
+      ? el("p", { clase: "texto-suave", texto: "✓ PDF de la OC: " + textoCargaPdf(expEstado.ficha.pdf_oc) })
+      : seccionPdfOC(expEstado.ficha, async (ficha) => { expEstado.ficha = ficha; pintarEncabezadoAsistente(); await pintarPaso1(); }));
+  }
   partes.push(el("p", { texto: exp.periodo
     ? "Período: " + exp.periodo + " (del " + exp.periodo_desde + " al " + exp.periodo_hasta + ")"
       + (exp.periodo_manual ? " — corregido a mano" : " — sugerido por los remitos")
@@ -2047,6 +2242,9 @@ async function cargarConfiguracion() {
   const copia = el("div", { clase: "panel" },
     el("h2", { clase: "titulo-chico", texto: "Copias de seguridad y cierre" }),
     el("p", { id: "conf-ultimo-backup", texto: base.ultimo_backup ? "Última copia: " + base.ultimo_backup : "Todavía no hay copias de seguridad." }),
+    el("p", { id: "conf-backup-diario", clase: "texto-suave", texto: base.ultimo_backup_diario
+      ? "Copia diaria (una por día, en la carpeta «diarios»; se guardan 90 días): " + base.ultimo_backup_diario
+      : "Todavía no hay copia diaria: se hace sola al abrir el programa y una vez por día mientras está abierto." }),
     el("div", { clase: "acciones" },
       el("button", { type: "button", texto: "Copia de seguridad ahora", onclick: copiaManual }),
       el("button", { type: "button", clase: "secundario", texto: "Cerrar programa", onclick: cerrarPrograma })));
@@ -2202,6 +2400,381 @@ async function cargarAyuda() {
   destino.textContent = datos ? datos.markdown : "No se pudo cargar el instructivo.";
 }
 
+
+// --- Tablas: vistas con columnas, orden, filtros y exportación a Excel ------------------------------------------
+// El servidor manda todas las filas; el filtrado y el orden se hacen acá. Excel recibe exactamente lo que se ve.
+// Las vistas (columnas, orden y filtros) se recuerdan en esta PC; también se pueden guardar con nombre.
+
+const TABLAS_DISPONIBLES = [["expedientes", "Expedientes"], ["oc", "Órdenes de compra"], ["renglones", "Renglones de OC"]];
+const TABLA_FILAS_POR_TANDA = 300;
+const tablaEstado = { nombre: "expedientes", datos: null, vista: null, mostrar: TABLA_FILAS_POR_TANDA };
+
+function guardadoLocal(clave, valor) {
+  try {
+    if (valor === undefined) return JSON.parse(localStorage.getItem("gestor.tablas." + clave) || "null");
+    localStorage.setItem("gestor.tablas." + clave, JSON.stringify(valor));
+  } catch (error) { /* sin almacenamiento local: la vista no se recuerda */ }
+  return null;
+}
+
+function vistaPredeterminada(columnas) {
+  return { visibles: columnas.filter((c) => c.visible).map((c) => c.clave), orden: null, filtros: {}, buscar: "" };
+}
+
+function normalizarBusqueda(texto) {
+  return String(texto ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+
+function fechaCorta(iso) {
+  if (!iso) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? m[3] + "/" + m[2] + "/" + m[1] : String(iso);
+}
+
+function textoCelda(columna, valor) {
+  if (valor === null || valor === undefined || valor === "") return "";
+  switch (columna.tipo) {
+    case "moneda": return formatoPesos(valor);
+    case "fecha": return fechaCorta(valor);
+    case "fecha_hora": return formatoFechaHora(valor);
+    case "si_no": return valor ? "Sí" : "No";
+    case "cantidad": return String(valor).replace(".", ",");
+    default: return String(valor);
+  }
+}
+
+/** Valor comparable: números para montos y cantidades, ISO para fechas, texto normalizado para el resto. */
+function valorOrden(columna, valor) {
+  if (valor === null || valor === undefined || valor === "") return null;
+  if (["moneda", "numero", "cantidad", "si_no"].includes(columna.tipo)) return Number(valor);
+  if (columna.tipo === "fecha" || columna.tipo === "fecha_hora") return String(valor);
+  return normalizarBusqueda(valor);
+}
+
+function valorDelFiltro(columna, texto) {
+  const t = texto.trim();
+  if (columna.tipo === "moneda") return pesosACentavos(t);
+  if (["numero", "cantidad"].includes(columna.tipo)) return Number(t.replace(/\./g, "").replace(",", "."));
+  if (columna.tipo === "fecha" || columna.tipo === "fecha_hora") {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t);
+    return m ? m[3] + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0") : t;
+  }
+  return normalizarBusqueda(t);
+}
+
+/** Filtro de una columna: texto que contiene; en números y fechas también >, <, >=, <=, = y rangos "a..b". */
+function cumpleFiltro(columna, valor, filtro) {
+  if (filtro === undefined || filtro === null || String(filtro).trim() === "") return true;
+  if (filtro === "(vacío)") return valor === null || valor === undefined || valor === "";
+  if (columna.tipo === "si_no") return String(valor ? 1 : 0) === filtro;
+  const comparable = ["moneda", "numero", "cantidad", "fecha", "fecha_hora"].includes(columna.tipo);
+  if (comparable) {
+    const actual = valorOrden(columna, valor);
+    const rango = /^(.+?)\.\.(.+)$/.exec(filtro);
+    const comparacion = /^(>=|<=|>|<|=)\s*(.+)$/.exec(filtro.trim());
+    if (rango || comparacion) {
+      if (actual === null) return false;
+      const v = columna.tipo === "fecha_hora" ? String(actual).slice(0, 10) : actual;
+      if (rango) {
+        const desde = valorDelFiltro(columna, rango[1]);
+        const hasta = valorDelFiltro(columna, rango[2]);
+        return v >= desde && v <= hasta;
+      }
+      const objetivo = valorDelFiltro(columna, comparacion[2]);
+      return { ">=": v >= objetivo, "<=": v <= objetivo, ">": v > objetivo, "<": v < objetivo, "=": v === objetivo }[comparacion[1]];
+    }
+  }
+  if (filtro.startsWith("=")) return normalizarBusqueda(textoCelda(columna, valor)) === normalizarBusqueda(filtro.slice(1));
+  return normalizarBusqueda(textoCelda(columna, valor)).includes(normalizarBusqueda(filtro));
+}
+
+function filasVisibles() {
+  const { datos, vista } = tablaEstado;
+  const columnas = new Map(datos.columnas.map((c) => [c.clave, c]));
+  const visibles = vista.visibles.filter((c) => columnas.has(c)).map((c) => columnas.get(c));
+  const buscar = normalizarBusqueda(vista.buscar);
+  let filas = datos.filas.filter((fila) => {
+    for (const [clave, filtro] of Object.entries(vista.filtros)) {
+      if (columnas.has(clave) && !cumpleFiltro(columnas.get(clave), fila[clave], filtro)) return false;
+    }
+    if (buscar) return visibles.some((c) => normalizarBusqueda(textoCelda(c, fila[c.clave])).includes(buscar));
+    return true;
+  });
+  if (vista.orden && columnas.has(vista.orden.clave)) {
+    const columna = columnas.get(vista.orden.clave);
+    const signo = vista.orden.asc ? 1 : -1;
+    filas = filas.slice().sort((a, b) => {
+      const x = valorOrden(columna, a[columna.clave]);
+      const y = valorOrden(columna, b[columna.clave]);
+      if (x === y) return 0;
+      if (x === null) return 1;
+      if (y === null) return -1;
+      return (x < y ? -1 : 1) * signo;
+    });
+  }
+  return { visibles, filas };
+}
+
+async function cargarTablas() {
+  const raiz = document.getElementById("tablas-raiz");
+  cargando(raiz);
+  const parametros = new URLSearchParams();
+  if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
+  const datos = await api("GET", "/api/tablas/" + tablaEstado.nombre + "?" + parametros.toString());
+  if (!datos) { vaciar(raiz); return; }
+  tablaEstado.datos = datos;
+  tablaEstado.vista = guardadoLocal("actual." + tablaEstado.nombre) || vistaPredeterminada(datos.columnas);
+  tablaEstado.mostrar = TABLA_FILAS_POR_TANDA;
+  pintarTablas();
+}
+
+function recordarVista() {
+  guardadoLocal("actual." + tablaEstado.nombre, tablaEstado.vista);
+}
+
+function vistasGuardadas() {
+  return guardadoLocal("guardadas." + tablaEstado.nombre) || {};
+}
+
+function pintarTablas() {
+  const raiz = document.getElementById("tablas-raiz");
+  const { datos, vista } = tablaEstado;
+  const elegirTabla = selector(tablaEstado.nombre, TABLAS_DISPONIBLES);
+  elegirTabla.id = "tablas-nombre";
+  elegirTabla.addEventListener("change", () => { tablaEstado.nombre = elegirTabla.value; cargarTablas(); });
+
+  const guardadas = vistasGuardadas();
+  const elegirVista = selector("", [["", "— Elegir una vista guardada —"], ...Object.keys(guardadas).sort().map((n) => [n, n])]);
+  elegirVista.id = "tablas-vista";
+  elegirVista.addEventListener("change", () => {
+    if (!elegirVista.value) return;
+    tablaEstado.vista = JSON.parse(JSON.stringify(guardadas[elegirVista.value]));
+    tablaEstado.mostrar = TABLA_FILAS_POR_TANDA;
+    recordarVista();
+    pintarTablas();
+    mostrarAviso("Vista «" + elegirVista.value + "» aplicada.", "exito");
+  });
+
+  const buscar = entrada(vista.buscar, { type: "search", placeholder: "Buscar en las columnas visibles", autocomplete: "off" });
+  buscar.id = "tablas-buscar";
+  let espera = null;
+  buscar.addEventListener("input", () => {
+    clearTimeout(espera);
+    espera = setTimeout(() => { vista.buscar = buscar.value; recordarVista(); pintarCuerpoTabla(); }, 200);
+  });
+
+  const controles = el("div", { clase: "panel formulario filtros" },
+    el("div", { clase: "campo" }, el("label", { for: "tablas-nombre", texto: "Tabla" }), elegirTabla),
+    el("div", { clase: "campo campo-buscar" }, el("label", { for: "tablas-buscar", texto: "Buscar" }), buscar),
+    el("div", { clase: "campo" }, el("label", { for: "tablas-vista", texto: "Vistas guardadas" }), elegirVista),
+    el("div", { clase: "acciones" },
+      el("button", { type: "button", clase: "secundario", texto: "Guardar vista…", onclick: guardarVistaConNombre }),
+      Object.keys(guardadas).length
+        ? el("button", { type: "button", clase: "secundario", texto: "Borrar vista…", onclick: borrarVistaGuardada }) : null,
+      el("button", { type: "button", clase: "secundario", texto: "Limpiar filtros", onclick: () => {
+        vista.filtros = {}; vista.buscar = ""; recordarVista(); pintarTablas(); } }),
+      el("button", { type: "button", clase: "secundario", texto: "Restablecer vista", onclick: () => {
+        tablaEstado.vista = vistaPredeterminada(datos.columnas); recordarVista(); pintarTablas(); } }),
+      el("button", { type: "button", texto: "Exportar a Excel", onclick: exportarTablaExcel })));
+
+  const casillasColumnas = datos.columnas.map((c) => {
+    const id = "tablas-col-" + c.clave;
+    const control = el("input", { type: "checkbox", id });
+    control.checked = vista.visibles.includes(c.clave);
+    control.addEventListener("change", () => {
+      const orden = datos.columnas.map((x) => x.clave);
+      const visibles = new Set(vista.visibles);
+      if (control.checked) visibles.add(c.clave); else visibles.delete(c.clave);
+      vista.visibles = orden.filter((x) => visibles.has(x));
+      recordarVista();
+      pintarTablas();
+      const otra = document.getElementById(id);
+      if (otra) { otra.closest("details").open = true; otra.focus(); }
+    });
+    return el("div", { clase: "campo campo-casilla" }, control, el("label", { for: id, texto: c.titulo }));
+  });
+  const elegirColumnas = el("details", { clase: "panel elegir-columnas" },
+    el("summary", { texto: "Columnas (" + vista.visibles.length + " de " + datos.columnas.length + ")" }),
+    el("div", { clase: "grilla-columnas" }, ...casillasColumnas));
+
+  vaciar(raiz, controles, elegirColumnas,
+    el("p", { id: "tablas-resumen", clase: "texto-suave", role: "status" }),
+    el("div", { id: "tablas-tabla" }));
+  pintarCuerpoTabla(true);
+}
+
+function filtroDeColumna(columna, filas) {
+  const { vista } = tablaEstado;
+  const actual = vista.filtros[columna.clave] || "";
+  const etiqueta = "Filtrar " + columna.titulo;
+  const aplicar = (valor) => {
+    if (valor) vista.filtros[columna.clave] = valor; else delete vista.filtros[columna.clave];
+    tablaEstado.mostrar = TABLA_FILAS_POR_TANDA;
+    recordarVista();
+    pintarCuerpoTabla();
+  };
+  if (columna.tipo === "si_no") {
+    const control = selector(actual, [["", "Todos"], ["1", "Sí"], ["0", "No"]]);
+    control.setAttribute("aria-label", etiqueta);
+    control.addEventListener("change", () => aplicar(control.value));
+    return control;
+  }
+  if (columna.tipo === "texto") {
+    const distintos = [...new Set(tablaEstado.datos.filas.map((f) => f[columna.clave] ?? ""))];
+    if (distintos.length > 1 && distintos.length <= 15) {
+      const opciones = [["", "Todos"], ...distintos.filter((v) => v !== "").sort().map((v) => ["=" + v, v])];
+      if (distintos.includes("")) opciones.push(["(vacío)", "(vacío)"]);
+      const control = selector(actual, opciones);
+      control.setAttribute("aria-label", etiqueta);
+      control.addEventListener("change", () => aplicar(control.value));
+      return control;
+    }
+  }
+  const pista = { moneda: "ej. >100000", numero: "ej. >10", cantidad: "ej. >0", fecha: "ej. >=01/08/2026", fecha_hora: "ej. >=01/08/2026" };
+  const control = entrada(actual, { type: "search", "aria-label": etiqueta, placeholder: pista[columna.tipo] || "contiene…",
+    autocomplete: "off" });
+  let espera = null;
+  control.addEventListener("input", () => { clearTimeout(espera); espera = setTimeout(() => aplicar(control.value.trim()), 300); });
+  return control;
+}
+
+function celdaTabla(columna, fila) {
+  const texto = textoCelda(columna, fila[columna.clave]);
+  const numerica = ["moneda", "numero", "cantidad"].includes(columna.tipo);
+  const td = el("td", { clase: numerica ? "numero" : null });
+  const nombre = tablaEstado.nombre;
+  if (nombre === "expedientes" && columna.clave === "id") {
+    td.append(el("button", { type: "button", clase: "secundario boton-celda", texto, "aria-label": "Abrir el expediente " + texto,
+      onclick: () => irAExpediente(fila.id) }));
+  } else if (columna.clave === "oc" && fila.oc || (nombre === "oc" && columna.clave === "numero")) {
+    const numero = nombre === "oc" ? fila.numero : fila.oc;
+    td.append(el("button", { type: "button", clase: "secundario boton-celda", texto, "aria-label": "Ver la OC " + numero,
+      onclick: () => irAOC(numero) }));
+  } else if (nombre === "expedientes" && columna.clave === "estado" && fila.estado) {
+    td.append(pastillaEstado(fila.estado));
+  } else {
+    td.textContent = texto;
+  }
+  return td;
+}
+
+function irAExpediente(id) {
+  expEstado.exp = null;
+  mostrarPantalla("pantalla-expedientes", false);
+  abrirExpediente(id, 1);
+}
+
+function irAOC(numero) {
+  ocEstado.ficha = null;
+  mostrarPantalla("pantalla-oc", false);
+  abrirFichaOC(numero);
+}
+
+function pintarCuerpoTabla(conEncabezado) {
+  const contenedor = document.getElementById("tablas-tabla");
+  if (!contenedor) return;
+  const { vista } = tablaEstado;
+  const { visibles, filas } = filasVisibles();
+  const total = tablaEstado.datos.filas.length;
+  document.getElementById("tablas-resumen").textContent = filas.length === total
+    ? total + " filas"
+    : filas.length + " de " + total + " filas (con filtros)";
+
+  let tabla = contenedor.querySelector("table");
+  if (conEncabezado || !tabla) {
+    const encabezados = visibles.map((c) => {
+      const orden = vista.orden && vista.orden.clave === c.clave ? (vista.orden.asc ? "ascending" : "descending") : null;
+      const flecha = orden === "ascending" ? " ▲" : orden === "descending" ? " ▼" : "";
+      return el("th", { scope: "col", "aria-sort": orden || "none" },
+        el("button", { type: "button", clase: "orden-columna", texto: c.titulo + flecha,
+          "aria-label": "Ordenar por " + c.titulo + (orden === "ascending" ? " (de mayor a menor)" : " (de menor a mayor)"),
+          onclick: () => {
+            const asc = !(vista.orden && vista.orden.clave === c.clave && vista.orden.asc);
+            vista.orden = { clave: c.clave, asc };
+            recordarVista();
+            pintarCuerpoTabla(true);
+          } }));
+    });
+    const filtros = visibles.map((c) => el("td", {}, filtroDeColumna(c)));
+    tabla = el("table", { clase: "tabla-datos" },
+      el("caption", { clase: "solo-lectores", texto: tablaEstado.datos.titulo }),
+      el("thead", {}, el("tr", {}, ...encabezados), el("tr", { clase: "fila-filtros" }, ...filtros)),
+      el("tbody"), el("tfoot"));
+    vaciar(contenedor, el("div", { clase: "tabla-desplazable" }, tabla), el("div", { id: "tablas-mas" }));
+  }
+  const tbody = tabla.querySelector("tbody");
+  vaciar(tbody, ...filas.slice(0, tablaEstado.mostrar).map((fila) => el("tr", {}, ...visibles.map((c) => celdaTabla(c, fila)))));
+  if (!filas.length) {
+    tbody.append(el("tr", {}, el("td", { colspan: String(Math.max(1, visibles.length)), texto: "No hay filas con estos filtros." })));
+  }
+  const conTotales = visibles.some((c) => c.tipo === "moneda");
+  vaciar(tabla.querySelector("tfoot"), conTotales && filas.length
+    ? el("tr", {}, ...visibles.map((c, i) => {
+      if (c.tipo === "moneda") {
+        const suma = filas.reduce((acc, f) => acc + (Number(f[c.clave]) || 0), 0);
+        return el("td", { clase: "numero total", texto: formatoPesos(suma) });
+      }
+      return el("td", { texto: i === 0 ? "Total" : "" });
+    }))
+    : null);
+  const mas = document.getElementById("tablas-mas");
+  vaciar(mas, filas.length > tablaEstado.mostrar
+    ? el("div", { clase: "acciones" },
+      el("p", { clase: "texto-suave", texto: "Se muestran " + tablaEstado.mostrar + " de " + filas.length
+        + " filas. Excel exporta todas las filas filtradas." }),
+      el("button", { type: "button", clase: "secundario", texto: "Mostrar " + Math.min(TABLA_FILAS_POR_TANDA, filas.length - tablaEstado.mostrar) + " más",
+        onclick: () => { tablaEstado.mostrar += TABLA_FILAS_POR_TANDA; pintarCuerpoTabla(); } }))
+    : null);
+}
+
+function guardarVistaConNombre() {
+  const nombre = (prompt("Nombre para esta vista (columnas, orden y filtros):") || "").trim();
+  if (!nombre) return;
+  const guardadas = vistasGuardadas();
+  guardadas[nombre] = JSON.parse(JSON.stringify(tablaEstado.vista));
+  guardadoLocal("guardadas." + tablaEstado.nombre, guardadas);
+  pintarTablas();
+  mostrarAviso("Vista «" + nombre + "» guardada en esta PC.", "exito");
+}
+
+function borrarVistaGuardada() {
+  const elegida = document.getElementById("tablas-vista").value;
+  const guardadas = vistasGuardadas();
+  const nombre = elegida || (prompt("¿Qué vista borro? (" + Object.keys(guardadas).join(", ") + ")") || "").trim();
+  if (!nombre || !(nombre in guardadas)) return;
+  if (!confirm("¿Borrar la vista «" + nombre + "»?")) return;
+  delete guardadas[nombre];
+  guardadoLocal("guardadas." + tablaEstado.nombre, guardadas);
+  pintarTablas();
+  mostrarAviso("Vista «" + nombre + "» borrada.", "exito");
+}
+
+function describirFiltros() {
+  const { datos, vista } = tablaEstado;
+  const titulos = new Map(datos.columnas.map((c) => [c.clave, c.titulo]));
+  const partes = Object.entries(vista.filtros).map(([clave, filtro]) => (titulos.get(clave) || clave) + " " + filtro);
+  if (vista.buscar) partes.unshift("búsqueda «" + vista.buscar + "»");
+  if (estado.efector !== "Ambos") partes.unshift(estado.efector);
+  return partes.join("; ");
+}
+
+/** Descarga un .xlsx con las columnas visibles y TODAS las filas filtradas, en el orden de la pantalla.
+ * Se envía con un formulario (no con fetch) para que el navegador descargue el archivo. */
+function exportarTablaExcel() {
+  const { visibles, filas } = filasVisibles();
+  if (!visibles.length) { mostrarAviso("Elegí al menos una columna para exportar.", "aviso"); return; }
+  const pedido = {
+    nombre: tablaEstado.nombre, titulo: tablaEstado.datos.titulo, filtros: describirFiltros(),
+    columnas: visibles.map((c) => ({ titulo: c.titulo, tipo: c.tipo })),
+    filas: filas.map((fila) => visibles.map((c) => fila[c.clave] ?? null)),
+  };
+  const formulario = el("form", { method: "post", action: "/api/tablas/exportar.xlsx", hidden: true },
+    el("input", { type: "hidden", name: "datos", value: JSON.stringify(pedido) }));
+  document.body.append(formulario);
+  formulario.submit();
+  formulario.remove();
+  mostrarAviso("Exportando " + filas.length + " filas a Excel…", "exito");
+}
 
 // --- Arranque ---------------------------------------------------------------
 

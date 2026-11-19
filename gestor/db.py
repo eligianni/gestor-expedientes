@@ -443,6 +443,26 @@ def hacer_backup(ruta_base, carpeta, conservar=30, ahora=None):
     return destino
 
 
+CARPETA_DIARIOS = "diarios"
+
+
+def backup_diario(ruta_base, carpeta, conservar=90, ahora=None):
+    """Una copia por día en <carpeta>/diarios; si ya hay una de hoy no hace nada y devuelve None.
+
+    Va aparte de las copias de cada arranque para que esas (que rotan rápido) no se lleven las diarias.
+    """
+    ahora = ahora or datetime.now()
+    diarios = Path(carpeta) / CARPETA_DIARIOS
+    prefijo = "expedientes-%s-" % ahora.strftime("%Y%m%d")
+    if any(p.name.startswith(prefijo) for p in _backups(diarios)):
+        return None
+    return hacer_backup(ruta_base, diarios, conservar, ahora)
+
+
+def ultimo_backup_diario(carpeta):
+    return ultimo_backup(Path(carpeta) / CARPETA_DIARIOS)
+
+
 def ultimo_backup(carpeta):
     existentes = _backups(carpeta)
     return existentes[-1] if existentes else None
