@@ -1739,3 +1739,29 @@ def enviar_entrega(con, entrega_id, version, fecha):
                 "estado": "ENVIADO", "datos": contenido, "actualizado": db.ahora_utc(),
             })
     return obtener_entrega(con, entrega_id)
+
+
+# --- Pendientes (paso 25) ---------------------------------------------------
+
+def pendientes(con, hoy=None):
+    """Expedientes PENDIENTE con su demora (días desde la fecha de seguimiento, 0 si todavía no llegó), más demorados primero."""
+    hoy = _fecha_hoy(hoy)
+    filas = con.execute(
+        "SELECT e.id, e.tipo, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.motivo_pendiente, e.fecha_seguimiento "
+        "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.estado = 'PENDIENTE'"
+    )
+    resultado = []
+    for fila in filas:
+        demora = 0
+        if fila["fecha_seguimiento"]:
+            try:
+                demora = max(0, (hoy - util.fecha_desde_texto(fila["fecha_seguimiento"])).days)
+            except ValueError:
+                demora = 0
+        resultado.append({
+            "id": fila["id"], "tipo": fila["tipo"], "efector": fila["efector"],
+            "proveedor": fila["razon_social"] or "", "sap": fila["sap"], "oc": fila["oc"], "periodo": fila["periodo"],
+            "motivo": fila["motivo_pendiente"], "fecha_seguimiento": fila["fecha_seguimiento"], "dias_demora": demora,
+        })
+    resultado.sort(key=lambda f: (-f["dias_demora"], f["fecha_seguimiento"] or "", f["id"]))
+    return resultado

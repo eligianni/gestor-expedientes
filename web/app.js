@@ -112,6 +112,7 @@ const AL_MOSTRAR = {
   "pantalla-expedientes": cargarExpedientes,
   "pantalla-entregas": cargarEntregas,
   "pantalla-importar": cargarImportar,
+  "pantalla-configuracion": cargarConfiguracion,
 };
 
 function mostrarPantalla(id, enfocar) {
@@ -785,6 +786,7 @@ function mostrarLista() {
   document.getElementById("asistente").hidden = true;
   document.getElementById("expedientes-lista-bloque").hidden = false;
   estado.recargar = cargarExpedientes;
+  listarPendientes();
   listarExpedientes();
 }
 
@@ -1752,6 +1754,159 @@ async function enviarEntrega(entrega) {
   if (!enviada) return;
   mostrarAviso("Entrega " + enviada.efector + " " + enviada.numero + " enviada el " + enviada.fecha_envio + ".", "exito");
   await cargarEntregas();
+}
+
+// --- Pendientes (lista dentro de Expedientes) ----------------------------------
+
+async function listarPendientes() {
+  const contenedor = document.getElementById("expedientes-pendientes");
+  if (!contenedor) return;
+  const lista = await api("GET", "/api/pendientes");
+  if (!lista) { vaciar(contenedor); return; }
+  const visibles = lista.filter((p) => estado.efector === "Ambos" || p.efector === estado.efector);
+  if (!visibles.length) { vaciar(contenedor); return; }
+  const filas = visibles.map((p) => el("tr", { clase: p.dias_demora > 0 ? "fila-demorada" : null },
+    el("td", {}, el("button", { type: "button", clase: "secundario", texto: String(p.id),
+      "aria-label": "Abrir el expediente pendiente " + p.id, onclick: () => abrirExpediente(p.id, 7) })),
+    el("td", { texto: p.proveedor }),
+    el("td", { texto: p.oc || "—" }),
+    el("td", { texto: p.periodo || "—" }),
+    el("td", { texto: p.motivo }),
+    el("td", { texto: p.fecha_seguimiento || "—" }),
+    el("td", { clase: "numero", texto: p.dias_demora > 0 ? p.dias_demora + (p.dias_demora === 1 ? " día" : " días") : "en plazo" })));
+  vaciar(contenedor, el("div", { clase: "panel" },
+    el("h2", { clase: "titulo-chico", texto: "Pendientes (" + visibles.length + ")" }),
+    el("div", { clase: "tabla-desplazable" }, el("table", {},
+      el("thead", {}, el("tr", {}, ...["N°", "Proveedor", "OC", "Período", "Motivo", "Seguimiento", "Demora"].map((t) => el("th", { scope: "col", texto: t })))),
+      el("tbody", {}, ...filas)))));
+}
+
+// --- Configuración --------------------------------------------------------------
+
+// Parámetros compartidos editables: clave de la tabla config, ruta dentro del valor y tipo de dato.
+const CAMPOS_PARAMETROS = [
+  { id: "par-centros-hbi", etiqueta: "Centros SAP del HBI", clave: "efectores", ruta: ["HBI", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
+  { id: "par-centros-casph", etiqueta: "Centros SAP del CASPH", clave: "efectores", ruta: ["CASPH", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
+  { id: "par-partidas", etiqueta: "Partidas excluidas", clave: "partidas_excluidas", ruta: [], tipo: "lista", ayuda: "Las OC con estas partidas no se importan." },
+  { id: "par-excl-sap", etiqueta: "Proveedores excluidos (SAP)", clave: "exclusiones", ruta: ["sap"], tipo: "lista" },
+  { id: "par-excl-oc", etiqueta: "OC excluidas", clave: "exclusiones", ruta: ["oc"], tipo: "lista" },
+  { id: "par-gracia", etiqueta: "Días de gracia", clave: "dias_gracia", ruta: [], tipo: "entero", ayuda: "Días después del fin del período antes de marcarlo atrasado." },
+  { id: "par-aviso-oc", etiqueta: "Aviso de OC por vencer (días)", clave: "dias_aviso_vencimiento_oc", ruta: [], tipo: "entero" },
+  { id: "par-umbral", etiqueta: "Umbral de renglón por agotarse (%)", clave: "umbral_por_agotarse_pct", ruta: [], tipo: "entero" },
+  { id: "par-limite-sap", etiqueta: "Límite del Texto SAP (caracteres)", clave: "limite_texto_sap", ruta: [], tipo: "entero" },
+  { id: "par-email", etiqueta: "Email de la carátula", clave: "email_caratula", ruta: [], tipo: "texto" },
+  { id: "par-email-eventual", etiqueta: "Email de la carátula (pago eventual)", clave: "pago_eventual", ruta: ["email_caratula"], tipo: "texto" },
+];
+
+function leerRuta(valor, ruta) {
+  return ruta.reduce((actual, parte) => (actual && typeof actual === "object" ? actual[parte] : undefined), valor);
+}
+
+function escribirRuta(valor, ruta, nuevo) {
+  if (!ruta.length) return nuevo;
+  const copia = JSON.parse(JSON.stringify(valor ?? {}));
+  let actual = copia;
+  for (const parte of ruta.slice(0, -1)) {
+    if (!actual[parte] || typeof actual[parte] !== "object") actual[parte] = {};
+    actual = actual[parte];
+  }
+  actual[ruta[ruta.length - 1]] = nuevo;
+  return copia;
+}
+
+function valorParaCampo(campo, valor) {
+  if (campo.tipo === "lista") return (valor || []).join(", ");
+  return valor === undefined || valor === null ? "" : String(valor);
+}
+
+function valorDelCampo(campo) {
+  const texto = document.getElementById(campo.id).value.trim();
+  if (campo.tipo === "lista") return { valor: texto.split(",").map((v) => v.trim()).filter((v) => v) };
+  if (campo.tipo === "entero") {
+    if (!/^\d+$/.test(texto)) return { error: campo.etiqueta + ": escribí un número entero." };
+    return { valor: Number(texto) };
+  }
+  return { valor: texto };
+}
+
+const confEstado = { parametros: null, versiones: null };
+
+async function cargarConfiguracion() {
+  const contenedor = document.getElementById("configuracion-contenido");
+  estado.recargar = cargarConfiguracion;
+  cargando(contenedor);
+  const [local, datos, base] = [await api("GET", "/api/config-local"), await api("GET", "/api/parametros"), await api("GET", "/api/base/estado")];
+  if (!local || !datos || !base) { vaciar(contenedor); return; }
+  confEstado.parametros = datos.parametros;
+  confEstado.versiones = datos.versiones;
+  const pc = el("form", { clase: "panel formulario", novalidate: true, onsubmit: guardarConfigLocal },
+    el("h2", { clase: "titulo-chico", texto: "Esta PC" }),
+    campoFormulario("conf-base", "Ubicación de la base de datos", entrada(local.guardada.base_datos || "", { autocomplete: "off" }),
+      "Ruta del archivo .db (puede estar en una carpeta compartida). En uso ahora: " + local.en_uso.base_datos
+      + ". El cambio rige al volver a abrir el programa."),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar ubicación" })),
+    el("p", { clase: "texto-suave", texto: "Archivo de configuración: " + local.archivo }));
+  const copia = el("div", { clase: "panel" },
+    el("h2", { clase: "titulo-chico", texto: "Copias de seguridad y cierre" }),
+    el("p", { id: "conf-ultimo-backup", texto: base.ultimo_backup ? "Última copia: " + base.ultimo_backup : "Todavía no hay copias de seguridad." }),
+    el("div", { clase: "acciones" },
+      el("button", { type: "button", texto: "Copia de seguridad ahora", onclick: copiaManual }),
+      el("button", { type: "button", clase: "secundario", texto: "Cerrar programa", onclick: cerrarPrograma })));
+  const parametros = el("form", { clase: "panel formulario", novalidate: true, onsubmit: guardarParametros },
+    el("h2", { clase: "titulo-chico", texto: "Parámetros compartidos (valen para las dos PC)" }),
+    ...CAMPOS_PARAMETROS.map((campo) => campoFormulario(campo.id, campo.etiqueta,
+      entrada(valorParaCampo(campo, leerRuta(datos.parametros[campo.clave], campo.ruta)),
+        Object.assign({ autocomplete: "off" }, campo.tipo === "entero" ? { inputmode: "numeric", clase: "entrada-corta" } : {})),
+      campo.ayuda)),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar parámetros" })));
+  vaciar(contenedor, pc, copia, parametros);
+}
+
+async function guardarConfigLocal(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const resultado = await api("PUT", "/api/config-local", { base_datos: document.getElementById("conf-base").value.trim() });
+  if (resultado) mostrarAviso(resultado.mensaje, "exito");
+}
+
+async function guardarParametros(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const nuevos = {};
+  for (const campo of CAMPOS_PARAMETROS) {
+    const leido = valorDelCampo(campo);
+    if (leido.error) { mostrarAviso(leido.error, "error"); document.getElementById(campo.id).focus(); return; }
+    const base = campo.clave in nuevos ? nuevos[campo.clave] : confEstado.parametros[campo.clave];
+    nuevos[campo.clave] = escribirRuta(base, campo.ruta, leido.valor);
+  }
+  const cambiados = Object.keys(nuevos).filter((clave) => JSON.stringify(nuevos[clave]) !== JSON.stringify(confEstado.parametros[clave]));
+  if (!cambiados.length) { mostrarAviso("No hay cambios para guardar.", "aviso"); return; }
+  for (const clave of cambiados) {
+    if (!(clave in confEstado.versiones)) { mostrarAviso("El parámetro " + clave + " no existe en la base.", "error"); return; }
+    const datos = await api("PUT", "/api/parametros", { clave, valor: nuevos[clave], version: confEstado.versiones[clave] });
+    if (!datos) return;
+    confEstado.parametros = datos.parametros;
+    confEstado.versiones = datos.versiones;
+  }
+  mostrarAviso(cambiados.length === 1 ? "Parámetro guardado." : cambiados.length + " parámetros guardados.", "exito");
+}
+
+async function copiaManual() {
+  limpiarAvisos();
+  const datos = await api("POST", "/api/base/backup", {});
+  if (!datos) return;
+  document.getElementById("conf-ultimo-backup").textContent = "Última copia: " + datos.backup;
+  mostrarAviso("Copia de seguridad creada: " + datos.backup + ".", "exito");
+}
+
+async function cerrarPrograma() {
+  if (!window.confirm("¿Cerrar el programa? Para volver a usarlo, abrilo de nuevo con Iniciar.bat.")) return;
+  limpiarAvisos();
+  const datos = await api("POST", "/api/apagar", {});
+  if (!datos) return;
+  vaciar(document.querySelector("main"), el("section", {},
+    el("h1", { texto: "Programa cerrado" }),
+    el("p", { texto: "Ya podés cerrar esta pestaña. Para volver a usarlo, hacé doble clic en Iniciar.bat." })));
 }
 
 // --- Arranque ---------------------------------------------------------------

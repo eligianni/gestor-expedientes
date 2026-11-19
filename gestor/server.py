@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import sqlite3
+import threading
 import urllib.request
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -153,6 +154,57 @@ def base_restaurar(h, m, cuerpo):
     h.server.integridad = db.verificar_integridad(con)
     h.server.estado_db = "ok"
     return 200, _ok({"restaurado": ultimo.name})
+
+
+def base_backup(h, m, cuerpo):
+    cfg = h.server.cfg
+    destino = db.hacer_backup(config.ruta(cfg, "base_datos"), config.ruta(cfg, "carpeta_backups"),
+                              int(cfg.get("backups_a_conservar", 30)))
+    return 200, _ok({"backup": destino.name})
+
+
+CLAVES_CONFIG_LOCAL = ("base_datos", "carpeta_backups", "backups_a_conservar", "carpeta_salidas", "puerto_preferido",
+                       "puerto_maximo")
+
+
+def config_local_leer(h, m, cuerpo):
+    guardada = config.cargar_config()
+    en_uso = h.server.cfg
+    return 200, _ok({
+        "archivo": guardada["_ruta"],
+        "guardada": {clave: guardada.get(clave) for clave in CLAVES_CONFIG_LOCAL},
+        "en_uso": {"base_datos": str(config.ruta(en_uso, "base_datos")),
+                   "carpeta_backups": str(config.ruta(en_uso, "carpeta_backups"))},
+    })
+
+
+def config_local_guardar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    base = datos.get("base_datos")
+    if not isinstance(base, str) or not base.strip():
+        raise validacion("Indicá la ubicación de la base de datos (por ejemplo una carpeta compartida).")
+    base = base.strip()
+    if not base.lower().endswith(".db"):
+        raise validacion("La base de datos tiene que ser un archivo .db.")
+    cfg = config.cargar_config()
+    cfg["base_datos"] = base
+    config.guardar_config(cfg)
+    return 200, _ok({"base_datos": base, "mensaje": "Guardado. La nueva ubicación rige al volver a abrir el programa."})
+
+
+def apagar(h, m, cuerpo):
+    servidor = h.server
+
+    def detener():
+        servidor.shutdown()  # desde otro thread: el que atiende este pedido no puede llamarlo
+        servidor.server_close()
+
+    threading.Thread(target=detener, daemon=True).start()
+    return 200, _ok({"apagando": True})
+
+
+def pendientes(h, m, cuerpo):
+    return 200, _ok(negocio.pendientes(h.conexion(), hoy=_consulta(h).get("hoy") or None))
 
 
 def _datos_parametros(con):
@@ -401,6 +453,11 @@ RUTAS = [
     ("GET", re.compile(r"/api/salud"), salud),
     ("GET", re.compile(r"/api/base/estado"), base_estado),
     ("POST", re.compile(r"/api/base/restaurar"), base_restaurar),
+    ("POST", re.compile(r"/api/base/backup"), base_backup),
+    ("GET", re.compile(r"/api/config-local"), config_local_leer),
+    ("PUT", re.compile(r"/api/config-local"), config_local_guardar),
+    ("POST", re.compile(r"/api/apagar"), apagar),
+    ("GET", re.compile(r"/api/pendientes"), pendientes),
     ("GET", re.compile(r"/api/parametros"), parametros_leer),
     ("PUT", re.compile(r"/api/parametros"), parametros_guardar),
     ("POST", re.compile(r"/api/importar/vista-previa"), importar_vista_previa),
