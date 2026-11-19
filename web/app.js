@@ -107,6 +107,7 @@ async function api(metodo, ruta, cuerpo) {
 
 const AL_MOSTRAR = {
   "pantalla-inicio": cargarInicio,
+  "pantalla-calendario": cargarCalendario,
   "pantalla-oc": cargarOC,
   "pantalla-expedientes": cargarExpedientes,
   "pantalla-importar": cargarImportar,
@@ -1490,11 +1491,119 @@ function iniciarExpedientes() {
   }
 }
 
+// --- Calendario ---------------------------------------------------------------
+
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+// Los siete estados de una celda (leyenda-calendario): clase de color + letra + nombre, para no depender solo del color.
+const ESTADOS_CALENDARIO = [
+  ["validado", "V", "validado", "firmado, enviado, contabilizado o cerrado"],
+  ["en_curso", "C", "en curso", "borrador, controlado o en firma"],
+  ["pendiente_motivo", "M", "pendiente con motivo", "expediente en espera"],
+  ["pendiente_en_plazo", "P", "pendiente en plazo", "sin expediente, todavía dentro de los días de gracia"],
+  ["atrasado", "A", "atrasado", "sin expediente y pasaron los días de gracia"],
+  ["sin_iniciar", "·", "sin iniciar", "el período todavía no empezó"],
+  ["fuera", "-", "fuera de vigencia", "la OC no cubre ese mes"],
+];
+const NOMBRE_ESTADO_CAL = Object.fromEntries(ESTADOS_CALENDARIO.map(([clave, , nombre]) => [clave, nombre]));
+const MARCAS_CALENDARIO = [
+  ["vence_pronto", "!", "OC por vencer", "borde naranja en la fila"],
+  ["entrega_enviada", "●", "en entrega enviada", "el expediente salió en una entrega"],
+  ["centralizada_enviada", "◆", "centralizada enviada", "la centralizada del período ya se envió"],
+];
+
+function pintarLeyendaCalendario() {
+  const leyenda = document.getElementById("leyenda-calendario");
+  if (leyenda.childElementCount) return;
+  const item = (clase, letra, nombre, detalle) => el("li", {},
+    el("span", { clase: "cal-muestra " + clase, "aria-hidden": "true", texto: letra }),
+    el("span", { texto: letra + " — " + nombre + " (" + detalle + ")" }));
+  vaciar(leyenda,
+    el("h2", { clase: "titulo-chico", texto: "Referencias" }),
+    el("ul", { clase: "lista-leyenda" },
+      ...ESTADOS_CALENDARIO.map(([clave, letra, nombre, detalle]) => item("cal-" + clave, letra, nombre, detalle)),
+      ...MARCAS_CALENDARIO.map(([clave, letra, nombre, detalle]) => item("cal-marca-" + clave, letra, nombre, detalle))));
+}
+
+function cargarCalendario() {
+  const anio = document.getElementById("cal-anio");
+  if (!anio.value) anio.value = String(new Date().getFullYear());
+  pintarLeyendaCalendario();
+  return pedirCalendario();
+}
+
+async function pedirCalendario() {
+  const contenedor = document.getElementById("calendario-tabla");
+  cargando(contenedor);
+  const parametros = new URLSearchParams({ anio: document.getElementById("cal-anio").value.trim() });
+  if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
+  const tipo = document.getElementById("cal-tipo").value;
+  const sap = document.getElementById("cal-sap").value.trim();
+  if (tipo) parametros.set("tipo", tipo);
+  if (sap) parametros.set("sap", sap);
+  const datos = await api("GET", "/api/calendario?" + parametros.toString());
+  if (!datos) { vaciar(contenedor); return; }
+  if (!datos.filas.length) {
+    vaciar(contenedor, el("p", { clase: "texto-suave", texto: "No hay OC vigentes en " + datos.anio + " con esos filtros." }));
+    return;
+  }
+  const encabezado = el("tr", {}, el("th", { scope: "col", texto: "OC / proveedor" }),
+    ...MESES.map((mes) => el("th", { scope: "col", clase: "cal-mes", title: mes + " " + datos.anio, texto: mes.slice(0, 3) })));
+  const filas = datos.filas.map((fila) => el("tr", { clase: fila.vence_pronto ? "cal-vence_pronto" : null },
+    el("th", { scope: "row", clase: "cal-oc" },
+      el("span", { clase: "numero", texto: fila.oc }),
+      fila.vence_pronto ? el("span", { clase: "cal-aviso-vence", texto: " ! vence el " + fila.vig_hasta }) : null,
+      el("br"),
+      el("span", { clase: "texto-suave", texto: fila.razon_social + (fila.objeto ? " — " + fila.objeto : "") })),
+    ...fila.celdas.map((celda, i) => celdaCalendario(fila, celda, i, datos.anio))));
+  vaciar(contenedor, el("div", { clase: "tabla-desplazable" },
+    el("table", { clase: "calendario" }, el("thead", {}, encabezado), el("tbody", {}, ...filas))));
+}
+
+function celdaCalendario(fila, celda, indice, anio) {
+  const marcas = (celda.entrega_enviada ? "●" : "") + (celda.centralizada_enviada ? "◆" : "");
+  const etiqueta = MESES[indice] + " " + anio + ": " + NOMBRE_ESTADO_CAL[celda.estado]
+    + (celda.entrega_enviada ? ", en entrega enviada" : "") + (celda.centralizada_enviada ? ", centralizada enviada" : "")
+    + " — OC " + fila.oc;
+  const td = el("td", { clase: "cal-celda cal-" + celda.estado, "aria-label": etiqueta, title: etiqueta },
+    el("span", { "aria-hidden": "true", texto: celda.letra + (marcas ? " " + marcas : "") }));
+  if (celda.estado === "fuera") return td;
+  td.tabIndex = 0;
+  td.setAttribute("role", "button");
+  const abrir = () => abrirDesdeCalendario(fila, celda);
+  td.addEventListener("click", abrir);
+  td.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); abrir(); } });
+  return td;
+}
+
+/** Clic o Enter en una celda: abre su expediente o crea uno nuevo con la OC y el período de la celda. */
+async function abrirDesdeCalendario(fila, celda) {
+  limpiarAvisos();
+  let id = celda.expediente_id;
+  if (!id) {
+    estado.recargar = pedirCalendario;
+    const exp = await api("POST", "/api/expedientes", {
+      tipo: "COMUN", oc: fila.oc, periodo: celda.periodo, periodo_desde: celda.desde, periodo_hasta: celda.hasta, periodo_manual: 1,
+    });
+    if (!exp) return;
+    id = exp.id;
+  }
+  expEstado.exp = { id };
+  expEstado.paso = celda.expediente_id ? 7 : 2;
+  mostrarPantalla("pantalla-expedientes", true);
+  if (!celda.expediente_id) mostrarAviso("Expediente " + id + " creado para la OC " + fila.oc + ", período " + celda.periodo + ".", "exito");
+}
+
+function iniciarCalendario() {
+  document.getElementById("calendario-filtros").addEventListener("submit", (e) => { e.preventDefault(); limpiarAvisos(); pedirCalendario(); });
+}
+
 // --- Arranque ---------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
   iniciarEfector();
   iniciarImportar();
   iniciarExpedientes();
+  iniciarCalendario();
   iniciarNavegacion();
 });

@@ -233,3 +233,30 @@ a.boton.secundario { background: var(--superficie); color: var(--primario); }
 a.boton.secundario:hover { background: var(--fondo); }
 input[aria-invalid="true"] { border-color: var(--error); }
 @media (prefers-reduced-motion: reduce) { a.boton { transition: none; } }
+
+/* Calendario (paso 22): cada estado lleva color y letra; las marcas, borde o símbolo. */
+.calendario { width: auto; }
+.calendario .cal-mes { text-align: center; min-width: 48px; }
+.calendario .cal-oc { min-width: 220px; font-weight: 400; background: var(--superficie); }
+.cal-celda { text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; border: 1px solid var(--borde); cursor: pointer;
+  transition: background-color 120ms ease-out; }
+.cal-celda:focus-visible { outline: 3px solid var(--foco); outline-offset: 2px; }
+.cal-fuera { background: var(--gris-fuera); color: var(--texto); cursor: default; }
+.cal-validado { background: var(--exito); color: var(--primario-texto); }
+.cal-en_curso { background: var(--info); color: var(--primario-texto); }
+.cal-pendiente_motivo { background: var(--violeta); color: var(--primario-texto); }
+.cal-pendiente_en_plazo { background: var(--pendiente-plazo); color: var(--texto); }
+.cal-atrasado { background: var(--error); color: var(--primario-texto); }
+.cal-sin_iniciar { background: var(--superficie); color: var(--texto); }
+.cal-vence_pronto > th, .cal-vence_pronto > td { border-top: 2px solid var(--naranja); border-bottom: 2px solid var(--naranja); }
+.cal-vence_pronto > th { border-left: 4px solid var(--naranja); }
+.cal-aviso-vence { color: var(--naranja); font-weight: 600; }
+.leyenda { margin-bottom: 16px; }
+.titulo-chico { font-size: 18px; margin: 0 0 8px; }
+.lista-leyenda { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; padding: 0; list-style: none; }
+.lista-leyenda li { display: flex; align-items: center; gap: 8px; }
+.cal-muestra { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  border: 1px solid var(--borde); border-radius: 4px; font-weight: 600; }
+.cal-marca-vence_pronto { border: 2px solid var(--naranja); color: var(--naranja); background: var(--superficie); }
+.cal-marca-entrega_enviada, .cal-marca-centralizada_enviada { background: var(--superficie); color: var(--texto); }
+@media (prefers-reduced-motion: reduce) { .cal-celda { transition: none; } }

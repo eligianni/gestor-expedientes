@@ -244,6 +244,15 @@ def renglon_agregar(h, m, cuerpo):
     return 200, _ok(negocio.agregar_renglon(h.conexion(), m.group("numero"), leer_json(h, cuerpo)))
 
 
+def calendario(h, m, cuerpo):
+    q = _consulta(h)
+    efector = q.get("efector") or None
+    return 200, _ok(negocio.calendario(
+        h.conexion(), q.get("anio") or "", efector=None if efector == "Ambos" else efector,
+        tipo=q.get("tipo") or None, sap=q.get("sap") or None, hoy=q.get("hoy") or None,
+    ))
+
+
 def expedientes_listar(h, m, cuerpo):
     q = _consulta(h)
     filtros = {clave: q.get(clave) or None for clave in ("estado", "tipo", "periodo", "sap", "entrega", "efector")}
@@ -355,6 +364,7 @@ RUTAS = [
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)/consumo"), oc_consumo),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)"), renglon_editar),
+    ("GET", re.compile(r"/api/calendario"), calendario),
     ("GET", re.compile(r"/api/expedientes"), expedientes_listar),
     ("POST", re.compile(r"/api/expedientes"), expediente_crear),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)"), expediente_obtener),

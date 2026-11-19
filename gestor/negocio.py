@@ -6,6 +6,7 @@ import copy
 import getpass
 import json
 import re
+from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from gestor import controles, db, textos, util
@@ -1319,3 +1320,113 @@ def guardar_gde(con, id_expediente, version, gde):
             "datos": contenido, "actualizado": db.ahora_utc(),
         })
     return obtener_expediente(con, id_expediente)
+
+
+# --- Calendario (paso 22) ---------------------------------------------------
+
+ESTADOS_CALENDARIO = {
+    "fuera": "-", "validado": "V", "en_curso": "C", "pendiente_motivo": "M",
+    "pendiente_en_plazo": "P", "atrasado": "A", "sin_iniciar": "·",
+}
+_ESTADO_POR_EXPEDIENTE = {
+    "FIRMADO": "validado", "ENVIADO": "validado", "CONTABILIZADO": "validado", "CERRADO": "validado",
+    "BORRADOR": "en_curso", "CONTROLADO": "en_curso", "EN_FIRMA": "en_curso",
+    "PENDIENTE": "pendiente_motivo",
+}
+_PRIORIDAD_CALENDARIO = ("validado", "en_curso", "pendiente_motivo")
+
+
+def _fecha_hoy(hoy):
+    if hoy in (None, ""):
+        return datetime.now().date()
+    try:
+        return util.fecha_desde_texto(hoy)
+    except ValueError:
+        raise ErrorValidacion('La fecha "hoy" no es válida (se espera AAAA-MM-DD).') from None
+
+
+def _expedientes_por_celda(con, anio):
+    """{(oc, período): [filas]} de los expedientes no anulados del año, con el estado de su entrega."""
+    filas = con.execute(
+        "SELECT e.id, e.oc, e.periodo, e.estado, en.estado AS estado_entrega FROM expediente e "
+        "LEFT JOIN entrega en ON en.id = e.entrega_id "
+        "WHERE e.oc IS NOT NULL AND e.estado <> 'ANULADO' AND e.periodo LIKE ? ORDER BY e.id",
+        ("%04d-%%" % anio,),
+    )
+    celdas = {}
+    for fila in filas:
+        celdas.setdefault((fila["oc"], fila["periodo"]), []).append(dict(fila))
+    return celdas
+
+
+def _celda_calendario(periodo, vig_desde, vig_fin, expedientes, hoy, dias_gracia):
+    celda = {"periodo": periodo.periodo, "desde": util.iso(periodo.desde), "hasta": util.iso(periodo.hasta),
+             "expediente_id": None, "entrega_enviada": False, "centralizada_enviada": False}
+    por_estado = {}
+    for exp in expedientes:
+        por_estado.setdefault(_ESTADO_POR_EXPEDIENTE.get(exp["estado"]), exp)
+    celda["entrega_enviada"] = any(e["estado_entrega"] == "ENVIADA" for e in expedientes)
+    elegido = next((por_estado[e] for e in _PRIORIDAD_CALENDARIO if e in por_estado), None)
+    if periodo.hasta < vig_desde or periodo.desde > vig_fin:
+        estado = "fuera"
+    elif elegido is not None:
+        estado = _ESTADO_POR_EXPEDIENTE[elegido["estado"]]
+    elif hoy < periodo.desde:
+        estado = "sin_iniciar"
+    elif hoy <= periodo.hasta + timedelta(days=dias_gracia):
+        estado = "pendiente_en_plazo"
+    else:
+        estado = "atrasado"
+    if elegido is not None:
+        celda["expediente_id"] = elegido["id"]
+    elif expedientes:
+        celda["expediente_id"] = expedientes[0]["id"]
+    celda.update(estado=estado, letra=ESTADOS_CALENDARIO[estado])
+    return celda
+
+
+def calendario(con, anio, efector=None, tipo=None, sap=None, hoy=None):
+    """Una fila por OC no excluida con vigencia y 12 celdas (una por mes) con estado, letra y marcas."""
+    try:
+        anio = int(anio)
+    except (TypeError, ValueError):
+        raise ErrorValidacion("El año del calendario no es válido.") from None
+    if not 2000 <= anio <= 2100:
+        raise ErrorValidacion("El año del calendario no es válido.")
+    hoy = _fecha_hoy(hoy)
+    parametros = db.leer_parametros(con)
+    dias_gracia = int(parametros.get("dias_gracia", 10))
+    dias_aviso = int(parametros.get("dias_aviso_vencimiento_oc", 60))
+    sql = ("SELECT oc.*, p.razon_social FROM oc JOIN proveedor p ON p.sap = oc.sap "
+           "WHERE oc.excluida = 0 AND oc.vig_desde IS NOT NULL")
+    parametros_sql = []
+    for columna, valor, validos in (("efector", efector, EFECTORES), ("tipo", tipo, TIPOS_OC), ("sap", sap, None)):
+        if valor and (validos is None or valor in validos):
+            sql += " AND oc.%s = ?" % columna
+            parametros_sql.append(str(valor))
+    expedientes = _expedientes_por_celda(con, anio)
+    filas = []
+    for oc in con.execute(sql + " ORDER BY p.razon_social, oc.numero", parametros_sql):
+        oc = dict(oc)
+        fin = _fin_vigencia(oc)
+        if not fin:
+            continue
+        try:
+            vig_desde, vig_fin = util.fecha_desde_texto(oc["vig_desde"]), util.fecha_desde_texto(fin)
+        except ValueError:
+            continue
+        dia = int(oc.get("dia_inicio_periodo") or 1)
+        celdas = [
+            _celda_calendario(limites_de_periodo("%04d-%02d" % (anio, mes), dia), vig_desde, vig_fin,
+                              expedientes.get((oc["numero"], "%04d-%02d" % (anio, mes)), []), hoy, dias_gracia)
+            for mes in range(1, 13)
+        ]
+        if all(c["estado"] == "fuera" for c in celdas):
+            continue
+        filas.append({
+            "oc": oc["numero"], "efector": oc["efector"], "sap": oc["sap"], "razon_social": oc["razon_social"],
+            "objeto": oc["objeto"], "tipo": oc["tipo"], "vig_desde": oc["vig_desde"], "vig_hasta": fin,
+            "vence_pronto": 0 <= (vig_fin - hoy).days <= dias_aviso,
+            "celdas": celdas,
+        })
+    return {"anio": anio, "hoy": util.iso(hoy), "estados": ESTADOS_CALENDARIO, "filas": filas}

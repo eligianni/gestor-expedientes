@@ -45,7 +45,28 @@
 
       <section id="pantalla-calendario" aria-labelledby="titulo-calendario" hidden>
         <h1 id="titulo-calendario">Calendario</h1>
-        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+        <form id="calendario-filtros" class="panel formulario filtros" novalidate>
+          <div class="campo">
+            <label for="cal-anio">Año</label>
+            <input id="cal-anio" type="number" min="2000" max="2100" class="entrada-corta" inputmode="numeric">
+          </div>
+          <div class="campo">
+            <label for="cal-tipo">Tipo de OC</label>
+            <select id="cal-tipo">
+              <option value="">Todos</option>
+              <option value="SERVICIO">Servicio</option>
+              <option value="BIEN">Bien</option>
+              <option value="PROVISION">Provisión</option>
+            </select>
+          </div>
+          <div class="campo">
+            <label for="cal-sap">SAP del proveedor</label>
+            <input id="cal-sap" type="text" inputmode="numeric" autocomplete="off">
+          </div>
+          <div class="acciones"><button type="submit">Ver calendario</button></div>
+        </form>
+        <div id="leyenda-calendario" class="panel leyenda" aria-label="Referencias del calendario"></div>
+        <div id="calendario-tabla" class="panel"></div>
       </section>
 
       <section id="pantalla-oc" aria-labelledby="titulo-oc" hidden>
