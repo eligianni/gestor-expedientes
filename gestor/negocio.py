@@ -950,9 +950,11 @@ def contexto_controles(con, id_expediente):
     otros_proveedor = []
     if expediente.get("sap"):
         otros_proveedor = [
-            dict(f) for f in con.execute(
-                "SELECT id, estado, periodo, factura FROM expediente WHERE sap = ? AND id <> ? AND estado <> 'ANULADO' "
-                "AND factura <> '' ORDER BY id", (expediente["sap"], expediente["id"]),
+            {"id": f["id"], "tipo": f["tipo"], "estado": f["estado"], "periodo": f["periodo"], "factura": f["factura"],
+             "fecha_factura": (_datos_de(dict(f)).get("factura") or {}).get("fecha") or ""}
+            for f in con.execute(
+                "SELECT id, tipo, estado, periodo, factura, datos FROM expediente WHERE sap = ? AND id <> ? "
+                "AND estado <> 'ANULADO' AND factura <> '' ORDER BY id", (expediente["sap"], expediente["id"]),
             )
         ]
     return {
@@ -1065,13 +1067,28 @@ def contexto_textos(con, id_expediente):
         "importe_renglon_correctivo": _importe_renglon_correctivo(con, oc["numero"]) if oc else None,
         "leyenda_cv": (oc["leyenda_cv"] or "").strip() if oc else "",
         "doc_requerida_central": _lista_json(oc["doc_requerida_central"]) if oc else [],
+        "fecha_factura": factura.get("fecha") or "",
+        "eventual": _eventual_para_textos(con, exp, oc, remitos) if exp["tipo"] == "EVENTUAL" else {},
     }
 
 
 def textos_del_expediente(con, id_expediente):
     """Carátula y referencias GDE (los pasos 17 y 19 agregan más claves)."""
     ctx = contexto_textos(con, id_expediente)
-    resultado = {"caratula": textos.caratula(ctx), "referencias": textos.referencias(ctx)}
+    if ctx["tipo_expediente"] == "EVENTUAL":
+        # el eventual puede no tener OC ni remitos: carátula propia y referencias opcionales
+        resultado = {"caratula": textos.caratula_eventual(ctx)}
+        try:
+            resultado["referencias"] = textos.referencias(ctx)
+        except textos.TextoIncompleto as error:
+            resultado["referencias"] = []
+            resultado["referencias_error"] = str(error)
+        try:
+            resultado["solicitud_pago_eventual"] = textos.solicitud_pago_eventual(ctx)
+        except textos.TextoIncompleto as error:
+            resultado["solicitud_pago_eventual_error"] = str(error)
+    else:
+        resultado = {"caratula": textos.caratula(ctx), "referencias": textos.referencias(ctx)}
     try:
         resultado["autorizacion"] = textos.autorizacion(ctx)
     except textos.TextoIncompleto as error:
@@ -1217,12 +1234,21 @@ TRANSICIONES_CORRECTIVO = {
     "DEVUELTO": ["PARA_FACTURAR"],
     "PARA_FACTURAR": ["CONTROLADO"],
 }
-ESTADO_INICIAL = {"CORRECTIVO": "RECIBIDO_MANTENIMIENTO"}
+# Pago eventual: flujo propio, nace en ARMADO (la OC puede estar vencida o faltar).
+TRANSICIONES_EVENTUAL = {
+    "ARMADO": ["EN_DTO_ECONOMICO_CONTABLE"],
+    "EN_DTO_ECONOMICO_CONTABLE": ["DEVUELTO"],
+    "DEVUELTO": ["CONTABILIZADO"],
+    "CONTABILIZADO": ["FINALIZADO"],
+}
+ESTADO_INICIAL = {"CORRECTIVO": "RECIBIDO_MANTENIMIENTO", "EVENTUAL": "ARMADO"}
 ESTADOS_FINALES = ("CERRADO", "ANULADO", "FINALIZADO")
 
 
 def _transiciones(tipo):
-    """Flujo de estados del tipo de expediente (el pago eventual agrega el suyo en el paso 29)."""
+    """Flujo de estados del tipo de expediente."""
+    if tipo == "EVENTUAL":
+        return TRANSICIONES_EVENTUAL
     if tipo == "CORRECTIVO":
         flujo = dict(TRANSICIONES_COMUN)
         flujo["CONTROLADO"] = ["EN_FIRMA", "PARA_FACTURAR"]
@@ -1235,7 +1261,7 @@ def _estados_de(*flujos):
     return {e for flujo in flujos for origen, destinos in flujo.items() for e in [origen] + list(destinos)}
 
 
-ESTADOS_CONOCIDOS = tuple(sorted(_estados_de(TRANSICIONES_COMUN, TRANSICIONES_CORRECTIVO) | {"PENDIENTE", "ANULADO"}))
+ESTADOS_CONOCIDOS = tuple(sorted(_estados_de(TRANSICIONES_COMUN, TRANSICIONES_CORRECTIVO, TRANSICIONES_EVENTUAL) | {"PENDIENTE", "ANULADO"}))
 
 
 def _no_cumple_controlado(con, id_expediente):
@@ -1372,6 +1398,10 @@ _ESTADO_POR_EXPEDIENTE = {
     "FIRMADO": "validado", "ENVIADO": "validado", "CONTABILIZADO": "validado", "CERRADO": "validado",
     "BORRADOR": "en_curso", "CONTROLADO": "en_curso", "EN_FIRMA": "en_curso",
     "PENDIENTE": "pendiente_motivo",
+    # correctivo y pago eventual
+    "RECIBIDO_MANTENIMIENTO": "en_curso", "INFORME_ECONOMICO": "en_curso", "DEVUELTO": "en_curso",
+    "PARA_FACTURAR": "en_curso", "ARMADO": "en_curso", "EN_DTO_ECONOMICO_CONTABLE": "en_curso",
+    "FINALIZADO": "validado",
 }
 _PRIORIDAD_CALENDARIO = ("validado", "en_curso", "pendiente_motivo")
 
@@ -1982,3 +2012,65 @@ def informe_mensual_correctivos(con, mes):
             "monto": correctivo.get("monto_convalidado"),
         })
     return resultado
+
+
+# --- Pago eventual (paso 29) ------------------------------------------------------
+
+CLAVES_EVENTUAL = (
+    "tipo_factura", "establecimiento", "establecimiento_detallado", "tipo_servicio", "docfi", "orden_docfi",
+    "remito", "documento_remito", "orden_remito", "providencia_informe", "orden_informe", "cargo_responsable",
+    "responsable", "cuit", "orden_compra", "vencimiento_oc", "expediente_anterior", "providencia_prorroga",
+    "orden_prorroga", "gerencia", "nota_autorizacion", "orden_autorizacion",
+)
+
+
+def _validar_eventual(eventual):
+    if not isinstance(eventual, dict):
+        raise ErrorValidacion("Faltan los datos de la solicitud de pago eventual.")
+    desconocidas = [c for c in eventual if c not in CLAVES_EVENTUAL]
+    if desconocidas:
+        raise ErrorValidacion("Campos desconocidos: %s." % ", ".join(sorted(desconocidas)))
+    limpio = {}
+    for clave in CLAVES_EVENTUAL:
+        valor = eventual.get(clave)
+        if isinstance(valor, int) and not isinstance(valor, bool):
+            valor = str(valor)
+        limpio[clave] = _texto(valor or "", clave).strip()
+    limpio["tipo_factura"] = limpio["tipo_factura"].upper()
+    if limpio["tipo_factura"] not in ("", "B", "C"):
+        raise ErrorValidacion('El tipo de factura del pago eventual debe ser "B" o "C".')
+    if limpio["orden_compra"]:
+        limpio["orden_compra"] = util.sap_sin_ceros(limpio["orden_compra"])
+    limpio["vencimiento_oc"] = _fecha(limpio["vencimiento_oc"], "de vencimiento de la OC") or ""
+    return limpio
+
+
+def guardar_eventual(con, id_expediente, version, eventual):
+    """Guarda datos.eventual (campos de la solicitud de pago eventual) de un expediente EVENTUAL."""
+    version = _version(version)
+    nuevos = _validar_eventual(eventual)
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        if actual["tipo"] != "EVENTUAL":
+            raise ErrorNegocio("El expediente %d no es un pago eventual." % actual["id"])
+        contenido = _datos_de(actual)
+        contenido["eventual"] = nuevos
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version,
+                                  {"datos": contenido, "actualizado": db.ahora_utc()})
+    return obtener_expediente(con, id_expediente)
+
+
+def _eventual_para_textos(con, exp, oc, remitos):
+    """datos.eventual con valores por defecto tomados de la OC, el proveedor y los remitos cuando falta un campo."""
+    proveedor = db.leer_fila(con, "proveedor", {"sap": exp["sap"]}) if exp.get("sap") else None
+    primero = next((r["numero"] for r in remitos if not r.get("es_equipo_comodato")), "")
+    valores = {
+        "remito": primero,
+        "cuit": proveedor["cuit"] if proveedor else "",
+        "orden_compra": exp.get("oc") or "",
+        "vencimiento_oc": (oc["vig_hasta"] or "") if oc else "",
+    }
+    guardado = exp["datos"].get("eventual") or {}
+    valores.update({k: v for k, v in guardado.items() if v not in (None, "")})
+    return valores

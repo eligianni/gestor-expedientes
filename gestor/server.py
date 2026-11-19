@@ -429,6 +429,11 @@ def correctivos_informe_mensual(h, m, cuerpo):
     return 200, _ok(negocio.informe_mensual_correctivos(h.conexion(), _consulta(h).get("mes") or ""))
 
 
+def expediente_eventual(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.guardar_eventual(h.conexion(), m.group("id"), datos.get("version"), datos.get("eventual")))
+
+
 def expediente_correctivo(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.guardar_correctivo(h.conexion(), m.group("id"), datos.get("version"), datos.get("correctivo")))
@@ -516,6 +521,7 @@ RUTAS = [
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/centralizada"), expediente_centralizada),
     ("GET", re.compile(r"/api/centralizadas"), centralizadas),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/correctivo"), expediente_correctivo),
+    ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/eventual"), expediente_eventual),
     ("GET", re.compile(r"/api/correctivos/informe-mensual"), correctivos_informe_mensual),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
     ("GET", re.compile(r"/api/exportes/(?P<nombre>[a-z0-9-]+)\.(?P<formato>[a-z]+)"), exporte),

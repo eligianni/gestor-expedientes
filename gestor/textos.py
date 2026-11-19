@@ -227,6 +227,118 @@ def informe_economico(ctx):
     return "\n".join(lineas)
 
 
+# --- Pago eventual (paso 29) ---------------------------------------------------
+
+def caratula_eventual(ctx):
+    """`<SIGLA> - PAGO EVENTUAL - <razon> - FC N° <factura>`."""
+    _requerir(ctx, "razon", "factura")
+    sigla = ctx.get("sigla") or ctx.get("efector") or "HBI"
+    return "%s - PAGO EVENTUAL - %s - FC N° %s" % (sigla, ctx["razon"], ctx["factura"])
+
+
+_REFERENCIA_EVENTUAL = ("SOLICITUD PAGO EVENTUAL - [N° EXPEDIENTE PRINCIPAL] - [ESTABLECIMIENTO/HOSPITAL] - "
+                        "[NOMBRE DEL PROVEEDOR]")
+
+# Párrafos literales de §5 "Solicitud de pago eventual"; el segundo elemento dice de qué dato sale cada [N° DE ORDEN].
+_PARRAFOS_EVENTUAL = (
+    ('Por la presente se solicita el pago eventual de la Factura tipo "[B/C]" N° [NÚMERO DE FACTURA], de fecha '
+     "[FECHA DE EMISIÓN DE FACTURA], por la suma total de $ [MONTO EN NÚMEROS].- (PESOS [MONTO EN LETRAS] CON [XX]/100 "
+     "CENTAVOS), correspondiente al período del [FECHA INICIO] al [FECHA FIN], del proveedor [RAZÓN SOCIAL DEL PROVEEDOR] "
+     "(SAP [N SAP]), vinculada al expediente [N° EXPEDIENTE], a través del [N° DOCUMENTO FINANCIERO/DOCFI], vinculado en "
+     "orden [N° DE ORDEN].", "orden_docfi"),
+    ("La citada factura corresponde al [TIPO DE SERVICIO, EJ: MANTENIMIENTO PREVENTIVO DE LOS ASCENSORES] pertenecientes "
+     "al [NOMBRE DEL ESTABLECIMIENTO DETALLADO], tal como se describe en el remito N° [NÚMERO DE REMITO] perteneciente al "
+     "periodo [FECHA INICIO] al [FECHA FIN] tal cual lo describe la factura, vinculado mediante [N° DOCUMENTO REMITO] en "
+     "orden [N° DE ORDEN].", "orden_remito"),
+    ("Las tareas específicas de [TIPO DE SERVICIO] se encuentran detalladas en el informe técnico brindado por [NOMBRE DEL "
+     "PROVEEDOR], el cual se encuentra embebido en la [N° PROVIDENCIA INFORME], orden [N° DE ORDEN]. La mencionada "
+     "providencia fue confeccionada y firmada por el [CARGO DEL RESPONSABLE TÉCNICO], [NOMBRE Y APELLIDO DEL RESPONSABLE], "
+     "quien da conformidad e informa sobre el correcto funcionamiento de los equipos al día de la fecha.", "orden_informe"),
+    ("De la consulta efectuada en el CUP - Padrón de Prestadores y Proveedores del Instituto, se verifica que la firma "
+     "[RAZÓN SOCIAL DEL PROVEEDOR] (SAP [CÓDIGO SAP]), titular de la CUIT N° [NÚMERO DE CUIT], no registra suspensión ni "
+     "inhabilitación para contratar, resultando su estado válido.", None),
+    ("La Orden de Compra N° [NÚMERO DE ORDEN DE COMPRA] se encontraba vencida el día [FECHA DE VENCIMIENTO], habiendo sido "
+     "tramitada por el expediente [N° EXPEDIENTE ANTERIOR]. No obstante, el proveedor siguió prestando el servicio, "
+     "manteniéndose el precio y las bases y condiciones de la contratación. Asimismo, se solicitó la prórroga de dicha "
+     "Orden de Compra mediante la [N° PROVIDENCIA PRÓRROGA], en orden [N° DE ORDEN] del citado expediente.",
+     "orden_prorroga"),
+    ("Asimismo, se deja constancia de que la presente tramitación cuenta con la correspondiente autorización de la "
+     "[NOMBRE DE LA GERENCIA COMPETENTE], conforme a lo establecido en la [N° NOTA AUTORIZACIÓN], orden [N° DE ORDEN], "
+     "mediante la cual se habilita la continuidad del servicio bajo la modalidad de pago eventual, en función de las "
+     "razones expuestas en las actuaciones.", "orden_autorizacion"),
+    ("Finalmente, se deja constancia de que este Efector no ha cursado durante el corriente año ningún pedido de pago "
+     "eventual a la firma mencionada.", None),
+    ("Con el Visto Bueno de esta Dirección, y atento a la urgencia y necesidad del caso, por no encontrarse la prestación "
+     "bajo marco contractual, se giran las presentes actuaciones para su consideración y prosecución del trámite.", None),
+)
+
+# [CAMPO] → clave del dato (en ctx["eventual"] o en ctx).
+_CAMPOS_EVENTUAL = {
+    "N° EXPEDIENTE PRINCIPAL": "expediente",
+    "N° EXPEDIENTE": "expediente",
+    "ESTABLECIMIENTO/HOSPITAL": "establecimiento",
+    "NOMBRE DEL PROVEEDOR": "razon",
+    "RAZÓN SOCIAL DEL PROVEEDOR": "razon",
+    "N SAP": "sap",
+    "CÓDIGO SAP": "sap",
+    "B/C": "tipo_factura",
+    "NÚMERO DE FACTURA": "factura",
+    "FECHA DE EMISIÓN DE FACTURA": "fecha_factura",
+    "FECHA INICIO": "periodo_desde",
+    "FECHA FIN": "periodo_hasta",
+    "N° DOCUMENTO FINANCIERO/DOCFI": "docfi",
+    "TIPO DE SERVICIO, EJ: MANTENIMIENTO PREVENTIVO DE LOS ASCENSORES": "tipo_servicio",
+    "TIPO DE SERVICIO": "tipo_servicio",
+    "NOMBRE DEL ESTABLECIMIENTO DETALLADO": "establecimiento_detallado",
+    "NÚMERO DE REMITO": "remito",
+    "N° DOCUMENTO REMITO": "documento_remito",
+    "N° PROVIDENCIA INFORME": "providencia_informe",
+    "CARGO DEL RESPONSABLE TÉCNICO": "cargo_responsable",
+    "NOMBRE Y APELLIDO DEL RESPONSABLE": "responsable",
+    "NÚMERO DE CUIT": "cuit",
+    "NÚMERO DE ORDEN DE COMPRA": "orden_compra",
+    "FECHA DE VENCIMIENTO": "vencimiento_oc",
+    "N° EXPEDIENTE ANTERIOR": "expediente_anterior",
+    "N° PROVIDENCIA PRÓRROGA": "providencia_prorroga",
+    "NOMBRE DE LA GERENCIA COMPETENTE": "gerencia",
+    "N° NOTA AUTORIZACIÓN": "nota_autorizacion",
+}
+_FECHAS_EVENTUAL = ("fecha_factura", "periodo_desde", "periodo_hasta", "vencimiento_oc")
+_RE_CAMPO = re.compile(r"\[([^\]]+)\]")
+
+
+def _completar_eventual(plantilla, datos, clave_orden):
+    def reemplazo(m):
+        campo = m.group(1)
+        if campo in ("MONTO EN NÚMEROS", "MONTO EN LETRAS", "XX"):
+            centavos = datos.get("centavos")
+            if centavos in (None, ""):
+                raise TextoIncompleto("Falta %s en la solicitud de pago eventual." % campo)
+            pesos, cc = divmod(int(centavos), 100)
+            if campo == "MONTO EN NÚMEROS":
+                return util.formato_pesos(centavos)
+            return letras.numero_a_letras(pesos) if campo == "MONTO EN LETRAS" else "%02d" % cc
+        clave = clave_orden if campo == "N° DE ORDEN" else _CAMPOS_EVENTUAL[campo]
+        valor = datos.get(clave) if clave else None
+        valor = "" if valor is None else str(valor).strip()
+        if not valor:
+            raise TextoIncompleto("Falta %s en la solicitud de pago eventual." % campo)
+        if clave in _FECHAS_EVENTUAL:
+            valor = util.ddmmaaaa(util.fecha_desde_texto(valor))
+        return valor
+    return _RE_CAMPO.sub(reemplazo, plantilla)
+
+
+def solicitud_pago_eventual(ctx):
+    """{"referencia", "parrafos": [8 strings]}: los párrafos P1–P8 de §5 con cada [CAMPO] reemplazado por su dato."""
+    datos = dict(ctx)
+    datos.update({k: v for k, v in (ctx.get("eventual") or {}).items() if v not in (None, "")})
+    return {
+        "referencia": _completar_eventual(_REFERENCIA_EVENTUAL, datos, None),
+        "parrafos": [_completar_eventual(plantilla, datos, orden) for plantilla, orden in _PARRAFOS_EVENTUAL],
+    }
+
+
 # --- Textos para SAP -------------------------------------------------------
 
 def _fecha_sap_iso(iso):

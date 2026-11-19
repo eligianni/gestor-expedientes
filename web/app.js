@@ -783,7 +783,8 @@ const ESTADOS_TEXTO = {
   BORRADOR: "Borrador", CONTROLADO: "Controlado", EN_FIRMA: "En firma", FIRMADO: "Firmado", ENVIADO: "Enviado",
   CONTABILIZADO: "Contabilizado", CERRADO: "Cerrado", PENDIENTE: "Pendiente", ANULADO: "Anulado",
   RECIBIDO_MANTENIMIENTO: "Recibido de Mantenimiento", INFORME_ECONOMICO: "Informe económico", DEVUELTO: "Devuelto",
-  PARA_FACTURAR: "Para facturar",
+  PARA_FACTURAR: "Para facturar", ARMADO: "Armado", EN_DTO_ECONOMICO_CONTABLE: "En Dto. Económico Contable",
+  FINALIZADO: "Finalizado",
 };
 const TIPOS_EXPEDIENTE = [["COMUN", "Común"], ["CENTRALIZADA", "Centralizada"], ["CORRECTIVO", "Correctivo"], ["EVENTUAL", "Pago eventual"]];
 
@@ -935,6 +936,8 @@ async function pintarPaso1() {
       campoFormulario("nuevo-oc", "N° de OC", entrada("", { list: "lista-oc", inputmode: "numeric", autocomplete: "off" }),
         "Escribí el número o elegilo de la lista."),
       opciones,
+      campoFormulario("nuevo-sap", "Proveedor SAP (solo pago eventual sin OC)", entrada("", { inputmode: "numeric", autocomplete: "off", clase: "entrada-corta" })),
+      campoFormulario("nuevo-efector", "Efector (solo pago eventual sin OC)", selector(estado.efector === "CASPH" ? "CASPH" : "HBI", [["HBI", "HBI"], ["CASPH", "CASPH"]])),
       el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Crear expediente" })));
     vaciar(contenedor, formulario);
     return;
@@ -970,6 +973,10 @@ async function crearExpediente(evento) {
   evento.preventDefault();
   limpiarAvisos();
   const datos = { tipo: document.getElementById("nuevo-tipo").value, oc: document.getElementById("nuevo-oc").value.trim() };
+  if (datos.tipo === "EVENTUAL" && !datos.oc) {
+    datos.sap = document.getElementById("nuevo-sap").value.trim();
+    datos.efector = document.getElementById("nuevo-efector").value;
+  }
   const exp = await api("POST", "/api/expedientes", datos);
   if (!exp) return;
   mostrarAviso("Expediente " + exp.id + " creado.", "exito");
@@ -1322,7 +1329,8 @@ async function pintarPaso5() {
   const contenedor = document.getElementById("asistente-paso-5");
   cargando(contenedor);
   const textos = await api("GET", "/api/expedientes/" + expEstado.exp.id + "/textos");
-  const correctivo = expEstado.exp.tipo === "CORRECTIVO" ? seccionCorrectivo(textos) : null;
+  const correctivo = expEstado.exp.tipo === "CORRECTIVO" ? seccionCorrectivo(textos)
+    : expEstado.exp.tipo === "EVENTUAL" ? seccionEventual(textos) : null;
   if (!textos) {
     vaciar(contenedor, el("h3", { texto: "5. Textos" }), correctivo,
       el("p", { clase: "texto-suave", texto: "Completá los datos que faltan (ver el mensaje de arriba) para generar los textos." }));
@@ -1377,6 +1385,7 @@ async function pintarPaso5() {
     partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "Textos SAP: " + textos.sap_error })));
   }
   partes.push(el("h4", { texto: "Referencias GDE y nombres de archivo" }));
+  if (textos.referencias_error) partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: textos.referencias_error })));
   partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {},
     el("thead", {}, el("tr", {}, ...["Referencia", "Archivo", ""].map((t) => el("th", { scope: "col", texto: t })))),
     el("tbody", {}, ...textos.referencias.map((r) => el("tr", {},
@@ -1556,6 +1565,74 @@ async function informeMensualCorrectivos(mes, destino) {
   vaciar(destino, tabla(encabezados, lineas),
     el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario", texto: "Copiar tabla",
       onclick: () => copiarTexto(comoTexto) })));
+}
+
+// Paso 5, solo EVENTUAL: campos de la solicitud de pago eventual y sus 8 párrafos (Copiar por párrafo).
+
+const CAMPOS_EVENTUAL = [
+  ["tipo_factura", "Tipo de factura (B o C)"],
+  ["establecimiento", "Establecimiento / hospital (para la referencia)"],
+  ["establecimiento_detallado", "Nombre del establecimiento detallado"],
+  ["tipo_servicio", "Tipo de servicio (ej.: mantenimiento preventivo de los ascensores)"],
+  ["docfi", "N° de documento financiero (DOCFI)"],
+  ["orden_docfi", "Orden del DOCFI"],
+  ["remito", "N° de remito (vacío = el primero cargado)"],
+  ["documento_remito", "N° GDE del remito"],
+  ["orden_remito", "Orden del remito"],
+  ["providencia_informe", "N° de providencia del informe técnico"],
+  ["orden_informe", "Orden del informe técnico"],
+  ["cargo_responsable", "Cargo del responsable técnico"],
+  ["responsable", "Nombre y apellido del responsable"],
+  ["cuit", "CUIT del proveedor (vacío = el del padrón)"],
+  ["orden_compra", "N° de OC (vacío = la del expediente)"],
+  ["vencimiento_oc", "Vencimiento de la OC (AAAA-MM-DD; vacío = fin de vigencia)"],
+  ["expediente_anterior", "Expediente anterior (de la OC)"],
+  ["providencia_prorroga", "N° de providencia de prórroga"],
+  ["orden_prorroga", "Orden de la prórroga"],
+  ["gerencia", "Gerencia competente"],
+  ["nota_autorizacion", "N° de nota de autorización"],
+  ["orden_autorizacion", "Orden de la nota de autorización"],
+];
+
+function seccionEventual(textos) {
+  const exp = expEstado.exp;
+  const guardado = exp.datos.eventual || {};
+  const formulario = el("form", { clase: "formulario panel", novalidate: true, onsubmit: guardarEventual },
+    el("h4", { texto: "Solicitud de pago eventual" }),
+    el("p", { clase: "texto-suave", texto: "La factura, el importe, el período y el expediente GDE salen de los pasos 1, 3 y 6." }),
+    el("div", { clase: "filtros" }, ...CAMPOS_EVENTUAL.map(([clave, etiqueta]) =>
+      campoFormulario("ev-" + clave, etiqueta, entrada(guardado[clave] || "", { autocomplete: "off" })))),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar solicitud" })));
+  const partes = [formulario];
+  const solicitud = textos && textos.solicitud_pago_eventual;
+  if (solicitud) {
+    partes.push(bloqueTexto("Referencia de la solicitud", solicitud.referencia, false));
+    solicitud.parrafos.forEach((parrafo, i) => partes.push(bloqueTexto("Párrafo " + (i + 1), parrafo, false)));
+    partes.push(el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario", texto: "Copiar los 8 párrafos",
+      onclick: () => copiarTexto(solicitud.parrafos.join("\n\n")) })));
+  } else if (textos && textos.solicitud_pago_eventual_error) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: textos.solicitud_pago_eventual_error })));
+  }
+  return el("div", { clase: "seccion-eventual" }, ...partes);
+}
+
+async function guardarEventual(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const exp = expEstado.exp;
+  const eventual = {};
+  for (const [clave] of CAMPOS_EVENTUAL) eventual[clave] = document.getElementById("ev-" + clave).value.trim();
+  if (eventual.vencimiento_oc && !/^\d{4}-\d{2}-\d{2}$/.test(eventual.vencimiento_oc)) {
+    mostrarAviso("El vencimiento de la OC debe tener la forma AAAA-MM-DD.", "error");
+    return;
+  }
+  estado.recargar = () => abrirExpediente(exp.id, 5);
+  const actualizado = await api("PUT", "/api/expedientes/" + exp.id + "/eventual", { version: exp.version, eventual });
+  if (!actualizado) return;
+  expEstado.exp = actualizado;
+  pintarEncabezadoAsistente();
+  await pintarPaso5();
+  mostrarAviso("Solicitud de pago eventual guardada.", "exito");
 }
 
 // Paso 7: estado.

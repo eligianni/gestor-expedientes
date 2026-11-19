@@ -478,6 +478,21 @@ def control_leyenda_cv_faltante(ctx):
     return [Resultado("leyenda_cv_faltante", "error", "oc", "Falta la leyenda del CV en la OC %s." % oc["numero"])]
 
 
+def control_eventual_repetido(ctx):
+    """Un pago eventual por proveedor y año (año de la factura); avisa en el posterior, nombrando al anterior."""
+    expediente = ctx["expediente"]
+    anio = (_factura(ctx).get("fecha") or "")[:4]
+    if expediente.get("tipo") != "EVENTUAL" or not anio:
+        return []
+    return [
+        Resultado("eventual_repetido", "error", "factura",
+                  "Ya hay un pago eventual para el proveedor SAP %s en %s (expediente %s)." % (expediente["sap"], anio, otro["id"]),
+                  str(otro["id"]))
+        for otro in ctx.get("otros_del_proveedor") or []
+        if otro.get("tipo") == "EVENTUAL" and otro["id"] < expediente["id"] and (otro.get("fecha_factura") or "")[:4] == anio
+    ]
+
+
 CONTROLES = [
     control_importe_factura,
     control_destinatario_factura,
@@ -501,6 +516,7 @@ CONTROLES = [
     control_objeto_faltante,
     control_documentacion_centralizada,
     control_leyenda_cv_faltante,
+    control_eventual_repetido,
 ]
 
 
