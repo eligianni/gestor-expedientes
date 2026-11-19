@@ -300,3 +300,34 @@ fieldset { border: 1px solid var(--borde); border-radius: 6px; padding: 12px 16p
 .instructivo { white-space: pre-wrap; font-family: Consolas, "Cascadia Mono", monospace; font-size: 15px; overflow-x: auto; }
 .checklist-central { display: flex; flex-direction: column; gap: 4px; }
 .checklist-central label { display: flex; gap: 8px; align-items: center; }
+
+/* PDF de la OC: lectura y revisión antes de aplicar */
+.seccion-pdf-oc h3 { margin-top: 0; }
+.seccion-pdf-oc details { max-width: 720px; }
+summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--primario); font-weight: 600; }
+summary:focus { outline: 3px solid var(--foco); outline-offset: 2px; }
+.revision-pdf { border-top: 1px solid var(--borde); margin-top: 16px; padding-top: 8px; }
+.revision-pdf h4, .revision-pdf h5 { margin: 16px 0 8px; }
+.revision-pdf h5 { font-size: 16px; }
+.tabla-revision td:first-child { width: 56px; text-align: center; }
+.tabla-revision input[type="checkbox"] { width: 24px; height: 24px; min-height: 24px; margin: 0; }
+.tabla-revision th[scope="row"] { font-weight: 600; background: var(--superficie); }
+.entrada-objeto { width: 100%; min-width: 280px; }
+.subrenglones { margin: 4px 0 0; font-weight: 400; }
+
+/* Tablas: columnas a elección, orden por encabezado, filtro por columna y exportación */
+.solo-lectores { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.campo-buscar { min-width: 280px; }
+.elegir-columnas summary { margin: -4px 0; }
+.grilla-columnas { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 16px; margin-top: 8px; }
+.tabla-datos { font-variant-numeric: tabular-nums; }
+.tabla-datos th { white-space: nowrap; padding: 0; vertical-align: bottom; }
+.orden-columna { width: 100%; min-height: 44px; padding: 6px 8px; border: 0; border-radius: 0; background: transparent;
+  color: var(--texto); font-weight: 600; text-align: left; white-space: nowrap; }
+.orden-columna:hover { background: var(--borde); }
+th[aria-sort="ascending"] .orden-columna, th[aria-sort="descending"] .orden-columna { color: var(--primario); }
+.fila-filtros td { background: var(--fondo); padding: 4px; }
+.fila-filtros input, .fila-filtros select { width: 100%; min-width: 96px; padding: 6px 8px; font-size: 15px; }
+.tabla-datos tbody tr:hover td { background: var(--fondo); }
+.tabla-datos tfoot td { font-weight: 600; border-top: 2px solid var(--borde-control); }
+.boton-celda { padding: 4px 12px; }

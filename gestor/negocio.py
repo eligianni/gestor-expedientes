@@ -249,7 +249,8 @@ def ficha_oc(con, numero):
             (oc["numero"],),
         )
     ]
-    return {"oc": oc, "proveedor": proveedor, "renglones": renglones, "expedientes": expedientes}
+    return {"oc": oc, "proveedor": proveedor, "renglones": renglones, "expedientes": expedientes,
+            "pdf_oc": ultimo_pdf_oc(con, oc["numero"])}
 
 
 # --- Escritura -------------------------------------------------------------
@@ -392,6 +393,232 @@ def actualizar_renglon(con, numero, pos, version, cambios):
             raise ErrorValidacion("El desglose necesita cantidad, unidad y precio (o los tres vacíos).")
         validos["campos_manuales"] = _con_manuales(actual, [c for c in validos if c != "campos_manuales"])
         db.actualizar_con_version(con, "renglon", {"oc": oc["numero"], "pos": pos}, version, validos)
+    return ficha_oc(con, numero)
+
+
+# --- PDF de la OC --------------------------------------------------------------
+# El PDF digital de la OC (el firmado en GDE) trae bien el objeto, las cantidades y los subrenglones que el z_compras2
+# muestra mal (servicios medidos en meses, renglones con subrenglones). Se lee, se compara con la base y la usuaria
+# elige qué aplicar; lo aplicado queda como campo manual para que la próxima importación no lo pise.
+
+CAMPOS_OC_PDF = ("objeto", "objeto_articulo", "ca", "expediente_contratacion", "gde_pdf_oc", "vig_desde", "vig_hasta")
+CAMPOS_RENGLON_PDF = ("codigo", "descripcion", "cantidad", "unidad", "precio_centavos", "importe_centavos",
+                      "desglose_cantidad", "desglose_unidad", "desglose_precio_centavos")
+ETIQUETAS_PDF = {
+    "objeto": "Objeto", "objeto_articulo": "Artículo del objeto", "ca": "CA (licitación-año)",
+    "expediente_contratacion": "Expediente de contratación", "gde_pdf_oc": "N° GDE del PDF de la OC",
+    "vig_desde": "Vigencia desde", "vig_hasta": "Vigencia hasta", "codigo": "Código", "descripcion": "Descripción",
+    "cantidad": "Cantidad", "unidad": "Unidad", "precio_centavos": "Precio unitario", "importe_centavos": "Importe",
+    "desglose_cantidad": "Desglose: cantidad", "desglose_unidad": "Desglose: unidad",
+    "desglose_precio_centavos": "Desglose: precio",
+}
+FUENTE_PDF = "pdf_oc"
+
+
+def _iguales(campo, a, b):
+    if campo in ("cantidad", "desglose_cantidad"):
+        if a in (None, "") or b in (None, ""):
+            return a in (None, "") and b in (None, "")
+        try:
+            return Decimal(str(a)) == Decimal(str(b))
+        except InvalidOperation:
+            return False
+    return (a if a != "" else None) == (b if b != "" else None)
+
+
+def _propuesta_renglon(leido):
+    desglose = leido.get("desglose") or {}
+    return {
+        "codigo": leido.get("codigo") or "",
+        "descripcion": leido.get("descripcion") or "",
+        "cantidad": leido.get("cantidad"),
+        "unidad": leido.get("unidad") or "",
+        "precio_centavos": leido.get("precio_centavos"),
+        "importe_centavos": leido.get("importe_centavos"),
+        "desglose_cantidad": desglose.get("cantidad"),
+        "desglose_unidad": desglose.get("unidad"),
+        "desglose_precio_centavos": desglose.get("precio_centavos"),
+    }
+
+
+def ultimo_pdf_oc(con, numero):
+    """Última carga del PDF de la OC ({fecha, usuario, archivo}) o None."""
+    fila = con.execute(
+        "SELECT fecha, usuario, despues FROM evento WHERE tabla = 'oc' AND accion = 'IMPORTACION' AND clave = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (json.dumps({"numero": str(numero)}, ensure_ascii=False, sort_keys=True),),
+    ).fetchone()
+    if fila is None:
+        return None
+    try:
+        despues = json.loads(fila["despues"] or "{}")
+    except ValueError:
+        despues = {}
+    if despues.get("fuente") != FUENTE_PDF:
+        return None
+    return {"fecha": fila["fecha"], "usuario": fila["usuario"], "archivo": despues.get("archivo") or ""}
+
+
+def comparar_oc_pdf(con, numero, leido):
+    """Compara lo leído del PDF (gestor.oc_pdf.leer_oc) con la OC de la base. No escribe nada."""
+    ficha = ficha_oc(con, numero)
+    oc = ficha["oc"]
+    if leido.get("numero") and leido["numero"] != oc["numero"]:
+        raise ErrorNegocio("El PDF es de la OC %s, no de la %s." % (leido["numero"], oc["numero"]))
+    avisos = list(leido.get("avisos") or [])
+    if leido.get("sap") and leido["sap"] != oc["sap"]:
+        avisos.append("El proveedor del PDF (SAP %s, %s) no es el de la OC en la base (SAP %s)." % (
+            leido["sap"], leido.get("razon_social") or "", oc["sap"]))
+    manuales_oc = set(oc.get("campos_manuales") or [])
+    campos_oc = []
+    for campo in CAMPOS_OC_PDF:
+        pdf = leido.get(campo)
+        if pdf in (None, ""):
+            continue
+        actual = oc.get(campo)
+        campos_oc.append({"campo": campo, "etiqueta": ETIQUETAS_PDF[campo], "actual": actual, "pdf": pdf,
+                          "distinto": not _iguales(campo, actual, pdf), "manual": campo in manuales_oc})
+
+    actuales = {r["pos"]: r for r in ficha["renglones"]}
+    renglones = []
+    for r in leido.get("renglones") or []:
+        actual = actuales.get(r["pos"])
+        propuesta = _propuesta_renglon(r)
+        diferencias = []
+        for campo in CAMPOS_RENGLON_PDF:
+            valor_actual = actual.get(campo) if actual is not None else None
+            if actual is not None and campo in ("codigo", "descripcion") and valor_actual:
+                continue  # el texto del z_compras2 se respeta; solo se completa si falta
+            if propuesta[campo] in (None, "") and campo not in ("desglose_cantidad", "desglose_unidad",
+                                                               "desglose_precio_centavos"):
+                continue
+            if actual is None or not _iguales(campo, valor_actual, propuesta[campo]):
+                diferencias.append({"campo": campo, "etiqueta": ETIQUETAS_PDF[campo], "actual": valor_actual,
+                                    "pdf": propuesta[campo]})
+        if actual is not None and actual.get("desglose_cantidad") is not None and propuesta["desglose_cantidad"] is None:
+            # El PDF no trae subrenglones: no se borra un desglose cargado (puede ser manual o inferido a propósito).
+            diferencias = [d for d in diferencias if not d["campo"].startswith("desglose_")]
+        renglones.append({
+            "pos": r["pos"], "existe": actual is not None, "version": actual["version"] if actual is not None else None,
+            "descripcion": (actual or {}).get("descripcion") or propuesta["descripcion"],
+            "propuesta": propuesta, "diferencias": diferencias, "subrenglones": r.get("subrenglones") or [],
+            "sol_ped": r.get("sol_ped") or "",
+        })
+    en_pdf = {r["pos"] for r in leido.get("renglones") or []}
+    for pos in sorted(set(actuales) - en_pdf):
+        avisos.append("El renglón %d está en la base (z_compras2) pero no en el PDF de la OC." % pos)
+    cabecera = {k: v for k, v in leido.items() if k not in ("renglones", "avisos")}
+    return {"oc": {"numero": oc["numero"], "version": oc["version"], "origen": oc["origen"]}, "leido": cabecera,
+            "campos_oc": campos_oc, "renglones": renglones, "avisos": avisos,
+            "ultimo_pdf": ultimo_pdf_oc(con, oc["numero"])}
+
+
+def _validar_campo_renglon_pdf(campo, valor):
+    if campo in ("codigo", "descripcion"):
+        return _texto(valor, ETIQUETAS_PDF[campo].lower())
+    if campo == "unidad":
+        return _texto(valor, "unidad").upper()
+    if campo == "cantidad":
+        return _decimal_texto(valor, "cantidad")
+    if campo in ("precio_centavos", "importe_centavos"):
+        return _entero(valor, ETIQUETAS_PDF[campo].lower(), minimo=0)
+    return _validar_campo_renglon(campo, valor)
+
+
+def _por_entregar(cantidad, desglose_cantidad, entregado):
+    """sap_por_entregar y exceso_sap medidos en la unidad del desglose cuando lo hay (como la importación)."""
+    base = Decimal(desglose_cantidad if desglose_cantidad is not None else (cantidad or "0"))
+    entregado = Decimal(entregado or "0")
+    resto = max(Decimal(0), base - entregado)
+    texto = format(resto, "f")
+    if "." in texto:
+        texto = texto.rstrip("0").rstrip(".")
+    return texto, 1 if entregado > base else 0
+
+
+def aplicar_oc_pdf(con, numero, datos):
+    """Aplica lo elegido del PDF: campos de la OC y de los renglones (quedan como manuales) y deja constancia.
+
+    `datos`: {"version", "oc": {campo: valor}, "renglones": [{"pos", "version" (None si es nuevo), "cambios"}],
+    "archivo", "leido"} — `leido` es la cabecera que devolvió la comparación, para la auditoría.
+    """
+    if not isinstance(datos, dict):
+        raise ErrorValidacion("Faltan los datos a aplicar.")
+    version = _version(datos.get("version"))
+    cambios_oc = datos.get("oc") or {}
+    if not isinstance(cambios_oc, dict):
+        raise ErrorValidacion("Los campos de la OC deben ser un objeto.")
+    desconocidos = [c for c in cambios_oc if c not in CAMPOS_OC_PDF]
+    if desconocidos:
+        raise ErrorValidacion("No se puede tomar del PDF: %s." % ", ".join(sorted(desconocidos)))
+    validos_oc = {campo: _validar_campo_oc(campo, valor) for campo, valor in cambios_oc.items()}
+
+    renglones = datos.get("renglones") or []
+    if not isinstance(renglones, list):
+        raise ErrorValidacion("Los renglones deben ser una lista.")
+    validos_renglones = []
+    for item in renglones:
+        if not isinstance(item, dict):
+            raise ErrorValidacion("Cada renglón debe ser un objeto con sus datos.")
+        pos = _entero(item.get("pos"), "posición", minimo=1)
+        cambios = item.get("cambios") or {}
+        if not isinstance(cambios, dict):
+            raise ErrorValidacion("Los cambios del renglón %d deben ser un objeto." % pos)
+        desconocidos = [c for c in cambios if c not in CAMPOS_RENGLON_PDF]
+        if desconocidos:
+            raise ErrorValidacion("No se puede tomar del PDF en el renglón %d: %s." % (pos, ", ".join(sorted(desconocidos))))
+        if not cambios:
+            continue
+        version_renglon = item.get("version")
+        if version_renglon is not None:
+            version_renglon = _version(version_renglon)
+        validos_renglones.append((pos, version_renglon, {c: _validar_campo_renglon_pdf(c, v) for c, v in cambios.items()}))
+
+    archivo = _texto(datos.get("archivo"), "archivo")
+    leido = datos.get("leido") if isinstance(datos.get("leido"), dict) else {}
+
+    with db.transaccion(con):
+        actual = _leer_oc(con, numero)
+        if validos_oc:
+            _validar_vigencia(validos_oc.get("vig_desde", actual["vig_desde"]), validos_oc.get("vig_hasta", actual["vig_hasta"]))
+            validos_oc["campos_manuales"] = _con_manuales(actual, list(validos_oc))
+            db.actualizar_con_version(con, "oc", {"numero": actual["numero"]}, version, validos_oc)
+        elif actual["version"] != version:
+            raise db.ConflictoVersion()
+        for pos, version_renglon, cambios in validos_renglones:
+            fila = db.leer_fila(con, "renglon", {"oc": actual["numero"], "pos": pos})
+            if fila is None:
+                nuevo = {"oc": actual["numero"], "pos": pos, "codigo": "", "descripcion": "", "cantidad": "1", "unidad": "",
+                         "precio_centavos": 0, "importe_centavos": 0}
+                nuevo.update(cambios)
+                if not nuevo["descripcion"]:
+                    raise ErrorValidacion("Falta la descripción del renglón %d." % pos)
+                if "importe_centavos" not in cambios:
+                    nuevo["importe_centavos"] = int((Decimal(nuevo["cantidad"]) * nuevo["precio_centavos"]).to_integral_value())
+                nuevo["sap_por_entregar"], nuevo["exceso_sap"] = _por_entregar(
+                    nuevo["cantidad"], nuevo.get("desglose_cantidad"), "0")
+                nuevo["campos_manuales"] = sorted(cambios)
+                db.insertar(con, "renglon", nuevo)
+                continue
+            if version_renglon is None:
+                raise db.ConflictoVersion()
+            desglose = [cambios.get(c, fila[c]) for c in ("desglose_cantidad", "desglose_unidad", "desglose_precio_centavos")]
+            if any(v is not None for v in desglose) and not all(v is not None for v in desglose):
+                raise ErrorValidacion("El desglose del renglón %d necesita cantidad, unidad y precio." % pos)
+            por_entregar, exceso = _por_entregar(cambios.get("cantidad", fila["cantidad"]), desglose[0], fila["sap_entregado"])
+            if por_entregar != fila["sap_por_entregar"]:
+                cambios["sap_por_entregar"] = por_entregar
+            if exceso != fila["exceso_sap"]:
+                cambios["exceso_sap"] = exceso
+            if desglose[0] is not None and fila["revisar_desglose"]:
+                cambios["revisar_desglose"] = 0
+            cambios["campos_manuales"] = _con_manuales(fila, [c for c in cambios if c in CAMPOS_RENGLON_PDF])
+            db.actualizar_con_version(con, "renglon", {"oc": actual["numero"], "pos": pos}, version_renglon, cambios)
+        db.registrar_evento(con, "IMPORTACION", "oc", {"numero": actual["numero"]}, None, {
+            "fuente": FUENTE_PDF, "archivo": archivo, "leido": leido,
+            "campos_oc": sorted(c for c in validos_oc if c != "campos_manuales"),
+            "renglones": [pos for pos, _, _ in validos_renglones],
+        })
     return ficha_oc(con, numero)
 
 

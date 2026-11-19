@@ -397,6 +397,24 @@ def _diferencias(actual, nuevo, campos):
     return cambios
 
 
+def _por_entregar_con_manuales(actual, renglon, cambios):
+    """Si la cantidad o el desglose quedaron fijados a mano (o desde el PDF de la OC), el por entregar y el exceso se
+    miden con esos valores y no con el desglose que se infiere del reporte."""
+    manuales = _manuales(actual)
+    if not manuales & {"cantidad", "desglose_cantidad"}:
+        return
+    entregado = Decimal(str(renglon.get("sap_entregado", actual.get("sap_entregado")) or "0"))
+    desglose = actual.get("desglose_cantidad") if "desglose_cantidad" in manuales else renglon.get("desglose_cantidad")
+    cantidad = actual.get("cantidad") if "cantidad" in manuales else renglon.get("cantidad")
+    base = Decimal(str(desglose if desglose is not None else (cantidad or "0")))
+    nuevos = {"sap_por_entregar": _texto_decimal(max(Decimal(0), base - entregado)), "exceso_sap": 1 if entregado > base else 0}
+    for campo, valor in nuevos.items():
+        if actual.get(campo) != valor:
+            cambios[campo] = valor
+        else:
+            cambios.pop(campo, None)
+
+
 def _planificar(con, ocs, renglones, informe):
     """Compara contra la base y devuelve la lista de operaciones; completa altas/actualizadas/cambios del informe."""
     operaciones = []
@@ -429,6 +447,7 @@ def _planificar(con, ocs, renglones, informe):
             operaciones.append(("alta", "renglon", dict(renglon)))
             continue
         cambios = _diferencias(actual, renglon, CAMPOS_RENGLON)
+        _por_entregar_con_manuales(actual, renglon, cambios)
         if not cambios:
             informe["sin_cambios"] += 1
             continue

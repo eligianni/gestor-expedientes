@@ -29,6 +29,7 @@
         <li><button type="button" data-pantalla="pantalla-oc">Órdenes de compra</button></li>
         <li><button type="button" data-pantalla="pantalla-expedientes">Expedientes</button></li>
         <li><button type="button" data-pantalla="pantalla-centralizadas">Centralizadas</button></li>
+        <li><button type="button" data-pantalla="pantalla-tablas">Tablas</button></li>
         <li><button type="button" data-pantalla="pantalla-entregas">Entregas</button></li>
         <li><button type="button" data-pantalla="pantalla-importar">Importar</button></li>
         <li><button type="button" data-pantalla="pantalla-configuracion">Configuración</button></li>
@@ -192,6 +193,12 @@
         <div id="importar-resultado"></div>
         <h2>Importaciones anteriores</h2>
         <div id="importar-historial"><p>Cargando…</p></div>
+      </section>
+
+      <section aria-labelledby="titulo-tablas" id="pantalla-tablas" hidden>
+        <h1 id="titulo-tablas">Tablas</h1>
+        <p class="texto-suave">Expedientes, órdenes de compra y renglones en tablas: elegí columnas, ordená, filtrá y exportá a Excel lo que ves.</p>
+        <div id="tablas-raiz"></div>
       </section>
 
       <section id="pantalla-configuracion" aria-labelledby="titulo-configuracion" hidden>

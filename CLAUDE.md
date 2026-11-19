@@ -47,6 +47,9 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | `gestor/server.py` | todos los módulos de `gestor` | reglas de negocio o SQL propio |
 | `gestor/negocio.py`, `gestor/importar.py` | `db`, `util`, `letras`, `xlsx`, `controles`, `textos` | `server` |
 | `gestor/controles.py` | `util`, `letras` | leer la base (recibe `ctx` de `armar_contexto`) |
+| `gestor/pdf_texto.py` | stdlib | base, archivos, otros módulos de `gestor` |
+| `gestor/oc_pdf.py` | `util` | base, archivos, `negocio` |
+| `gestor/tablas.py` | `util`, `xlsx_escritor` | escribir la base, `server` |
 | `gestor/textos.py`, `gestor/letras.py`, `gestor/util.py` | stdlib, `util`, `letras` | base, archivos, `negocio` |
 | `gestor/db.py` | stdlib | cualquier otro módulo de `gestor` salvo `config` |
 | `web/*` | nada externo (sin CDN) | llamar `fetch` fuera de `api()` |
@@ -64,6 +67,9 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | Textos generados | `gestor/textos.py` — una función por texto |
 | Controles | `gestor/controles.py` → `CONTROLES`, `NOTAS` |
 | Tokens visuales | `:root` de `web/style.css` |
+| Texto de un PDF digital | `gestor/pdf_texto.py` → `texto_de_pdf` (sin OCR) |
+| Datos de la OC desde su PDF | `gestor/oc_pdf.py` → `leer_oc`; comparar/aplicar en `negocio.comparar_oc_pdf` / `aplicar_oc_pdf` |
+| Pantalla Tablas y su Excel | `gestor/tablas.py` (columnas por tabla) + `web/app.js` (filtros, orden, vistas) |
 | Identidad de la app | `gestor/__init__.py` → `APP_ID = "gestor-expedientes"`, `__version__ = "0.1.0"` |
 
 ## Code rules
@@ -136,6 +142,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - El período sale del **remito** (fecha de firma si hay), nunca de la factura.
 - En Word un rótulo puede estar partido en varios `w:r`: unir el texto del párrafo antes de buscar; registrar namespaces antes de serializar.
 - ElementTree: comparar `elem is not None`, nunca `if elem:` (DeprecationWarning en ≥ 3.12, error con `-W error::DeprecationWarning`).
+- La carga del PDF de la OC no tiene columna propia: queda como `evento` `IMPORTACION` de la OC con `despues.fuente = "pdf_oc"`
+  (`negocio.ultimo_pdf_oc`). Lo aplicado se marca en `campos_manuales`, así la importación del z_compras2 no lo pisa.
+- La exportación de Tablas se envía con un `<form>` POST (no `fetch`) para que el navegador descargue el archivo.
 - `httpd.shutdown()` se llama desde otro thread (`POST /api/apagar`), nunca desde el que atiende.
 - En la prueba de concurrencia las funciones de `multiprocessing` van a nivel de módulo (Windows usa `spawn`).
 

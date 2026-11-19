@@ -13,7 +13,8 @@ import threading
 import urllib.request
 from urllib.parse import parse_qs, quote, urlsplit
 
-from gestor import APP_ID, __version__, comprobantes, config, controles, db, docx_gen, exportes, importar, negocio, textos, xlsx
+from gestor import (APP_ID, __version__, comprobantes, config, controles, db, docx_gen, exportes, importar, negocio, oc_pdf,
+                    pdf_texto, tablas, textos, xlsx, xlsx_escritor)
 
 WEB = config.RAIZ / "web"
 
@@ -294,6 +295,52 @@ def oc_editar(h, m, cuerpo):
     return 200, _ok(negocio.actualizar_oc(h.conexion(), m.group("numero"), datos.get("version"), datos.get("cambios")))
 
 
+def oc_pdf_leer(h, m, cuerpo):
+    """PDF digital de la OC (o su texto pegado) → comparación con la base, sin guardar nada."""
+    campos, archivos = leer_multipart(h, cuerpo)
+    nombre = ""
+    if archivos.get("archivo") and archivos["archivo"][1]:
+        nombre, contenido = archivos["archivo"]
+        try:
+            texto = pdf_texto.texto_de_pdf(contenido)
+        except pdf_texto.PdfError as error:
+            raise ErrorHTTP(422, "negocio", str(error)) from None
+    else:
+        texto = (campos.get("texto") or "").strip()
+        if not texto:
+            raise validacion("Elegí el PDF de la OC o pegá su texto.")
+    try:
+        leido = oc_pdf.leer_oc(texto)
+    except oc_pdf.OcIlegible as error:
+        raise ErrorHTTP(422, "negocio", str(error)) from None
+    comparacion = negocio.comparar_oc_pdf(h.conexion(), m.group("numero"), leido)
+    comparacion["archivo"] = nombre
+    return 200, _ok(comparacion)
+
+
+def oc_pdf_aplicar(h, m, cuerpo):
+    return 200, _ok(negocio.aplicar_oc_pdf(h.conexion(), m.group("numero"), leer_json(h, cuerpo)))
+
+
+def tabla_ver(h, m, cuerpo):
+    try:
+        return 200, _ok(tablas.tabla(h.conexion(), m.group("nombre"), _efector_filtro(_consulta(h).get("efector"))))
+    except tablas.TablaDesconocida as error:
+        raise ErrorHTTP(404, "no_encontrado", str(error)) from None
+
+
+def tabla_exportar(h, m, cuerpo):
+    """Formulario (campo `datos` con JSON) → .xlsx de lo que se ve en la tabla. Se envía con un <form>, no con fetch,
+    para que el navegador descargue el archivo."""
+    try:
+        campos = parse_qs(cuerpo.decode("utf-8"), keep_blank_values=True)
+        pedido = json.loads((campos.get("datos") or [""])[0])
+        contenido, nombre = tablas.exportar_xlsx(pedido)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise validacion("No se pudo exportar la tabla: %s" % error) from None
+    return 200, Archivo(contenido, xlsx_escritor.TIPO_XLSX, nombre)
+
+
 def renglon_agregar(h, m, cuerpo):
     return 200, _ok(negocio.agregar_renglon(h.conexion(), m.group("numero"), leer_json(h, cuerpo)))
 
@@ -517,6 +564,10 @@ RUTAS = [
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_editar),
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)/consumo"), oc_consumo),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
+    ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/pdf"), oc_pdf_leer),
+    ("GET", re.compile(r"/api/tablas/(?P<nombre>[a-z]+)"), tabla_ver),
+    ("POST", re.compile(r"/api/tablas/exportar\.xlsx"), tabla_exportar),
+    ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/pdf/aplicar"), oc_pdf_aplicar),
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)"), renglon_editar),
     ("GET", re.compile(r"/api/inicio/alertas"), inicio_alertas),
     ("GET", re.compile(r"/api/calendario"), calendario),
