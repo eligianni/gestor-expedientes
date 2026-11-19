@@ -139,7 +139,14 @@
 
       <section id="pantalla-centralizadas" aria-labelledby="titulo-centralizadas" hidden>
         <h1 id="titulo-centralizadas">Centralizadas</h1>
-        <p class="texto-suave">Esta pantalla todavía no está disponible.</p>
+        <form id="centralizadas-exporte" class="panel formulario filtros" novalidate>
+          <div class="campo">
+            <label for="central-periodo">Período (AAAA-MM, vacío = todos)</label>
+            <input id="central-periodo" type="text" inputmode="numeric" class="entrada-corta" autocomplete="off">
+          </div>
+          <div id="centralizadas-botones"></div>
+        </form>
+        <p class="texto-suave">La carga de centralizadas desde esta pantalla se completa más adelante.</p>
       </section>
 
       <section id="pantalla-entregas" aria-labelledby="titulo-entregas" hidden>

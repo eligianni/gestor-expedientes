@@ -65,15 +65,16 @@ TIPO_CSV = "text/csv; charset=utf-8"
 class Archivo:
     """Respuesta binaria de una ruta (descarga) en lugar del sobre JSON."""
 
-    def __init__(self, contenido, tipo, nombre):
-        self.contenido, self.tipo, self.nombre = contenido, tipo, nombre
+    def __init__(self, contenido, tipo, nombre, en_linea=False):
+        self.contenido, self.tipo, self.nombre, self.en_linea = contenido, tipo, nombre, en_linea
 
 
 def responder_archivo(h, archivo):
     h.send_response(200)
     h.send_header("Content-Type", archivo.tipo)
     h.send_header("Content-Length", str(len(archivo.contenido)))
-    h.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(archivo.nombre, safe=""))
+    disposicion = "inline" if archivo.en_linea else "attachment"
+    h.send_header("Content-Disposition", disposicion + "; filename*=UTF-8''" + quote(archivo.nombre, safe=""))
     h.send_header("Cache-Control", "no-store")
     h.end_headers()
     h.wfile.write(archivo.contenido)
@@ -406,6 +407,14 @@ def entrega_numeracion_csv(h, m, cuerpo):
     return 200, Archivo(contenido, TIPO_CSV, exportes.nombre_csv_numeracion(entrega))
 
 
+def exporte(h, m, cuerpo):
+    try:
+        contenido, tipo, nombre, en_linea = exportes.generar(h.conexion(), m.group("nombre"), m.group("formato"), _consulta(h))
+    except exportes.ExporteDesconocido as error:
+        raise ErrorHTTP(404, "no_encontrado", str(error)) from None
+    return 200, Archivo(contenido, tipo, nombre, en_linea)
+
+
 def expediente_estado(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.cambiar_estado(
@@ -486,6 +495,7 @@ RUTAS = [
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/reanudar"), expediente_reanudar),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
+    ("GET", re.compile(r"/api/exportes/(?P<nombre>[a-z0-9-]+)\.(?P<formato>[a-z]+)"), exporte),
     ("GET", re.compile(r"/api/entregas"), entregas_listar),
     ("POST", re.compile(r"/api/entregas"), entrega_crear),
     ("GET", re.compile(r"/api/entregas/(?P<id>\d+)"), entrega_obtener),

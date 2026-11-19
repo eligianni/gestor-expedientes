@@ -284,3 +284,7 @@ fieldset { border: 1px solid var(--borde); border-radius: 6px; padding: 12px 16p
 #expedientes-pendientes .panel { margin-bottom: 16px; }
 .fila-demorada td { background: var(--error-fondo); }
 #configuracion-contenido .panel { margin-bottom: 16px; }
+
+/* Exportes (paso 26) */
+.exportes { margin: 8px 0 12px; }
+.exportes a.boton { min-width: 88px; justify-content: center; }

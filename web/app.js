@@ -43,6 +43,18 @@ function tabla(encabezados, filas, clasesColumnas) {
   return el("div", { clase: "tabla-desplazable" }, el("table", {}, thead, tbody));
 }
 
+/** Botones Excel, CSV e Imprimir de un exporte (enlaces de descarga; Imprimir abre la vista en otra pestaña). */
+function botonesExporte(nombre, parametros, descripcion) {
+  const consulta = new URLSearchParams(Object.entries(parametros || {}).filter(([, v]) => v !== "" && v !== null && v !== undefined));
+  const ruta = (formato) => "/api/exportes/" + nombre + "." + formato + (consulta.toString() ? "?" + consulta.toString() : "");
+  const sufijo = descripcion ? " " + descripcion : "";
+  return el("div", { clase: "acciones exportes", role: "group", "aria-label": "Exportar" + sufijo },
+    el("a", { clase: "boton secundario", href: ruta("xlsx"), download: "", "aria-label": "Excel" + sufijo, texto: "Excel" }),
+    el("a", { clase: "boton secundario", href: ruta("csv"), download: "", "aria-label": "CSV" + sufijo, texto: "CSV" }),
+    el("a", { clase: "boton secundario", href: ruta("html"), target: "_blank", rel: "noopener", "aria-label": "Imprimir" + sufijo,
+      texto: "Imprimir" }));
+}
+
 function formatoFechaHora(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -491,6 +503,7 @@ async function listarOC() {
   });
   const encabezados = ["OC", "Efector", "Proveedor", "Objeto", "Tipo", "Vigencia", "Renglones", "Importe $"];
   vaciar(lista,
+    botonesExporte("seguimiento-oc", { efector: estado.efector === "Ambos" ? "" : estado.efector, q: texto }, "del seguimiento de OC"),
     el("p", { clase: "texto-suave", texto: ocs.length + (ocs.length === 1 ? " OC" : " OC") }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
       el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
@@ -599,6 +612,8 @@ function pintarFichaOC(ficha) {
       el("thead", {}, el("tr", {}, ...encabezadosRenglones.map((t) => el("th", { scope: "col", texto: t })))),
       el("tbody", {}, ...filasRenglones))),
     el("div", { id: "oc-renglon-edicion" }),
+    el("h3", { texto: "Consumo de la OC" }),
+    botonesExporte("consumo-oc", { oc: oc.numero }, "del consumo de la OC " + oc.numero),
   ];
   if (oc.origen === "MANUAL") {
     partes.push(el("button", { type: "button", clase: "secundario", texto: "Agregar renglón", onclick: () => editarRenglon(null) }));
@@ -1587,8 +1602,11 @@ async function pedirCalendario() {
       el("br"),
       el("span", { clase: "texto-suave", texto: fila.razon_social + (fila.objeto ? " — " + fila.objeto : "") })),
     ...fila.celdas.map((celda, i) => celdaCalendario(fila, celda, i, datos.anio))));
-  vaciar(contenedor, el("div", { clase: "tabla-desplazable" },
-    el("table", { clase: "calendario" }, el("thead", {}, encabezado), el("tbody", {}, ...filas))));
+  vaciar(contenedor,
+    botonesExporte("calendario", { anio: datos.anio, efector: estado.efector === "Ambos" ? "" : estado.efector, tipo, sap },
+      "del calendario " + datos.anio),
+    el("div", { clase: "tabla-desplazable" },
+      el("table", { clase: "calendario" }, el("thead", {}, encabezado), el("tbody", {}, ...filas))));
 }
 
 function celdaCalendario(fila, celda, indice, anio) {
@@ -1711,6 +1729,7 @@ async function abrirEntrega(id) {
     partes.push(el("div", { clase: "acciones" },
       el("a", { clase: "boton secundario", href: "/api/entregas/" + entrega.id + "/numeracion.csv", download: "",
         texto: "Descargar CSV NUMERACIÓN" })));
+    partes.push(botonesExporte("entrega", { id: entrega.id }, "de la entrega " + entrega.efector + " " + entrega.numero));
   } else {
     partes.push(el("p", { clase: "texto-suave", texto: "La entrega no tiene expedientes." }));
   }
@@ -1776,6 +1795,7 @@ async function listarPendientes() {
     el("td", { clase: "numero", texto: p.dias_demora > 0 ? p.dias_demora + (p.dias_demora === 1 ? " día" : " días") : "en plazo" })));
   vaciar(contenedor, el("div", { clase: "panel" },
     el("h2", { clase: "titulo-chico", texto: "Pendientes (" + visibles.length + ")" }),
+    botonesExporte("pendientes", {}, "de los pendientes"),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
       el("thead", {}, el("tr", {}, ...["N°", "Proveedor", "OC", "Período", "Motivo", "Seguimiento", "Demora"].map((t) => el("th", { scope: "col", texto: t })))),
       el("tbody", {}, ...filas)))));
@@ -1909,6 +1929,21 @@ async function cerrarPrograma() {
     el("p", { texto: "Ya podés cerrar esta pestaña. Para volver a usarlo, hacé doble clic en Iniciar.bat." })));
 }
 
+// --- Centralizadas (exportes; la pantalla completa llega en el paso 32) ----------
+
+function pintarBotonesCentralizadas() {
+  const periodo = document.getElementById("central-periodo").value.trim();
+  vaciar(document.getElementById("centralizadas-botones"),
+    botonesExporte("centralizadas", { periodo }, "de las centralizadas" + (periodo ? " de " + periodo : "")));
+}
+
+function iniciarCentralizadas() {
+  const campo = document.getElementById("central-periodo");
+  campo.addEventListener("input", pintarBotonesCentralizadas);
+  document.getElementById("centralizadas-exporte").addEventListener("submit", (e) => e.preventDefault());
+  pintarBotonesCentralizadas();
+}
+
 // --- Arranque ---------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -1916,5 +1951,6 @@ document.addEventListener("DOMContentLoaded", () => {
   iniciarImportar();
   iniciarExpedientes();
   iniciarCalendario();
+  iniciarCentralizadas();
   iniciarNavegacion();
 });
