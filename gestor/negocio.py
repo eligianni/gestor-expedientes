@@ -401,13 +401,19 @@ def actualizar_renglon(con, numero, pos, version, cambios):
 # muestra mal (servicios medidos en meses, renglones con subrenglones). Se lee, se compara con la base y la usuaria
 # elige qué aplicar; lo aplicado queda como campo manual para que la próxima importación no lo pise.
 
-CAMPOS_OC_PDF = ("objeto", "objeto_articulo", "ca", "expediente_contratacion", "gde_pdf_oc", "vig_desde", "vig_hasta")
+CAMPOS_OC_PDF = ("objeto", "objeto_articulo", "ca", "expediente_contratacion", "gde_pdf_oc", "vig_desde", "vig_hasta",
+                 "dia_inicio_periodo")
+# Se resuelven solos con reglas fijas: vienen tildados aunque el dato se haya editado a mano.
+CAMPOS_OC_PDF_AUTOMATICOS = ("objeto_articulo", "dia_inicio_periodo", "gde_pdf_oc")
+# En los bienes no hay períodos: la vigencia y el día de inicio no se toman del PDF.
+CAMPOS_SIN_PERIODO = ("vig_desde", "vig_hasta", "dia_inicio_periodo")
 CAMPOS_RENGLON_PDF = ("codigo", "descripcion", "cantidad", "unidad", "precio_centavos", "importe_centavos",
                       "desglose_cantidad", "desglose_unidad", "desglose_precio_centavos")
 ETIQUETAS_PDF = {
     "objeto": "Objeto", "objeto_articulo": "Artículo del objeto", "ca": "CA (licitación-año)",
     "expediente_contratacion": "Expediente de contratación", "gde_pdf_oc": "N° GDE del PDF de la OC",
-    "vig_desde": "Vigencia desde", "vig_hasta": "Vigencia hasta", "codigo": "Código", "descripcion": "Descripción",
+    "vig_desde": "Vigencia desde", "vig_hasta": "Vigencia hasta", "dia_inicio_periodo": "Día de inicio del período",
+    "codigo": "Código", "descripcion": "Descripción",
     "cantidad": "Cantidad", "unidad": "Unidad", "precio_centavos": "Precio unitario", "importe_centavos": "Importe",
     "desglose_cantidad": "Desglose: cantidad", "desglose_unidad": "Desglose: unidad",
     "desglose_precio_centavos": "Desglose: precio",
@@ -473,11 +479,12 @@ def comparar_oc_pdf(con, numero, leido):
     campos_oc = []
     for campo in CAMPOS_OC_PDF:
         pdf = leido.get(campo)
-        if pdf in (None, ""):
+        if pdf in (None, "") or (oc["tipo"] == "BIEN" and campo in CAMPOS_SIN_PERIODO):
             continue
         actual = oc.get(campo)
         campos_oc.append({"campo": campo, "etiqueta": ETIQUETAS_PDF[campo], "actual": actual, "pdf": pdf,
-                          "distinto": not _iguales(campo, actual, pdf), "manual": campo in manuales_oc})
+                          "distinto": not _iguales(campo, actual, pdf), "manual": campo in manuales_oc,
+                          "automatico": campo in CAMPOS_OC_PDF_AUTOMATICOS})
 
     actuales = {r["pos"]: r for r in ficha["renglones"]}
     renglones = []

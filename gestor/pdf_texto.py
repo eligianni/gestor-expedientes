@@ -963,6 +963,46 @@ def paginas(datos):
     return resultado
 
 
+def _texto_pdf(valor):
+    """Cadena de texto de PDF (bytes UTF-16 con BOM o PDFDocEncoding ≈ cp1252) → str."""
+    if isinstance(valor, str):
+        return valor
+    if not isinstance(valor, bytes):
+        return ""
+    if valor.startswith(b"\xfe\xff"):
+        return _decodificar_utf16(valor[2:])
+    try:
+        return valor.decode("cp1252")
+    except UnicodeDecodeError:
+        return valor.decode("latin-1")
+
+
+def campos_formulario(datos):
+    """[(nombre, valor)] de los campos de texto del PDF (los de GDE llevan el número del documento y las páginas)."""
+    doc = _Documento(bytes(datos))
+    salida = []
+    for num in sorted(doc.objetos):
+        valor = doc.objetos[num]
+        if not isinstance(valor, dict) or "V" not in valor:
+            continue
+        tipo = doc.r(valor, "FT") or doc.r(doc.r(valor, "Parent"), "FT")
+        contenido = doc.r(valor, "V")
+        if tipo != "Tx" or not isinstance(contenido, (bytes, str)):
+            continue
+        texto = " ".join(_texto_pdf(contenido).split())
+        if texto:
+            salida.append((_texto_pdf(doc.r(valor, "T")) or "campo", texto))
+    return salida
+
+
 def texto_de_pdf(datos):
-    """Texto de todo el PDF; las páginas van separadas por un salto de página (\\f)."""
-    return "\f".join(paginas(datos))
+    """Texto de todo el PDF; las páginas van separadas por un salto de página (\\f).
+
+    Si el PDF tiene campos de formulario con texto (GDE pone ahí el número del documento), van al final, como una
+    página más con una línea «nombre: valor» por campo.
+    """
+    texto = "\f".join(paginas(datos))
+    campos = campos_formulario(datos)
+    if campos:
+        texto += "\f" + "\n".join("%s: %s" % (nombre, valor) for nombre, valor in campos)
+    return texto

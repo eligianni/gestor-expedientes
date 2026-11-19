@@ -154,6 +154,12 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - La exportación de Tablas se envía con un `<form>` POST (no `fetch`) para que el navegador descargue el archivo.
 - Copias de seguridad: una al arrancar (rotan, `backups_a_conservar`) y una por día en `<carpeta_backups>/diarios`
   (`db.backup_diario`, hilo en `app.py` cada 30 min, `backups_diarios_a_conservar`). Restaurar usa solo las de arranque.
+- Importar z_compras2: entra una fila si su centro es del efector (`efectores.<X>.centros`) o si la OC está en
+  `efectores.<X>.oc_asignadas`; una OC asignada a otro efector nunca entra (centralizadas de Hurlingham con centro 0010
+  o 1900). El día de inicio del período sale del día de `vig_desde` (29 a 31 → 1), salvo que se haya editado a mano.
+- PDF de la OC: artículo («a la» si dice adquisición/provisión, «al» si dice servicio; manda el primero), día de inicio y
+  N° GDE (también de los campos de formulario del PDF) vienen tildados solos; el objeto se corta antes de «con destino».
+  En los bienes no se muestran ni se toman vigencia, prórroga ni día de inicio.
 - La migración crea expedientes ya tramitados directo en su estado (CERRADO, ENVIADO, PENDIENTE, BORRADOR) con
   `periodo_manual = 1` e historial `MIGRACION`; reconoce lo ya migrado por factura + SAP (o OC + período si no hay
   factura). Las hojas "ENTREGA (n)" con paréntesis son copias y se ignoran.

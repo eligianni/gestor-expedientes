@@ -34,6 +34,14 @@ class PruebaPdfTexto(unittest.TestCase):
         self.assertNotIn("VERSION VIEJA", texto)
         self.assertIn("Número: 4500555861", texto)
 
+    def test_campos_de_formulario_al_final(self):
+        datos = pdf_prueba.pdf_desde_texto("ORDEN DE COMPRA").replace(
+            b"trailer", b"80 0 obj\n<< /FT /Tx /T (numero_documento) /V (IF-2025-77145513-INSSJP-GESP#INSSJP) >>\nendobj\ntrailer", 1)
+        self.assertEqual(pdf_texto.texto_de_pdf(datos),
+                         "ORDEN DE COMPRA\fnumero_documento: IF-2025-77145513-INSSJP-GESP#INSSJP")
+        self.assertEqual(oc_pdf.leer_oc(pdf_texto.texto_de_pdf(datos) + "\nNúmero: 4500549314")["gde_pdf_oc"],
+                         "IF-2025-77145513-INSSJP-GESP#INSSJP")
+
     def test_paginas_separadas(self):
         datos = pdf_prueba.pdf_desde_texto("primera\fsegunda")
         self.assertEqual(pdf_texto.paginas(datos), ["primera", "segunda"])

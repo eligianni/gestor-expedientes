@@ -49,7 +49,7 @@ MOTIVOS_DESCARTE = ("sin_oc", "partida", "centro", "exclusion_manual")
 # Campos de la OC que vienen del reporte o se infieren al importar (los demás se cargan a mano).
 CAMPOS_OC = (
     "efector", "sap", "clase", "org_compras", "centro", "ca", "expediente_contratacion",
-    "fecha_oc", "vig_desde", "vig_hasta", "cerrada_sap", "tipo", "comodato", "centralizada",
+    "fecha_oc", "vig_desde", "vig_hasta", "cerrada_sap", "tipo", "comodato", "centralizada", "dia_inicio_periodo",
 )
 # Campos del renglón que vienen del reporte o se infieren al importar.
 CAMPOS_RENGLON = (
@@ -116,6 +116,15 @@ def _columnas(encabezados):
         if util.clave_encabezado(nombre) not in claves:
             raise ErrorImportacion('Falta la columna obligatoria "%s" en el reporte.' % nombre)
     return presentes
+
+
+def oc_asignadas(parametros, efector):
+    """(OC asignadas a `efector`, OC asignadas a los otros efectores) según parametros["efectores"][...]["oc_asignadas"]."""
+    propias, otras = set(), set()
+    for nombre, datos in (parametros.get("efectores") or {}).items():
+        numeros = {util.sap_sin_ceros(str(o).strip()) for o in (datos or {}).get("oc_asignadas") or [] if str(o).strip()}
+        (propias if nombre == efector else otras).update(numeros)
+    return propias, otras - propias
 
 
 def _validar_efector(efector, parametros):
@@ -286,6 +295,18 @@ def inferir_oc(oc, renglones, parametros):
     }
 
 
+def dia_inicio_periodo(vig_desde):
+    """Día en que arranca cada período: el de inicio de la vigencia (1 = mes calendario).
+
+    Una OC que empieza el 17/07 se valida del 17 al 16 de cada mes. La base admite 1 a 28: si la vigencia arranca
+    del 29 al 31 se usa el mes calendario y se corrige a mano si hace falta.
+    """
+    desde = _a_fecha(vig_desde)
+    if desde is None or desde.day > 28:
+        return 1
+    return desde.day
+
+
 def _aplicar_inferencias(ocs, renglones, parametros):
     por_oc = {}
     for (numero, _), renglon in renglones.items():
@@ -293,6 +314,7 @@ def _aplicar_inferencias(ocs, renglones, parametros):
     for numero, oc in ocs.items():
         lista = por_oc.get(numero, [])
         oc.update(inferir_oc(oc, lista, parametros))
+        oc["dia_inicio_periodo"] = dia_inicio_periodo(oc.get("vig_desde"))
         for renglon in lista:
             renglon.update(inferir_desglose(renglon, oc["vig_desde"], oc["vig_hasta"]))
 
@@ -303,6 +325,7 @@ def _leer(origen, efector, parametros):
     encabezados, filas = xlsx.leer_tabla(origen)
     columnas = _columnas(encabezados)
 
+    asignadas, asignadas_a_otros = oc_asignadas(parametros, efector)
     excluidas = {str(p) for p in parametros.get("partidas_excluidas") or []}
     exclusiones = parametros.get("exclusiones") or {}
     sap_excluidos = {util.sap_sin_ceros(str(s)) for s in exclusiones.get("sap") or []}
@@ -334,10 +357,12 @@ def _leer(origen, efector, parametros):
         if "partida" in columnas and _texto(fila.get(columnas["partida"])) in excluidas:
             informe["descartes"]["partida"] += 1
             continue
-        if _texto(fila.get(columnas["centro"])) not in centros:
+        oc_txt = util.sap_sin_ceros(_texto(fila.get(columnas["oc"])))
+        # Las OC asignadas a un efector van a ese efector aunque tengan otro centro (centralizadas imputadas a
+        # Hurlingham con centro 0010 o 1900) y nunca al otro.
+        if oc_txt in asignadas_a_otros or (_texto(fila.get(columnas["centro"])) not in centros and oc_txt not in asignadas):
             informe["descartes"]["centro"] += 1
             continue
-        oc_txt = util.sap_sin_ceros(_texto(fila.get(columnas["oc"])))
         sap_txt = util.sap_sin_ceros(_texto(fila.get(columnas["sap"])))
         if sap_txt in sap_excluidos or oc_txt in oc_excluidas:
             informe["descartes"]["exclusion_manual"] += 1

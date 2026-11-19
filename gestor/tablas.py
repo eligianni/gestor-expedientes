@@ -135,6 +135,8 @@ def tabla_oc(con, efector=None):
         dic["cuit"] = dic.get("cuit") or ""
         dic["ultimo_periodo"] = dic.get("ultimo_periodo") or ""
         dic["pdf_cargado"] = cargas.get(fila["numero"])
+        if fila["tipo"] == "BIEN":  # los bienes no tienen períodos
+            dic["vig_desde"] = dic["vig_hasta"] = dic["prorroga"] = None
         filas.append(dic)
     return {"columnas": COLUMNAS_OC, "filas": filas}
 

@@ -573,7 +573,7 @@ async function listarOC() {
       el("td", { texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
       el("td", { texto: oc.objeto || "—" }),
       el("td", { texto: marcas }),
-      el("td", { texto: (oc.vig_desde || "") + (oc.vig_hasta ? " a " + oc.vig_hasta : " (sin fin)") }),
+      el("td", { texto: oc.tipo === "BIEN" ? "—" : (oc.vig_desde || "") + (oc.vig_hasta ? " a " + oc.vig_hasta : " (sin fin)") }),
       el("td", { clase: "numero", texto: oc.renglones }),
       el("td", { clase: "numero", texto: formatoPesos(oc.importe_centavos) }));
   });
@@ -623,6 +623,8 @@ const CAMPOS_OC_FORM = [
   ["motivo_exclusion", "Motivo de la exclusión", "texto"],
 ];
 
+const CAMPOS_PERIODO_OC = ["dia_inicio_periodo", "vig_desde", "vig_hasta", "prorroga"];
+
 function controlCampoOC(campo, tipo, valor) {
   const id = "oc-campo-" + campo;
   if (tipo === "casilla") return casilla(id, null, valor);
@@ -647,7 +649,9 @@ function valorCampoOC(campo, tipo) {
 function pintarFichaOC(ficha) {
   const { oc, proveedor, renglones, expedientes } = ficha;
   const manuales = new Set(oc.campos_manuales || []);
-  const campos = CAMPOS_OC_FORM.map(([campo, etiqueta, tipo]) => {
+  // Los bienes no tienen períodos: sin vigencia, prórroga ni día de inicio.
+  const camposVisibles = CAMPOS_OC_FORM.filter(([campo]) => oc.tipo !== "BIEN" || !CAMPOS_PERIODO_OC.includes(campo));
+  const campos = camposVisibles.map(([campo, etiqueta, tipo]) => {
     const control = controlCampoOC(campo, tipo, oc[campo]);
     const texto = etiqueta + (manuales.has(campo) ? " (editado a mano)" : "");
     if (tipo === "casilla") {
@@ -711,6 +715,7 @@ const CAMPOS_MONEDA_PDF = new Set(["precio_centavos", "importe_centavos", "desgl
 function valorPdf(campo, valor) {
   if (valor === null || valor === undefined || valor === "") return "—";
   if (CAMPOS_MONEDA_PDF.has(campo)) return "$ " + formatoPesos(valor);
+  if (campo === "cantidad" || campo === "desglose_cantidad") return String(valor).replace(".", ",");
   return String(valor);
 }
 
@@ -791,9 +796,10 @@ function pintarRevisionPdf(destino, comparacion, alTerminar) {
       valorNuevo.setAttribute("aria-label", "Artículo del objeto a guardar");
     }
     const tomar = c.distinto
-      ? casillaTomar(id, "Tomar del PDF: " + c.etiqueta, !c.manual || c.actual === "" || c.actual === null)
+      ? casillaTomar(id, "Tomar del PDF: " + c.etiqueta, c.automatico || !c.manual || c.actual === "" || c.actual === null)
       : el("span", { clase: "texto-suave", texto: "Igual" });
-    return el("tr", {}, el("td", {}, tomar), el("th", { scope: "row", texto: c.etiqueta + (c.manual ? " (editado a mano)" : "") }),
+    const nota = c.automatico ? " (automático)" : c.campo === "objeto" ? " (revisalo)" : c.manual ? " (editado a mano)" : "";
+    return el("tr", {}, el("td", {}, tomar), el("th", { scope: "row", texto: c.etiqueta + nota }),
       el("td", { texto: valorPdf(c.campo, c.actual) }), el("td", {}, valorNuevo));
   });
   partes.push(el("h5", { texto: "Datos de la OC" }),
@@ -804,7 +810,7 @@ function pintarRevisionPdf(destino, comparacion, alTerminar) {
   // Renglones
   const filasRenglones = [];
   for (const r of comparacion.renglones) {
-    const subrenglones = r.subrenglones.map((s) => "Subrenglón " + s.pos + ": " + s.cantidad + " " + s.unidad
+    const subrenglones = r.subrenglones.map((s) => "Subrenglón " + s.pos + ": " + valorPdf("cantidad", s.cantidad) + " " + s.unidad
       + (s.precio_centavos !== null ? " × $ " + formatoPesos(s.precio_centavos) : "")
       + (s.importe_centavos !== null ? " = $ " + formatoPesos(s.importe_centavos) : "")).join(" · ");
     const encabezado = el("th", { scope: "row", rowspan: String(Math.max(1, r.existe ? r.diferencias.length : 1)) },
@@ -883,6 +889,7 @@ async function guardarOC(evento) {
   const { oc } = ocEstado.ficha;
   const cambios = {};
   for (const [campo, , tipo] of CAMPOS_OC_FORM) {
+    if (!document.getElementById("oc-campo-" + campo)) continue;
     const valor = valorCampoOC(campo, tipo);
     const actual = oc[campo] ?? (tipo === "fecha" || tipo === "dia" ? null : "");
     if (valor !== actual) cambios[campo] = valor;
@@ -2253,6 +2260,10 @@ async function listarPendientes() {
 const CAMPOS_PARAMETROS = [
   { id: "par-centros-hbi", etiqueta: "Centros SAP del HBI", clave: "efectores", ruta: ["HBI", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
   { id: "par-centros-casph", etiqueta: "Centros SAP del CASPH", clave: "efectores", ruta: ["CASPH", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
+  { id: "par-oc-casph", etiqueta: "OC asignadas al CASPH aunque tengan otro centro", clave: "efectores", ruta: ["CASPH", "oc_asignadas"],
+    tipo: "lista", ayuda: "Por ejemplo, las centralizadas imputadas a Hurlingham (centro 0010 o 1900). Al importar van al CASPH y nunca al HBI. Números separados por coma." },
+  { id: "par-oc-hbi", etiqueta: "OC asignadas al HBI aunque tengan otro centro", clave: "efectores", ruta: ["HBI", "oc_asignadas"],
+    tipo: "lista", ayuda: "Al importar van al HBI y nunca al CASPH. Números separados por coma." },
   { id: "par-partidas", etiqueta: "Partidas excluidas", clave: "partidas_excluidas", ruta: [], tipo: "lista", ayuda: "Las OC con estas partidas no se importan." },
   { id: "par-excl-sap", etiqueta: "Proveedores excluidos (SAP)", clave: "exclusiones", ruta: ["sap"], tipo: "lista" },
   { id: "par-excl-oc", etiqueta: "OC excluidas", clave: "exclusiones", ruta: ["oc"], tipo: "lista" },
