@@ -244,6 +244,11 @@ def renglon_agregar(h, m, cuerpo):
     return 200, _ok(negocio.agregar_renglon(h.conexion(), m.group("numero"), leer_json(h, cuerpo)))
 
 
+def inicio_alertas(h, m, cuerpo):
+    q = _consulta(h)
+    return 200, _ok(negocio.alertas(h.conexion(), hoy=q.get("hoy") or None, integridad_ok=bool(h.server.integridad)))
+
+
 def calendario(h, m, cuerpo):
     q = _consulta(h)
     efector = q.get("efector") or None
@@ -364,6 +369,7 @@ RUTAS = [
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)/consumo"), oc_consumo),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)"), renglon_editar),
+    ("GET", re.compile(r"/api/inicio/alertas"), inicio_alertas),
     ("GET", re.compile(r"/api/calendario"), calendario),
     ("GET", re.compile(r"/api/expedientes"), expedientes_listar),
     ("POST", re.compile(r"/api/expedientes"), expediente_crear),

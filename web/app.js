@@ -157,6 +157,9 @@ function iniciarEfector() {
 
 // --- Inicio -----------------------------------------------------------------
 
+// Urgencia: ícono y palabra, además del color.
+const URGENCIAS = { 1: ["▲", "Urgente"], 2: ["■", "Atención"], 3: ["●", "Para mirar"] };
+
 async function cargarInicio() {
   const contenedor = document.getElementById("inicio-estado");
   cargando(contenedor);
@@ -167,19 +170,44 @@ async function cargarInicio() {
       el("p", { texto: "No se pudo abrir la base de datos. Revisá la ubicación en Configuración." })));
     return;
   }
-  const base = await api("GET", "/api/base/estado");
-  if (!base) { vaciar(contenedor); return; }
+  const [base, alertas] = [await api("GET", "/api/base/estado"), await api("GET", "/api/inicio/alertas")];
+  if (!base || !alertas) { vaciar(contenedor); return; }
   const partes = [];
-  if (base.integridad !== "ok") {
+  const errorBase = alertas.find((a) => a.tipo === "base_con_errores");
+  if (errorBase) {
     partes.push(el("div", { clase: "mensaje mensaje-error", role: "alert" },
-      el("p", { texto: "La base de datos tiene un problema de integridad." }),
-      el("button", { type: "button", texto: "Restaurar la última copia", onclick: restaurarUltimaCopia })));
+      el("p", { texto: errorBase.mensaje }),
+      el("button", { type: "button", texto: "Restaurar última copia", onclick: restaurarUltimaCopia })));
   }
-  partes.push(el("p", { texto: "Usuario: " + salud.usuario }));
-  partes.push(el("p", { texto: base.ultimo_backup
+  const resto = alertas.filter((a) => a.tipo !== "base_con_errores");
+  partes.push(el("h2", { texto: "Alertas" }));
+  if (!resto.length) {
+    partes.push(el("p", { clase: "texto-suave", texto: "No hay alertas: todo al día." }));
+  } else {
+    const cuenta = [1, 2, 3].map((u) => [u, resto.filter((a) => a.urgencia === u).length]).filter(([, n]) => n);
+    partes.push(el("p", { clase: "texto-suave", texto: cuenta.map(([u, n]) => n + " " + URGENCIAS[u][1].toLowerCase()).join(" · ") }));
+    partes.push(el("ul", { clase: "lista-alertas" }, ...resto.map(itemAlerta)));
+  }
+  partes.push(el("p", { clase: "texto-suave", texto: "Usuario: " + salud.usuario + " · " + (base.ultimo_backup
     ? "Última copia de seguridad: " + base.ultimo_backup
-    : "Todavía no hay copias de seguridad." }));
+    : "Todavía no hay copias de seguridad.") }));
   vaciar(contenedor, ...partes);
+}
+
+function itemAlerta(alerta) {
+  const [icono, palabra] = URGENCIAS[alerta.urgencia] || ["●", "Para mirar"];
+  const acciones = [];
+  if (alerta.expediente_id) {
+    acciones.push(el("button", { type: "button", clase: "secundario", texto: "Abrir expediente " + alerta.expediente_id,
+      onclick: () => { expEstado.exp = { id: alerta.expediente_id }; expEstado.paso = 7; mostrarPantalla("pantalla-expedientes", true); } }));
+  } else if (alerta.oc) {
+    acciones.push(el("button", { type: "button", clase: "secundario", texto: "Ver OC " + alerta.oc,
+      onclick: () => { ocEstado.ficha = { oc: { numero: alerta.oc } }; mostrarPantalla("pantalla-oc", true); } }));
+  }
+  return el("li", { clase: "alerta urgencia-" + alerta.urgencia },
+    el("span", { clase: "urgencia" }, el("span", { "aria-hidden": "true", texto: icono + " " }), palabra),
+    el("span", { clase: "alerta-mensaje", texto: alerta.mensaje }),
+    ...acciones);
 }
 
 async function restaurarUltimaCopia() {

@@ -260,3 +260,16 @@ input[aria-invalid="true"] { border-color: var(--error); }
 .cal-marca-vence_pronto { border: 2px solid var(--naranja); color: var(--naranja); background: var(--superficie); }
 .cal-marca-entrega_enviada, .cal-marca-centralizada_enviada { background: var(--superficie); color: var(--texto); }
 @media (prefers-reduced-motion: reduce) { .cal-celda { transition: none; } }
+
+/* Alertas de Inicio (paso 23): ícono y palabra por urgencia, además del color. */
+.lista-alertas { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+.alerta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--borde);
+  border-left: 4px solid var(--borde); border-radius: 6px; background: var(--superficie); }
+.alerta .urgencia { min-width: 110px; font-weight: 600; }
+.alerta-mensaje { flex: 1 1 320px; }
+.urgencia-1 { border-left-color: var(--error); background: var(--error-fondo); }
+.urgencia-1 .urgencia { color: var(--error); }
+.urgencia-2 { border-left-color: var(--aviso); background: var(--aviso-fondo); }
+.urgencia-2 .urgencia { color: var(--aviso); }
+.urgencia-3 { border-left-color: var(--info); }
+.urgencia-3 .urgencia { color: var(--info); }

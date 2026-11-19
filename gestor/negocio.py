@@ -1430,3 +1430,149 @@ def calendario(con, anio, efector=None, tipo=None, sap=None, hoy=None):
             "celdas": celdas,
         })
     return {"anio": anio, "hoy": util.iso(hoy), "estados": ESTADOS_CALENDARIO, "filas": filas}
+
+
+# --- Alertas de Inicio (paso 23) ---------------------------------------------
+
+MENSAJE_BASE_CON_ERRORES = ("La base de datos tiene errores de integridad. "
+                            "Restaurá la última copia de seguridad desde Configuración.")
+MENSAJE_INFORME_CORRECTIVOS = "Enviar a GESP el informe mensual de correctivos del mes anterior."
+
+
+def _alerta(tipo, urgencia, mensaje, oc=None, expediente_id=None, fecha=""):
+    return {"tipo": tipo, "urgencia": urgencia, "mensaje": mensaje, "oc": oc, "expediente_id": expediente_id,
+            "fecha": fecha or ""}
+
+
+def _enumerar(items):
+    items = list(items)
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " y " + items[-1]
+
+
+def dia_habil_del_mes(fecha):
+    """Número de día hábil (lunes a viernes) de `fecha` dentro de su mes; 0 si cae sábado o domingo."""
+    if fecha.weekday() >= 5:
+        return 0
+    return sum(1 for dia in range(1, fecha.day + 1) if fecha.replace(day=dia).weekday() < 5)
+
+
+def _oc_activas(con, hoy):
+    """OC no excluidas cuya vigencia no terminó (o sin fin cargado)."""
+    activas = []
+    for fila in con.execute("SELECT oc.*, p.razon_social FROM oc JOIN proveedor p ON p.sap = oc.sap "
+                            "WHERE oc.excluida = 0 ORDER BY oc.numero"):
+        oc = dict(fila)
+        fin = _fin_vigencia(oc)
+        try:
+            if fin and util.fecha_desde_texto(fin) < hoy:
+                continue
+        except ValueError:
+            pass
+        activas.append(oc)
+    return activas
+
+
+def _alertas_calendario(con, hoy):
+    alertas = []
+    atrasados = {}
+    for anio in (hoy.year - 1, hoy.year):
+        datos = calendario(con, anio, hoy=util.iso(hoy))
+        for fila in datos["filas"]:
+            periodos = [c for c in fila["celdas"] if c["estado"] == "atrasado"]
+            if periodos:
+                atrasados.setdefault(fila["oc"], (fila, []))[1].extend(periodos)
+            if anio == hoy.year and fila["vence_pronto"]:
+                dias = (util.fecha_desde_texto(fila["vig_hasta"]) - hoy).days
+                alertas.append(_alerta(
+                    "oc_por_vencer", 2,
+                    "La OC %s (%s) vence el %s (en %d días)." % (
+                        fila["oc"], fila["razon_social"], util.ddmmaaaa(util.fecha_desde_texto(fila["vig_hasta"])), dias),
+                    oc=fila["oc"], fecha=fila["vig_hasta"]))
+    for numero, (fila, celdas) in atrasados.items():
+        alertas.append(_alerta(
+            "periodo_atrasado", 1,
+            "OC %s (%s): sin expediente para %s, ya pasaron los días de gracia." % (
+                numero, fila["razon_social"], _enumerar(c["periodo"] for c in celdas)),
+            oc=numero, fecha=celdas[0]["hasta"]))
+    return alertas
+
+
+def _alertas_oc(con, hoy):
+    alertas = []
+    for oc in _oc_activas(con, hoy):
+        agotandose = [r for r in _consumo(con, oc) if r["por_agotarse"]]
+        if agotandose:
+            alertas.append(_alerta(
+                "renglon_por_agotarse", 2,
+                "OC %s (%s): %s por agotarse (%s)." % (
+                    oc["numero"], oc["razon_social"], "el renglón" if len(agotandose) == 1 else "los renglones",
+                    _enumerar("%d: saldo %s %s, %d%% consumido" % (r["pos"], r["saldo"], r["unidad"], r["pct_consumido"])
+                              for r in agotandose)),
+                oc=oc["numero"], fecha=_fin_vigencia(oc) or ""))
+        if oc["comodato"]:
+            con_equipo = False
+            for fila in con.execute("SELECT datos FROM expediente WHERE oc = ? AND estado <> 'ANULADO'", (oc["numero"],)):
+                remitos = _datos_de(dict(fila)).get("remitos") or []
+                if any(isinstance(r, dict) and r.get("es_equipo_comodato") for r in remitos):
+                    con_equipo = True
+                    break
+            if not con_equipo:
+                alertas.append(_alerta(
+                    "comodato_sin_equipo", 2,
+                    "OC %s (%s) con equipo en comodato: todavía no hay ningún expediente con el remito del equipo." % (
+                        oc["numero"], oc["razon_social"]),
+                    oc=oc["numero"], fecha=oc["vig_desde"] or ""))
+    return alertas
+
+
+def _descripcion_expediente(fila):
+    partes = ["Expediente %d" % fila["id"]]
+    if fila["oc"]:
+        partes.append("OC %s" % fila["oc"])
+    if fila["razon_social"]:
+        partes.append(fila["razon_social"])
+    if fila["periodo"]:
+        partes.append("período %s" % fila["periodo"])
+    return partes[0] + (" (" + ", ".join(partes[1:]) + ")" if len(partes) > 1 else "")
+
+
+def _alertas_expedientes(con, hoy):
+    alertas = []
+    filas = con.execute(
+        "SELECT e.id, e.tipo, e.oc, e.periodo, e.estado, e.motivo_pendiente, e.fecha_seguimiento, e.entrega_id, "
+        "e.actualizado, p.razon_social FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap "
+        "WHERE e.estado IN ('PENDIENTE', 'FIRMADO', 'INFORME_ECONOMICO', 'EN_DTO_ECONOMICO_CONTABLE') ORDER BY e.id"
+    )
+    for fila in filas:
+        fila = dict(fila)
+        nombre = _descripcion_expediente(fila)
+        if fila["estado"] == "PENDIENTE" and fila["fecha_seguimiento"] and fila["fecha_seguimiento"] < util.iso(hoy):
+            alertas.append(_alerta(
+                "pendiente_vencido", 1,
+                "%s pendiente: %s. El seguimiento era el %s." % (
+                    nombre, fila["motivo_pendiente"] or "sin motivo",
+                    util.ddmmaaaa(util.fecha_desde_texto(fila["fecha_seguimiento"]))),
+                oc=fila["oc"], expediente_id=fila["id"], fecha=fila["fecha_seguimiento"]))
+        elif fila["estado"] == "FIRMADO" and fila["entrega_id"] is None:
+            alertas.append(_alerta("listo_sin_entrega", 3, "%s firmado y sin entrega asignada." % nombre,
+                                   oc=fila["oc"], expediente_id=fila["id"], fecha=fila["actualizado"][:10]))
+        elif (fila["tipo"], fila["estado"]) in (("CORRECTIVO", "INFORME_ECONOMICO"), ("EVENTUAL", "EN_DTO_ECONOMICO_CONTABLE")):
+            alertas.append(_alerta("esperando_devolucion", 2, "%s esperando la devolución del área económica." % nombre,
+                                   oc=fila["oc"], expediente_id=fila["id"], fecha=fila["actualizado"][:10]))
+    return alertas
+
+
+def alertas(con, hoy=None, integridad_ok=True):
+    """Alertas de la pantalla Inicio, ordenadas por urgencia (1 alta … 3 baja) y después por fecha."""
+    hoy = _fecha_hoy(hoy)
+    lista = []
+    if not integridad_ok:
+        lista.append(_alerta("base_con_errores", 1, MENSAJE_BASE_CON_ERRORES))
+    lista.extend(_alertas_calendario(con, hoy))
+    lista.extend(_alertas_oc(con, hoy))
+    lista.extend(_alertas_expedientes(con, hoy))
+    if 1 <= dia_habil_del_mes(hoy) <= 5:
+        lista.append(_alerta("informe_correctivos", 2, MENSAJE_INFORME_CORRECTIVOS, fecha=util.iso(hoy)))
+    lista.sort(key=lambda a: (a["urgencia"], a["tipo"] != "base_con_errores", a["fecha"], a["oc"] or "",
+                              a["expediente_id"] or 0))
+    return lista
