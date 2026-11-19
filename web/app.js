@@ -1291,6 +1291,31 @@ async function pintarPaso5() {
   } else if (textos.constancia_comodato_error) {
     partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "Constancia de comodato: " + textos.constancia_comodato_error })));
   }
+  if (textos.sap) {
+    const { ingreso, contabilizada, entrada } = textos.sap;
+    partes.push(el("h4", { texto: "Textos para SAP" }));
+    if (ingreso.aviso_largo) partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: ingreso.aviso_largo })));
+    const fila = (etiqueta, valor) => el("tr", {},
+      el("th", { scope: "row", texto: etiqueta }),
+      el("td", { clase: "mono", texto: valor }),
+      el("td", {}, el("button", { type: "button", clase: "secundario", texto: "Copiar",
+        "aria-label": "Copiar " + etiqueta, onclick: () => copiarTexto(valor) })));
+    partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {}, el("tbody", {},
+      fila("Ingreso: fecha de documento", ingreso.fecha_documento),
+      fila("Ingreso: importe", ingreso.importe),
+      fila("Ingreso: Texto (" + ingreso.largo_texto + " caracteres)", ingreso.texto),
+      fila("Ingreso: asignación", ingreso.asignacion),
+      fila("Ingreso: TXT cabecera", ingreso.txt_cabecera),
+      fila("Ingreso: clase", ingreso.clase),
+      fila("Contabilizada: TXT cabecera", contabilizada.txt_cabecera),
+      fila(entrada.transaccion + ": fecha de documento", entrada.fecha_documento),
+      fila(entrada.transaccion + ": fecha de contabilización", entrada.fecha_contabilizacion),
+      fila(entrada.transaccion + ": período", entrada.periodo),
+      fila(entrada.transaccion + ": texto breve", entrada.texto_breve),
+      ...entrada.renglones.map((r) => fila(entrada.transaccion + ": cantidad renglón " + r.pos, r.cantidad))))));
+  } else if (textos.sap_error) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "Textos SAP: " + textos.sap_error })));
+  }
   partes.push(el("h4", { texto: "Referencias GDE y nombres de archivo" }));
   partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {},
     el("thead", {}, el("tr", {}, ...["Referencia", "Archivo", ""].map((t) => el("th", { scope: "col", texto: t })))),

@@ -1023,6 +1023,8 @@ def contexto_textos(con, id_expediente):
     return {
         "efector": exp["efector"],
         "parametros_efector": (parametros.get("efectores") or {}).get(exp["efector"], {}),
+        "sigla": ((parametros.get("efectores") or {}).get(exp["efector"]) or {}).get("sigla") or exp["efector"],
+        "limite_texto_sap": int(parametros.get("limite_texto_sap", 50)),
         "destino": ((parametros.get("efectores") or {}).get(exp["efector"]) or {}).get("destino", ""),
         "nota_comodato": parametros.get("nota_comodato", ""),
         "sap": exp["sap"],
@@ -1036,6 +1038,12 @@ def contexto_textos(con, id_expediente):
         "dia_inicio": int(oc["dia_inicio_periodo"]) if oc else 1,
         "remitos": [r["numero"] for r in remitos if not r.get("es_equipo_comodato")],
         "remito_equipo": equipo,
+        "fecha_base_remitos": max(
+            (fecha_base(r) for r in remitos if not r.get("es_equipo_comodato") and fecha_base(r)), default=None),
+        "cantidades": [
+            {"pos": pos, "cantidad": _cantidad_texto(cantidad)}
+            for pos, cantidad in sorted(cantidades_del_expediente(exp).items())
+        ],
         "orden_remito_equipo": (datos.get("gde") or {}).get("orden_remito_equipo") or None,
         "comodato": bool(oc["comodato"]) if oc else False,
         "primera_validacion": primera,
@@ -1057,6 +1065,10 @@ def textos_del_expediente(con, id_expediente):
         resultado["autorizacion"] = textos.autorizacion(ctx)
     except textos.TextoIncompleto as error:
         resultado["autorizacion_error"] = str(error)
+    try:
+        resultado["sap"] = textos.textos_sap(ctx, ctx["limite_texto_sap"])
+    except textos.TextoIncompleto as error:
+        resultado["sap_error"] = str(error)
     if ctx["comodato"] and ctx["primera_validacion"] and ctx["remito_equipo"]:
         try:
             resultado["constancia_comodato"] = textos.constancia_comodato(ctx)

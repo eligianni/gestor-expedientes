@@ -151,3 +151,55 @@ def constancia_comodato(ctx):
     )
     referencia = "%sCONSTANCIA DE RECEPCIÓN: EQUIPO EN COMODATO - OC %s, %s" % (_prefijo(ctx), ctx["oc"], ctx["razon"])
     return {"referencia": referencia, "cuerpo": cuerpo}
+
+
+# --- Textos para SAP -------------------------------------------------------
+
+def _fecha_sap_iso(iso):
+    return util.fecha_sap(util.fecha_desde_texto(iso))
+
+
+def textos_sap(ctx, limite):
+    """Ingreso, contabilizada y entrada (MIGO / ML81N) del expediente."""
+    _requerir(ctx, "oc", "periodo")
+    concepto = (ctx.get("concepto_corto") or "").strip()
+    if not concepto:
+        raise TextoIncompleto("Falta el concepto corto (Texto SAP) en la OC %s." % ctx["oc"])
+    if ctx.get("centavos") in (None, ""):
+        raise TextoIncompleto("Falta cargar el importe de la factura.")
+    if not ctx.get("fecha_base_remitos"):
+        raise TextoIncompleto("Falta cargar al menos un remito con fecha.")
+    sigla = ctx.get("sigla") or ctx.get("efector") or "HBI"
+    anio, mes = ctx["periodo"].split("-")
+    mm_barra_aa = util.mm_barra_aa(ctx["periodo"])
+    fecha_documento = "01.%s.%s" % (mes, anio)
+    texto = "%s - OC %s - %s - %s" % (sigla, ctx["oc"], concepto, mm_barra_aa)
+    largo = len(texto)
+    if int(ctx.get("dia_inicio") or 1) == 1:
+        periodo = "%s/%s" % (mes, anio)
+    else:
+        if not ctx.get("periodo_desde") or not ctx.get("periodo_hasta"):
+            raise TextoIncompleto("Faltan las fechas desde y hasta del período.")
+        periodo = "%s - %s" % (_fecha_sap_iso(ctx["periodo_desde"]), _fecha_sap_iso(ctx["periodo_hasta"]))
+    return {
+        "ingreso": {
+            "fecha_documento": fecha_documento,
+            "importe": util.formato_pesos(int(ctx["centavos"])),
+            "texto": texto,
+            "largo_texto": largo,
+            "aviso_largo": ("El Texto tiene %d caracteres; el límite configurado es %d." % (largo, limite)
+                            if largo > limite else None),
+            "asignacion": "OC %s" % ctx["oc"],
+            "txt_cabecera": "0000-0000-0000000-0",
+            "clase": "KE",
+        },
+        "contabilizada": {"txt_cabecera": "%s %s OC %s" % (mm_barra_aa, sigla, ctx["oc"])},
+        "entrada": {
+            "transaccion": "MIGO" if ctx.get("tipo_oc") in ("BIEN", "PROVISION") else "ML81N",
+            "fecha_documento": fecha_documento,
+            "fecha_contabilizacion": _fecha_sap_iso(ctx["fecha_base_remitos"]),
+            "renglones": [dict(r) for r in ctx.get("cantidades") or []],
+            "periodo": periodo,
+            "texto_breve": "%s - %s" % (concepto, mm_barra_aa),
+        },
+    }
