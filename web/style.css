@@ -225,3 +225,11 @@ textarea { font-family: var(--fuente-mono); font-size: 15px; min-height: 120px; 
 .resumen-controles { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 0; list-style: none; }
 .nota-guardada { color: var(--exito); font-weight: 600; }
 .texto-generado { text-align: justify; max-width: 820px; white-space: pre-line; }
+a.boton { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 16px; border: 1px solid var(--primario);
+  border-radius: 4px; background: var(--primario); color: var(--primario-texto); font-weight: 600; text-decoration: none;
+  transition: background-color 120ms ease-out; }
+a.boton:hover { background: var(--primario-hover); }
+a.boton.secundario { background: var(--superficie); color: var(--primario); }
+a.boton.secundario:hover { background: var(--fondo); }
+input[aria-invalid="true"] { border-color: var(--error); }
+@media (prefers-reduced-motion: reduce) { a.boton { transition: none; } }

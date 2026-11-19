@@ -296,6 +296,23 @@ def expediente_autorizacion_docx(h, m, cuerpo):
     return 200, Archivo(contenido, TIPO_DOCX, autorizacion["archivo"])
 
 
+def expediente_estado(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.cambiar_estado(
+        h.conexion(), m.group("id"), datos.get("version"), datos.get("estado"),
+        datos.get("motivo", ""), datos.get("fecha_seguimiento"),
+    ))
+
+
+def expediente_reanudar(h, m, cuerpo):
+    return 200, _ok(negocio.reanudar_expediente(h.conexion(), m.group("id"), leer_json(h, cuerpo).get("version")))
+
+
+def expediente_gde(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.guardar_gde(h.conexion(), m.group("id"), datos.get("version"), datos.get("gde")))
+
+
 def comprobantes_analizar(h, m, cuerpo):
     texto = leer_json(h, cuerpo).get("texto")
     if not isinstance(texto, str) or not texto.strip():
@@ -348,6 +365,9 @@ RUTAS = [
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/controles"), expediente_controles),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/notas"), expediente_nota),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/textos"), expediente_textos),
+    ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/estado"), expediente_estado),
+    ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/reanudar"), expediente_reanudar),
+    ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/autorizacion\.docx"), expediente_autorizacion_docx),
 ]

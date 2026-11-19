@@ -824,7 +824,7 @@ function mostrarPaso(paso) {
     if (n === paso) boton.setAttribute("aria-current", "step"); else boton.removeAttribute("aria-current");
     boton.disabled = !expEstado.exp && n !== 1;
   }
-  const pintores = { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4, 5: pintarPaso5 };
+  const pintores = { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4, 5: pintarPaso5, 6: pintarPaso6, 7: pintarPaso7 };
   if (pintores[paso]) pintores[paso]();
 }
 
@@ -1278,7 +1278,16 @@ async function pintarPaso5() {
       el("p", { clase: "texto-suave", texto: "Completá los datos que faltan (ver el mensaje de arriba) para generar los textos." }));
     return;
   }
-  const partes = [el("h3", { texto: "5. Textos" }), bloqueTexto("Carátula", textos.caratula, false)];
+  const base = "/api/expedientes/" + expEstado.exp.id;
+  const partes = [
+    el("h3", { texto: "5. Documentos y textos" }),
+    el("div", { clase: "acciones" },
+      el("a", { clase: "boton", href: base + "/cv.docx", download: "", texto: "Descargar certificado de validación (.docx)" }),
+      textos.autorizacion
+        ? el("a", { clase: "boton secundario", href: base + "/autorizacion.docx", download: "", texto: "Descargar autorización (.docx)" })
+        : null),
+    bloqueTexto("Carátula", textos.caratula, false),
+  ];
   if (textos.autorizacion) {
     partes.push(bloqueTexto("Referencia de la autorización", textos.autorizacion.referencia, false));
     partes.push(bloqueTexto("Autorización de pago", textos.autorizacion.cuerpo, true));
@@ -1325,6 +1334,151 @@ async function pintarPaso5() {
       el("td", {}, el("button", { type: "button", clase: "secundario", texto: "Copiar",
         "aria-label": "Copiar la referencia " + r.referencia, onclick: () => copiarTexto(r.referencia) }))))))));
   vaciar(contenedor, ...partes);
+}
+
+// Paso 6: números GDE.
+
+const RE_GDE = /^(EX|IF|PV|RM|DOCFI|NO|ME|PROSA|IFGRA|ITFCO)-\d{4}-\d{6,9}-( -)?INSSJP-[A-Z0-9]+#INSSJP$/;
+const CAMPOS_GDE = [
+  ["expediente", "Expediente (EX)"], ["caratula", "Carátula"], ["factura", "Factura"], ["sii", "Carga en SII"],
+  ["oc_pdf", "PDF de la OC (vacío = el de la OC)"], ["remito_equipo", "Remito del equipo en comodato"], ["cv", "Certificado de validación"],
+  ["vale_hoja", "Vale / hoja de entrada"], ["autorizacion", "Autorización de pago"], ["constancia", "Constancia de comodato"],
+  ["contabilizacion", "Constancia de contabilización"],
+];
+
+/** Igual que util.normalizar_gde: mayúsculas, % → #, "-   -" → "- -" y sin el resto de los espacios. */
+function normalizarGde(texto) {
+  return String(texto || "").toUpperCase().replace(/%/g, "#").replace(/-\s+-/g, "-\u0000-").replace(/\s+/g, "").replace(/\u0000/g, " ");
+}
+
+function entradaGde(id, etiqueta, valor) {
+  const control = entrada(valor || "", { id, clase: "mono", autocomplete: "off", spellcheck: "false" });
+  const ayuda = el("p", { id: id + "-estado", clase: "texto-suave", "aria-live": "polite" });
+  control.setAttribute("aria-describedby", id + "-estado");
+  const revisar = () => {
+    const normalizado = normalizarGde(control.value);
+    if (!control.value.trim()) { ayuda.textContent = ""; control.removeAttribute("aria-invalid"); return; }
+    if (RE_GDE.test(normalizado)) {
+      ayuda.textContent = "✓ Válido: " + normalizado;
+      control.removeAttribute("aria-invalid");
+    } else {
+      ayuda.textContent = "✗ Formato no válido (por ejemplo IF-2026-90061259-INSSJP-GESP#INSSJP).";
+      control.setAttribute("aria-invalid", "true");
+    }
+  };
+  control.addEventListener("input", revisar);
+  revisar();
+  return el("div", { clase: "campo campo-ancho" }, el("label", { for: id, texto: etiqueta }), control, ayuda);
+}
+
+function pintarPaso6() {
+  const contenedor = document.getElementById("asistente-paso-6");
+  const exp = expEstado.exp;
+  const gde = exp.datos.gde || {};
+  const remitos = exp.datos.remitos.filter((r) => !r.es_equipo_comodato);
+  const campos = CAMPOS_GDE.map(([clave, etiqueta]) => entradaGde("gde-" + clave, etiqueta, gde[clave]));
+  const orden = campoFormulario("gde-orden", "Orden del remito del equipo en el expediente",
+    entrada(gde.orden_remito_equipo ?? "", { type: "number", min: "1", inputmode: "numeric", clase: "entrada-corta" }));
+  const remitosGde = remitos.map((r, i) => entradaGde("gde-remito-" + i, "Remito " + r.numero, (gde.remitos || {})[r.numero]));
+  vaciar(contenedor,
+    el("h3", { texto: "6. Números de GDE" }),
+    el("form", { clase: "formulario", novalidate: true, onsubmit: guardarGde },
+      ...campos.slice(0, 5),
+      remitosGde.length ? el("h4", { texto: "Remitos" }) : null,
+      ...remitosGde,
+      ...campos.slice(5),
+      orden,
+      el("div", { clase: "acciones" },
+        el("button", { type: "submit", texto: "Guardar números GDE" }),
+        el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 7", onclick: () => mostrarPaso(7) }))));
+}
+
+async function guardarGde(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const exp = expEstado.exp;
+  const gde = {};
+  for (const [clave] of CAMPOS_GDE) gde[clave] = document.getElementById("gde-" + clave).value.trim();
+  gde.remitos = {};
+  exp.datos.remitos.filter((r) => !r.es_equipo_comodato).forEach((r, i) => {
+    const valor = document.getElementById("gde-remito-" + i).value.trim();
+    if (valor) gde.remitos[r.numero] = valor;
+  });
+  gde.orden_remito_equipo = document.getElementById("gde-orden").value.trim() || null;
+  estado.recargar = () => abrirExpediente(exp.id, 6);
+  const actualizado = await api("PUT", "/api/expedientes/" + exp.id + "/gde", { version: exp.version, gde });
+  if (!actualizado) return;
+  expEstado.exp = actualizado;
+  pintarEncabezadoAsistente();
+  pintarPaso6();
+  mostrarAviso("Números GDE guardados.", "exito");
+}
+
+// Paso 7: estado.
+
+const TRANSICIONES_COMUN = {
+  BORRADOR: ["CONTROLADO"], CONTROLADO: ["EN_FIRMA", "BORRADOR"], EN_FIRMA: ["FIRMADO", "CONTROLADO"],
+  FIRMADO: [], ENVIADO: ["CONTABILIZADO"], CONTABILIZADO: ["CERRADO"],
+};
+const ESTADOS_FINALES = ["CERRADO", "ANULADO", "FINALIZADO"];
+
+function pintarPaso7() {
+  const contenedor = document.getElementById("asistente-paso-7");
+  const exp = expEstado.exp;
+  const partes = [el("h3", { texto: "7. Estado" }),
+    el("p", { texto: "Estado actual: " + (ESTADOS_TEXTO[exp.estado] || exp.estado) })];
+  if (exp.estado === "PENDIENTE") {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" },
+      el("p", { texto: "Pendiente: " + exp.motivo_pendiente + " · seguimiento " + (exp.fecha_seguimiento || "") })),
+      el("div", { clase: "acciones" }, el("button", { type: "button", texto: "Reanudar", onclick: reanudar })));
+  } else if (!ESTADOS_FINALES.includes(exp.estado)) {
+    const destinos = TRANSICIONES_COMUN[exp.estado] || [];
+    if (exp.estado === "FIRMADO") {
+      partes.push(el("p", { clase: "texto-suave", texto: "Para marcarlo como enviado, asignalo a una entrega." }));
+    }
+    partes.push(el("div", { clase: "acciones" }, ...destinos.map((destino) => el("button", { type: "button",
+      clase: destino === "BORRADOR" || destino === "CONTROLADO" && exp.estado === "EN_FIRMA" ? "secundario" : null,
+      texto: "Pasar a " + (ESTADOS_TEXTO[destino] || destino), onclick: () => cambiarEstado(destino) }))));
+    partes.push(el("form", { clase: "formulario panel", novalidate: true, onsubmit: marcarPendiente },
+      el("h4", { texto: "Dejar pendiente" }),
+      campoFormulario("pend-motivo", "Motivo", entrada("")),
+      campoFormulario("pend-fecha", "Fecha de seguimiento", entrada("", { type: "date" })),
+      el("div", { clase: "acciones" }, el("button", { type: "submit", clase: "secundario", texto: "Dejar pendiente" }))));
+  }
+  const historial = (exp.datos.historial || []).slice().reverse();
+  partes.push(el("h4", { texto: "Historial" }));
+  partes.push(tabla(["Fecha", "Usuario", "Acción", "Estado"],
+    historial.map((h) => [formatoFechaHora(h.fecha), h.usuario, h.accion + (h.motivo ? " (" + h.motivo + ")" : ""),
+      (h.desde ? (ESTADOS_TEXTO[h.desde] || h.desde) + " → " : "") + (ESTADOS_TEXTO[h.estado] || h.estado)])));
+  vaciar(contenedor, ...partes);
+}
+
+async function enviarEstado(ruta, cuerpo, mensaje) {
+  limpiarAvisos();
+  const exp = expEstado.exp;
+  estado.recargar = () => abrirExpediente(exp.id, 7);
+  const actualizado = await api("POST", "/api/expedientes/" + exp.id + ruta, Object.assign({ version: exp.version }, cuerpo));
+  if (!actualizado) return;
+  expEstado.exp = actualizado;
+  pintarEncabezadoAsistente();
+  pintarPaso7();
+  mostrarAviso(mensaje, "exito");
+}
+
+function cambiarEstado(destino) {
+  return enviarEstado("/estado", { estado: destino }, "Expediente en " + (ESTADOS_TEXTO[destino] || destino) + ".");
+}
+
+function marcarPendiente(evento) {
+  evento.preventDefault();
+  const motivo = document.getElementById("pend-motivo").value.trim();
+  const fecha = document.getElementById("pend-fecha").value;
+  if (!motivo || !fecha) { limpiarAvisos(); mostrarAviso("Indicá el motivo y la fecha de seguimiento.", "error"); return; }
+  return enviarEstado("/estado", { estado: "PENDIENTE", motivo, fecha_seguimiento: fecha }, "Expediente pendiente.");
+}
+
+function reanudar() {
+  return enviarEstado("/reanudar", {}, "Expediente reanudado.");
 }
 
 function iniciarExpedientes() {

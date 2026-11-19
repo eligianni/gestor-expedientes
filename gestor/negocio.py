@@ -1174,3 +1174,148 @@ def datos_autorizacion(con, id_expediente):
     autorizacion = textos.autorizacion(contexto_textos(con, id_expediente))
     autorizacion["archivo"] = _nombre_docx(autorizacion["referencia"])
     return autorizacion
+
+
+# --- Estados ---------------------------------------------------------------
+
+TRANSICIONES_COMUN = {
+    "BORRADOR": ["CONTROLADO"],
+    "CONTROLADO": ["EN_FIRMA", "BORRADOR"],
+    "EN_FIRMA": ["FIRMADO", "CONTROLADO"],
+    "FIRMADO": ["ENVIADO"],
+    "ENVIADO": ["CONTABILIZADO"],
+    "CONTABILIZADO": ["CERRADO"],
+}
+ESTADOS_FINALES = ("CERRADO", "ANULADO", "FINALIZADO")
+ESTADOS_CONOCIDOS = tuple(sorted(
+    set(TRANSICIONES_COMUN) | {e for destinos in TRANSICIONES_COMUN.values() for e in destinos} | {"PENDIENTE", "ANULADO"}
+))
+
+
+def _transiciones(tipo):
+    """Flujo de estados del tipo de expediente (correctivo y eventual agregan los suyos en los pasos 28 y 29)."""
+    return TRANSICIONES_COMUN
+
+
+def _no_cumple_controlado(con, id_expediente):
+    resumen = controles.controlar(con, id_expediente)["resumen"]
+    sin_nota = resumen["salvable"] - resumen["salvable_con_nota"]
+    if resumen["error"] or sin_nota:
+        return "No se puede pasar a CONTROLADO: hay %d errores y %d salvables sin nota." % (resumen["error"], sin_nota)
+    return None
+
+
+def cambiar_estado(con, id_expediente, version, estado, motivo="", fecha_seguimiento=None):
+    """Cambia el estado según el flujo del tipo; PENDIENTE pide motivo y fecha de seguimiento y recuerda el estado previo."""
+    version = _version(version)
+    if not isinstance(estado, str) or estado not in ESTADOS_CONOCIDOS:
+        raise ErrorValidacion("Estado desconocido: %s." % estado)
+    if estado == "ANULADO":
+        raise ErrorNegocio("Para anular usá la opción Anular, que pide el motivo.")
+    if estado == "ENVIADO":
+        raise ErrorNegocio("Asigná el expediente a una entrega para marcarlo como enviado.")
+    motivo = motivo.strip() if isinstance(motivo, str) else ""
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        previo = actual["estado"]
+        cambios = {"estado": estado}
+        extra = {}
+        if estado == "PENDIENTE":
+            if previo in ESTADOS_FINALES or previo == "PENDIENTE":
+                raise ErrorNegocio("No se puede pasar de %s a PENDIENTE." % previo)
+            if not motivo:
+                raise ErrorValidacion("Indicá el motivo por el que queda pendiente.")
+            seguimiento = _fecha(fecha_seguimiento, "de seguimiento", permitir_vacio=False)
+            cambios.update(motivo_pendiente=motivo, fecha_seguimiento=seguimiento)
+            extra = {"estado_previo": previo, "motivo": motivo, "fecha_seguimiento": seguimiento}
+        else:
+            if estado not in _transiciones(actual["tipo"]).get(previo, []):
+                raise ErrorNegocio("No se puede pasar de %s a %s." % (previo, estado))
+            if estado == "CONTROLADO":
+                mensaje = _no_cumple_controlado(con, actual["id"])
+                if mensaje:
+                    raise ErrorNegocio(mensaje)
+        contenido = _datos_de(actual)
+        entrada = _entrada_historial("ESTADO", estado)
+        entrada.update(extra)
+        entrada.setdefault("desde", previo)
+        contenido["historial"].append(entrada)
+        cambios.update(datos=contenido, actualizado=db.ahora_utc())
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, cambios)
+    return obtener_expediente(con, id_expediente)
+
+
+def reanudar_expediente(con, id_expediente, version):
+    """Sale de PENDIENTE y vuelve al estado que tenía antes."""
+    version = _version(version)
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        if actual["estado"] != "PENDIENTE":
+            raise ErrorNegocio("El expediente no está pendiente.")
+        contenido = _datos_de(actual)
+        previo = next((h.get("estado_previo") for h in reversed(contenido["historial"]) if h.get("estado_previo")), None)
+        if previo is None:
+            raise ErrorNegocio("No se encontró el estado anterior al pendiente.")
+        entrada = _entrada_historial("REANUDAR", previo)
+        entrada["desde"] = "PENDIENTE"
+        contenido["historial"].append(entrada)
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, {
+            "estado": previo, "motivo_pendiente": "", "fecha_seguimiento": None,
+            "datos": contenido, "actualizado": db.ahora_utc(),
+        })
+    return obtener_expediente(con, id_expediente)
+
+
+# --- Números GDE -----------------------------------------------------------
+
+CLAVES_GDE = ("expediente", "caratula", "factura", "sii", "oc_pdf", "remitos", "remito_equipo", "orden_remito_equipo",
+              "cv", "vale_hoja", "autorizacion", "constancia", "contabilizacion")
+
+
+def _gde_valido(valor):
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return ""
+    if not isinstance(valor, str):
+        raise ErrorValidacion('El número GDE "%s" no tiene un formato válido.' % valor)
+    normalizado = util.normalizar_gde(valor)
+    if not util.validar_gde(normalizado):
+        raise ErrorValidacion('El número GDE "%s" no tiene un formato válido.' % valor.strip())
+    return normalizado
+
+
+def guardar_gde(con, id_expediente, version, gde):
+    """Reemplaza `datos.gde` con los números normalizados; `oc_pdf` vacío se toma de la OC."""
+    version = _version(version)
+    if not isinstance(gde, dict):
+        raise ErrorValidacion("Faltan los números GDE.")
+    desconocidas = [c for c in gde if c not in CLAVES_GDE]
+    if desconocidas:
+        raise ErrorValidacion("No se puede cargar: %s." % ", ".join(sorted(desconocidas)))
+    limpio = {}
+    for clave in CLAVES_GDE:
+        valor = gde.get(clave)
+        if clave == "remitos":
+            if valor is None:
+                valor = {}
+            if not isinstance(valor, dict):
+                raise ErrorValidacion("Los GDE de los remitos deben ser un objeto número → GDE.")
+            limpio[clave] = {str(numero): _gde_valido(g) for numero, g in valor.items() if _gde_valido(g)}
+        elif clave == "orden_remito_equipo":
+            limpio[clave] = None if valor in (None, "") else _entero(valor, "orden del remito del equipo", minimo=1)
+        else:
+            limpio[clave] = _gde_valido(valor)
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        if not limpio["oc_pdf"] and actual.get("oc"):
+            oc = db.leer_fila(con, "oc", {"numero": actual["oc"]})
+            if oc is not None and oc.get("gde_pdf_oc"):
+                limpio["oc_pdf"] = util.normalizar_gde(oc["gde_pdf_oc"])
+        contenido = _datos_de(actual)
+        contenido["gde"] = limpio
+        contenido["historial"].append(_entrada_historial("GDE", actual["estado"]))
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, {
+            "datos": contenido, "actualizado": db.ahora_utc(),
+        })
+    return obtener_expediente(con, id_expediente)
