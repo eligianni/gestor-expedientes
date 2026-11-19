@@ -391,6 +391,79 @@ function iniciarImportar() {
     document.getElementById("importar-confirmar").disabled = true;
   });
   document.getElementById("importar-centros-guardar").addEventListener("click", guardarCentros);
+  document.getElementById("form-migracion").addEventListener("submit", (e) => { e.preventDefault(); enviarMigracion(false); });
+  document.getElementById("migracion-confirmar").addEventListener("click", () => enviarMigracion(true));
+  for (const id of ["migracion-numeracion", "migracion-remitos"]) {
+    document.getElementById(id).addEventListener("change", () => { document.getElementById("migracion-confirmar").disabled = true; });
+  }
+}
+
+// --- Migración del seguimiento en Excel (NUMERACIÓN + solapa de remitos) ------------------------------------
+
+function formularioMigracion() {
+  const numeracion = document.getElementById("migracion-numeracion").files[0];
+  const remitos = document.getElementById("migracion-remitos").files[0];
+  if (!numeracion || !remitos) {
+    mostrarAviso("Elegí los dos archivos: la NUMERACIÓN y el seguimiento de remitos.", "error");
+    return null;
+  }
+  const datos = new FormData();
+  datos.append("numeracion", numeracion, numeracion.name);
+  datos.append("remitos", remitos, remitos.name);
+  return datos;
+}
+
+async function enviarMigracion(confirmar) {
+  limpiarAvisos();
+  const datos = formularioMigracion();
+  if (!datos) return;
+  if (confirmar && !confirm("¿Crear los expedientes de la vista previa? Se puede repetir: lo ya migrado no se duplica.")) return;
+  const destino = document.getElementById("migracion-resultado");
+  cargando(destino);
+  const informe = await api("POST", "/api/importar/seguimiento/" + (confirmar ? "confirmar" : "vista-previa"), datos);
+  if (!informe) { vaciar(destino); return; }
+  pintarMigracion(informe, confirmar);
+  document.getElementById("migracion-confirmar").disabled = confirmar || !informe.resumen.expedientes;
+  if (confirmar) {
+    mostrarAviso("Migración hecha: " + informe.resumen.creados + " expedientes creados.", "exito");
+    cargarHistorial();
+  }
+}
+
+function pintarMigracion(informe, confirmado) {
+  const r = informe.resumen;
+  const estados = Object.entries(r.por_estado).map(([e, n]) => (ESTADOS_TEXTO[e] || e) + ": " + n).join(" · ");
+  const partes = [
+    el("h3", { texto: confirmado ? "Migración realizada" : "Vista previa de la migración" }),
+    tabla(["Concepto", "Cantidad"], [
+      [confirmado ? "Expedientes creados" : "Expedientes a crear", confirmado ? r.creados : r.expedientes],
+      ["Por estado", estados || "—"],
+      ["Ya estaban en el gestor (no se duplican)", r.ya_existentes],
+      ["Remitos", r.remitos],
+      ["Con cantidades por renglón deducidas", r.con_cantidades],
+      ["Entregas nuevas", r.entregas_nuevas],
+      ["Filas que no se importan", r.no_importados],
+    ], [null, "numero"]),
+  ];
+  if (informe.hojas_ignoradas.length) {
+    partes.push(el("p", { clase: "texto-suave", texto: "Hojas que no se leen: " + informe.hojas_ignoradas.join(", ") + "." }));
+  }
+  if (informe.no_importados.length) {
+    partes.push(el("h4", { texto: "No se importan" }),
+      tabla(["Origen", "Fila", "Detalle", "Motivo"], informe.no_importados.map((x) => [x.origen, x.fila, x.detalle, x.motivo])));
+  }
+  const filas = informe.expedientes.map((p) => [
+    p.origen, p.entrega ?? "—", p.oc || "—", p.razon_social, p.periodo, p.factura || "—",
+    p.centavos !== null && p.centavos !== undefined ? formatoPesos(p.centavos) : "—",
+    p.ya_existe ? "Ya existe (N° " + p.ya_existe + ")" : (ESTADOS_TEXTO[p.estado] || p.estado),
+    p.remitos.join(" / ") || "—",
+    p.items.map((i) => "Rgl. " + i.pos + ": " + i.cantidad).join(", ") || "—",
+    p.avisos.join(" "),
+  ]);
+  partes.push(el("h4", { texto: "Expedientes" }),
+    tabla(["Origen", "Entrega", "OC", "Proveedor", "Período", "Factura", "Importe $", "Estado", "Remitos", "Cantidades", "Avisos"],
+      filas, [null, "numero", null, null, null, null, "numero"]));
+  vaciar(document.getElementById("migracion-resultado"), el("div", { clase: "panel" }, ...partes));
 }
 
 // --- Montos (sin float: todo en centavos enteros) ---------------------------

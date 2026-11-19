@@ -134,6 +134,27 @@ def leer_filas(origen):
     raise XlsxError(MENSAJE_INVALIDO)
 
 
+def leer_hojas(origen):
+    """[(nombre de la hoja, filas)] de todas las hojas, en el orden del libro (filas como en `leer_filas`)."""
+    if isinstance(origen, (bytes, bytearray)):
+        origen = io.BytesIO(origen)
+    try:
+        with zipfile.ZipFile(origen) as zf:
+            cadenas = _cadenas_compartidas(zf)
+            libro = ET.fromstring(zf.read("xl/workbook.xml"))
+            nombres = [h.get("name") or "" for h in libro.iter(_M + "sheet")]
+            resultado = []
+            for nombre, ruta in zip(nombres, _rutas_hojas(zf)):
+                try:
+                    raiz = ET.fromstring(zf.read(ruta))
+                except KeyError:
+                    continue
+                resultado.append((nombre, _filas_de_hoja(raiz, cadenas)))
+            return resultado
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, ValueError, IndexError, EOFError):
+        raise XlsxError(MENSAJE_INVALIDO) from None
+
+
 def leer_tabla(origen):
     """(encabezados, filas): la primera fila son los encabezados; cada fila siguiente es un dict encabezado → valor."""
     filas = leer_filas(origen)

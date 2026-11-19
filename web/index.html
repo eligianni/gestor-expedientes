@@ -191,6 +191,25 @@
           </div>
         </form>
         <div id="importar-resultado"></div>
+        <h2>Migrar el seguimiento en Excel</h2>
+        <form id="form-migracion" class="panel formulario" novalidate>
+          <p class="texto-suave">Crea los expedientes que ya se tramitaron: toma la NUMERACIÓN (todas las hojas de entrega) y la
+            solapa «HBI 20252026» del seguimiento de remitos, y los cruza por N° de factura. Primero mirá la vista previa;
+            se puede repetir sin duplicar.</p>
+          <div class="campo">
+            <label for="migracion-numeracion">NUMERACIÓN de proveedores (.xlsx)</label>
+            <input id="migracion-numeracion" name="numeracion" type="file" accept=".xlsx">
+          </div>
+          <div class="campo">
+            <label for="migracion-remitos">Seguimiento de remitos (.xlsx, con la solapa HBI 20252026)</label>
+            <input id="migracion-remitos" name="remitos" type="file" accept=".xlsx">
+          </div>
+          <div class="acciones">
+            <button type="submit" id="migracion-vista-previa">Vista previa</button>
+            <button type="button" id="migracion-confirmar" disabled>Confirmar migración</button>
+          </div>
+        </form>
+        <div id="migracion-resultado"></div>
         <h2>Importaciones anteriores</h2>
         <div id="importar-historial"><p>Cargando…</p></div>
       </section>

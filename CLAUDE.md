@@ -50,6 +50,7 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | `gestor/pdf_texto.py` | stdlib | base, archivos, otros módulos de `gestor` |
 | `gestor/oc_pdf.py` | `util` | base, archivos, `negocio` |
 | `gestor/tablas.py` | `util`, `xlsx_escritor` | escribir la base, `server` |
+| `gestor/migracion.py` | `db`, `util`, `xlsx`, `negocio` | `server` |
 | `gestor/textos.py`, `gestor/letras.py`, `gestor/util.py` | stdlib, `util`, `letras` | base, archivos, `negocio` |
 | `gestor/db.py` | stdlib | cualquier otro módulo de `gestor` salvo `config` |
 | `web/*` | nada externo (sin CDN); archivos propios en `web/` (la fuente en `web/fuentes/`) | llamar `fetch` fuera de `api()` |
@@ -69,6 +70,7 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | Tokens visuales | `:root` de `web/style.css` |
 | Texto de un PDF digital | `gestor/pdf_texto.py` → `texto_de_pdf` (sin OCR) |
 | Datos de la OC desde su PDF | `gestor/oc_pdf.py` → `leer_oc`; comparar/aplicar en `negocio.comparar_oc_pdf` / `aplicar_oc_pdf` |
+| Migración del seguimiento en Excel | `gestor/migracion.py` (NUMERACIÓN + solapa HBI 20252026 → expedientes, entregas) |
 | Pantalla Tablas y su Excel | `gestor/tablas.py` (columnas por tabla) + `web/app.js` (filtros, orden, vistas) |
 | Identidad de la app | `gestor/__init__.py` → `APP_ID = "gestor-expedientes"`, `__version__ = "0.1.0"` |
 
@@ -152,6 +154,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - La exportación de Tablas se envía con un `<form>` POST (no `fetch`) para que el navegador descargue el archivo.
 - Copias de seguridad: una al arrancar (rotan, `backups_a_conservar`) y una por día en `<carpeta_backups>/diarios`
   (`db.backup_diario`, hilo en `app.py` cada 30 min, `backups_diarios_a_conservar`). Restaurar usa solo las de arranque.
+- La migración crea expedientes ya tramitados directo en su estado (CERRADO, ENVIADO, PENDIENTE, BORRADOR) con
+  `periodo_manual = 1` e historial `MIGRACION`; reconoce lo ya migrado por factura + SAP (o OC + período si no hay
+  factura). Las hojas "ENTREGA (n)" con paréntesis son copias y se ignoran.
 - Todo archivo nuevo de `web/` se sirve solo si está en `server.ESTATICOS` (lista blanca); nunca desde internet.
 - `httpd.shutdown()` se llama desde otro thread (`POST /api/apagar`), nunca desde el que atiende.
 - En la prueba de concurrencia las funciones de `multiprocessing` van a nivel de módulo (Windows usa `spawn`).
