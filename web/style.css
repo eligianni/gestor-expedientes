@@ -288,3 +288,7 @@ fieldset { border: 1px solid var(--borde); border-radius: 6px; padding: 12px 16p
 /* Exportes (paso 26) */
 .exportes { margin: 8px 0 12px; }
 .exportes a.boton { min-width: 88px; justify-content: center; }
+
+/* Correctivo (paso 28) */
+.seccion-correctivo { margin-bottom: 16px; }
+.fila-presupuesto { display: flex; gap: 12px; flex-wrap: wrap; }

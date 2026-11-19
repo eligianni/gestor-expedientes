@@ -498,6 +498,7 @@ def obtener_expediente(con, id_expediente):
     fila["datos"] = _datos_de(fila)
     proveedor = db.leer_fila(con, "proveedor", {"sap": fila["sap"]}) if fila["sap"] else None
     fila["razon_social"] = proveedor["razon_social"] if proveedor else ""
+    fila["destinos"] = list(_transiciones(fila["tipo"]).get(fila["estado"], []))
     return fila
 
 
@@ -530,14 +531,15 @@ def crear_expediente(con, datos):
 
     contenido = copy.deepcopy(DATOS_INICIALES)
     contenido.update(copy.deepcopy(_validar_datos(datos.get("datos") or {})))
-    contenido["historial"] = [_entrada_historial("ALTA", "BORRADOR")]
+    estado_inicial = ESTADO_INICIAL.get(tipo, "BORRADOR")
+    contenido["historial"] = [_entrada_historial("ALTA", estado_inicial)]
     ahora = db.ahora_utc()
     fila = {
         "tipo": tipo,
         "efector": efector,
         "oc": numero_oc or None,
         "sap": sap,
-        "estado": "BORRADOR",
+        "estado": estado_inicial,
         "datos": contenido,
         "factura": numero_factura_normalizado((contenido.get("factura") or {}).get("numero")),
         "creado": ahora,
@@ -1056,6 +1058,11 @@ def contexto_textos(con, id_expediente):
         "expediente_contratacion": oc["expediente_contratacion"] if oc else "",
         "ca": oc["ca"] if oc else "",
         "tipo_expediente": exp["tipo"],
+        "procedimiento": (datos.get("correctivo") or {}).get("procedimiento") or "",
+        "objeto_correctivo": (datos.get("correctivo") or {}).get("objeto_correctivo") or "",
+        "presupuestos": (datos.get("correctivo") or {}).get("presupuestos") or [],
+        "monto_convalidado": (datos.get("correctivo") or {}).get("monto_convalidado"),
+        "importe_renglon_correctivo": _importe_renglon_correctivo(con, oc["numero"]) if oc else None,
         "leyenda_cv": (oc["leyenda_cv"] or "").strip() if oc else "",
         "doc_requerida_central": _lista_json(oc["doc_requerida_central"]) if oc else [],
     }
@@ -1083,6 +1090,14 @@ def textos_del_expediente(con, id_expediente):
             resultado["nota_central"] = textos.nota_central(ctx)
         except textos.TextoIncompleto as error:
             resultado["nota_central_error"] = str(error)
+    if ctx["tipo_expediente"] == "CORRECTIVO":
+        resultado["correctivo"] = _resumen_correctivo(con, ctx)
+        for clave, generador in (("referencia_correctivo", textos.referencia_correctivo),
+                                 ("informe_economico", textos.informe_economico)):
+            try:
+                resultado[clave] = generador(ctx)
+            except textos.TextoIncompleto as error:
+                resultado[clave + "_error"] = str(error)
     return resultado
 
 
@@ -1195,15 +1210,32 @@ TRANSICIONES_COMUN = {
     "ENVIADO": ["CONTABILIZADO"],
     "CONTABILIZADO": ["CERRADO"],
 }
+# Correctivo: nace en RECIBIDO_MANTENIMIENTO y desde CONTROLADO sigue el flujo común (volver atrás va a PARA_FACTURAR).
+TRANSICIONES_CORRECTIVO = {
+    "RECIBIDO_MANTENIMIENTO": ["INFORME_ECONOMICO"],
+    "INFORME_ECONOMICO": ["DEVUELTO"],
+    "DEVUELTO": ["PARA_FACTURAR"],
+    "PARA_FACTURAR": ["CONTROLADO"],
+}
+ESTADO_INICIAL = {"CORRECTIVO": "RECIBIDO_MANTENIMIENTO"}
 ESTADOS_FINALES = ("CERRADO", "ANULADO", "FINALIZADO")
-ESTADOS_CONOCIDOS = tuple(sorted(
-    set(TRANSICIONES_COMUN) | {e for destinos in TRANSICIONES_COMUN.values() for e in destinos} | {"PENDIENTE", "ANULADO"}
-))
 
 
 def _transiciones(tipo):
-    """Flujo de estados del tipo de expediente (correctivo y eventual agregan los suyos en los pasos 28 y 29)."""
+    """Flujo de estados del tipo de expediente (el pago eventual agrega el suyo en el paso 29)."""
+    if tipo == "CORRECTIVO":
+        flujo = dict(TRANSICIONES_COMUN)
+        flujo["CONTROLADO"] = ["EN_FIRMA", "PARA_FACTURAR"]
+        flujo.update(TRANSICIONES_CORRECTIVO)
+        return flujo
     return TRANSICIONES_COMUN
+
+
+def _estados_de(*flujos):
+    return {e for flujo in flujos for origen, destinos in flujo.items() for e in [origen] + list(destinos)}
+
+
+ESTADOS_CONOCIDOS = tuple(sorted(_estados_de(TRANSICIONES_COMUN, TRANSICIONES_CORRECTIVO) | {"PENDIENTE", "ANULADO"}))
 
 
 def _no_cumple_controlado(con, id_expediente):
@@ -1848,3 +1880,105 @@ def centralizadas_por_periodo(con, anio, efector=None):
             "checklist": datos.get("checklist") or {}, "enviada": centralizada_enviada(fila),
         })
     return {"anio": anio, "expedientes": expedientes}
+
+
+# --- Mantenimiento correctivo (paso 28) -------------------------------------------
+
+CLAVES_CORRECTIVO = ("procedimiento", "objeto_correctivo", "presupuestos", "informes", "monto_convalidado")
+
+
+def _importe_renglon_correctivo(con, numero_oc):
+    """Importe (centavos) de los renglones de la OC marcados es_correctivo; None si no hay ninguno."""
+    fila = con.execute("SELECT COUNT(*) AS n, COALESCE(SUM(importe_centavos), 0) AS total FROM renglon "
+                       "WHERE oc = ? AND es_correctivo = 1", (numero_oc,)).fetchone()
+    return int(fila["total"]) if fila["n"] else None
+
+
+def porcentaje_convalidado(monto_convalidado, importe_renglon):
+    """monto_convalidado / importe del renglón de correctivo × 100, entero half-up (None si falta un dato)."""
+    if monto_convalidado in (None, "") or not importe_renglon:
+        return None
+    return util.porcentaje_entero(int(monto_convalidado), int(importe_renglon))
+
+
+def _resumen_correctivo(con, ctx):
+    importe = ctx["importe_renglon_correctivo"]
+    return {
+        "importe_renglon": importe,
+        "monto_convalidado": ctx["monto_convalidado"],
+        "porcentaje_convalidado": porcentaje_convalidado(ctx["monto_convalidado"], importe),
+    }
+
+
+def _centavos_validos(valor, nombre):
+    if isinstance(valor, bool) or not isinstance(valor, int) or valor < 0:
+        raise ErrorValidacion("%s debe ser un importe en centavos (número entero, sin decimales)." % nombre)
+    return valor
+
+
+def _validar_correctivo(correctivo):
+    if not isinstance(correctivo, dict):
+        raise ErrorValidacion("Faltan los datos del correctivo.")
+    desconocidas = [c for c in correctivo if c not in CLAVES_CORRECTIVO]
+    if desconocidas:
+        raise ErrorValidacion("Campos desconocidos: %s." % ", ".join(sorted(desconocidas)))
+    presupuestos = correctivo.get("presupuestos") or []
+    if not isinstance(presupuestos, list):
+        raise ErrorValidacion("Los presupuestos deben ser una lista.")
+    limpios = []
+    for i, p in enumerate(presupuestos, start=1):
+        if not isinstance(p, dict):
+            raise ErrorValidacion("El presupuesto %d no es válido." % i)
+        limpios.append({"proveedor": _texto(p.get("proveedor") or "", "proveedor del presupuesto").strip(),
+                        "centavos": _centavos_validos(p.get("centavos"), "El presupuesto %d" % i)})
+    informes = correctivo.get("informes") or []
+    if not isinstance(informes, list):
+        raise ErrorValidacion("Los informes deben ser una lista de números GDE.")
+    monto = correctivo.get("monto_convalidado")
+    return {
+        "procedimiento": _texto(correctivo.get("procedimiento") or "", "procedimiento").strip(),
+        "objeto_correctivo": _texto(correctivo.get("objeto_correctivo") or "", "objeto del correctivo").strip(),
+        "presupuestos": limpios,
+        "informes": [g for g in (_gde_valido(i) for i in informes) if g],
+        "monto_convalidado": None if monto in (None, "") else _centavos_validos(monto, "El monto a convalidar"),
+    }
+
+
+def guardar_correctivo(con, id_expediente, version, correctivo):
+    """Guarda datos.correctivo de un expediente CORRECTIVO (presupuestos e importes en centavos, informes GDE)."""
+    version = _version(version)
+    nuevos = _validar_correctivo(correctivo)
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        if actual["tipo"] != "CORRECTIVO":
+            raise ErrorNegocio("El expediente %d no es un mantenimiento correctivo." % actual["id"])
+        contenido = _datos_de(actual)
+        contenido["correctivo"] = nuevos
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version,
+                                  {"datos": contenido, "actualizado": db.ahora_utc()})
+    return obtener_expediente(con, id_expediente)
+
+
+def informe_mensual_correctivos(con, mes):
+    """Correctivos (no anulados) del período `mes` para el informe mensual a GESP."""
+    mes = _periodo(mes)
+    filas = con.execute(
+        "SELECT e.id, e.oc, e.datos, p.razon_social FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap "
+        "WHERE e.tipo = 'CORRECTIVO' AND e.estado <> 'ANULADO' AND e.periodo = ? ORDER BY e.oc, e.id", (mes,),
+    )
+    resultado = []
+    for fila in filas:
+        fila = dict(fila)
+        datos = _datos_de(fila)
+        correctivo = datos.get("correctivo") or {}
+        resultado.append({
+            "id": fila["id"],
+            "expediente": (datos.get("gde") or {}).get("expediente") or "",
+            "oc": fila["oc"] or "",
+            "procedimiento": correctivo.get("procedimiento") or "",
+            "adjudicatario": fila["razon_social"] or "",
+            "detalle": correctivo.get("objeto_correctivo") or "",
+            "monto": correctivo.get("monto_convalidado"),
+        })
+    return resultado

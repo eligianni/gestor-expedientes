@@ -425,6 +425,15 @@ def expediente_centralizada(h, m, cuerpo):
     return 200, _ok(negocio.guardar_centralizada(h.conexion(), m.group("id"), datos.get("version"), datos.get("centralizada")))
 
 
+def correctivos_informe_mensual(h, m, cuerpo):
+    return 200, _ok(negocio.informe_mensual_correctivos(h.conexion(), _consulta(h).get("mes") or ""))
+
+
+def expediente_correctivo(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.guardar_correctivo(h.conexion(), m.group("id"), datos.get("version"), datos.get("correctivo")))
+
+
 def expediente_estado(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.cambiar_estado(
@@ -506,6 +515,8 @@ RUTAS = [
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/centralizada"), expediente_centralizada),
     ("GET", re.compile(r"/api/centralizadas"), centralizadas),
+    ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/correctivo"), expediente_correctivo),
+    ("GET", re.compile(r"/api/correctivos/informe-mensual"), correctivos_informe_mensual),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
     ("GET", re.compile(r"/api/exportes/(?P<nombre>[a-z0-9-]+)\.(?P<formato>[a-z]+)"), exporte),
     ("GET", re.compile(r"/api/entregas"), entregas_listar),

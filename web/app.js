@@ -782,6 +782,8 @@ async function crearOC(evento) {
 const ESTADOS_TEXTO = {
   BORRADOR: "Borrador", CONTROLADO: "Controlado", EN_FIRMA: "En firma", FIRMADO: "Firmado", ENVIADO: "Enviado",
   CONTABILIZADO: "Contabilizado", CERRADO: "Cerrado", PENDIENTE: "Pendiente", ANULADO: "Anulado",
+  RECIBIDO_MANTENIMIENTO: "Recibido de Mantenimiento", INFORME_ECONOMICO: "Informe económico", DEVUELTO: "Devuelto",
+  PARA_FACTURAR: "Para facturar",
 };
 const TIPOS_EXPEDIENTE = [["COMUN", "Común"], ["CENTRALIZADA", "Centralizada"], ["CORRECTIVO", "Correctivo"], ["EVENTUAL", "Pago eventual"]];
 
@@ -1320,8 +1322,9 @@ async function pintarPaso5() {
   const contenedor = document.getElementById("asistente-paso-5");
   cargando(contenedor);
   const textos = await api("GET", "/api/expedientes/" + expEstado.exp.id + "/textos");
+  const correctivo = expEstado.exp.tipo === "CORRECTIVO" ? seccionCorrectivo(textos) : null;
   if (!textos) {
-    vaciar(contenedor, el("h3", { texto: "5. Textos" }),
+    vaciar(contenedor, el("h3", { texto: "5. Textos" }), correctivo,
       el("p", { clase: "texto-suave", texto: "Completá los datos que faltan (ver el mensaje de arriba) para generar los textos." }));
     return;
   }
@@ -1333,6 +1336,7 @@ async function pintarPaso5() {
       textos.autorizacion
         ? el("a", { clase: "boton secundario", href: base + "/autorizacion.docx", download: "", texto: "Descargar autorización (.docx)" })
         : null),
+    correctivo,
     bloqueTexto("Carátula", textos.caratula, false),
   ];
   if (textos.autorizacion) {
@@ -1461,6 +1465,99 @@ async function guardarGde(evento) {
   mostrarAviso("Números GDE guardados.", "exito");
 }
 
+// Paso 5, solo CORRECTIVO: presupuestos, informe económico (con Copiar) e informe mensual.
+
+function filaPresupuesto(p, indice) {
+  return el("div", { clase: "fila-presupuesto filtros" },
+    campoFormulario("pres-prov-" + indice, "Proveedor del presupuesto " + (indice + 1), entrada(p.proveedor || "", { autocomplete: "off" })),
+    campoFormulario("pres-monto-" + indice, "Importe $", entrada(p.centavos != null ? formatoPesos(p.centavos) : "",
+      { inputmode: "decimal", clase: "entrada-corta" })));
+}
+
+function seccionCorrectivo(textos) {
+  const exp = expEstado.exp;
+  const c = exp.datos.correctivo || {};
+  const presupuestos = (c.presupuestos && c.presupuestos.length ? c.presupuestos : [{}, {}]).slice();
+  const lista = el("div", { id: "correctivo-presupuestos" }, ...presupuestos.map(filaPresupuesto));
+  const formulario = el("form", { clase: "formulario panel", novalidate: true, onsubmit: guardarCorrectivo },
+    el("h4", { texto: "Mantenimiento correctivo" }),
+    campoFormulario("corr-procedimiento", "Procedimiento", entrada(c.procedimiento || "", { autocomplete: "off", placeholder: "CAM 12/2026" })),
+    campoFormulario("corr-objeto", "Objeto del correctivo", entrada(c.objeto_correctivo || "", { autocomplete: "off" })),
+    lista,
+    el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario", texto: "Agregar presupuesto", onclick: () => {
+      lista.append(filaPresupuesto({}, lista.childElementCount));
+    } })),
+    campoFormulario("corr-informes", "Informes (números GDE, uno por línea)",
+      Object.assign(el("textarea", { rows: "3" }), { value: (c.informes || []).join("\n") })),
+    campoFormulario("corr-monto", "Monto a convalidar $", entrada(c.monto_convalidado != null ? formatoPesos(c.monto_convalidado) : "",
+      { inputmode: "decimal", clase: "entrada-corta" })),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar correctivo" })));
+  const partes = [formulario];
+  if (textos && textos.correctivo && textos.correctivo.porcentaje_convalidado !== null) {
+    partes.push(el("p", { texto: "Convalidado: " + textos.correctivo.porcentaje_convalidado + " % del renglón de correctivo ($ "
+      + formatoPesos(textos.correctivo.importe_renglon) + ")." }));
+  }
+  if (textos && textos.referencia_correctivo) partes.push(bloqueTexto("Referencia del correctivo", textos.referencia_correctivo, false));
+  if (textos && textos.informe_economico) partes.push(bloqueTexto("Informe económico", textos.informe_economico, true));
+  for (const clave of ["referencia_correctivo_error", "informe_economico_error"]) {
+    if (textos && textos[clave]) partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: textos[clave] })));
+  }
+  const mes = entrada(exp.periodo || "", { inputmode: "numeric", clase: "entrada-corta", placeholder: "AAAA-MM" });
+  const resultado = el("div", { id: "correctivo-mensual" });
+  partes.push(el("form", { clase: "formulario panel", novalidate: true, onsubmit: (e) => { e.preventDefault(); informeMensualCorrectivos(mes.value.trim(), resultado); } },
+    el("h4", { texto: "Informe mensual de correctivos" }),
+    campoFormulario("corr-mes", "Mes (AAAA-MM)", mes),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", clase: "secundario", texto: "Ver informe del mes" })),
+    resultado));
+  return el("div", { clase: "seccion-correctivo" }, ...partes);
+}
+
+async function guardarCorrectivo(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const exp = expEstado.exp;
+  const presupuestos = [];
+  const filas = document.querySelectorAll("#correctivo-presupuestos .fila-presupuesto");
+  for (let i = 0; i < filas.length; i++) {
+    const proveedor = document.getElementById("pres-prov-" + i).value.trim();
+    const texto = document.getElementById("pres-monto-" + i).value;
+    const centavos = pesosACentavos(texto);
+    if (!proveedor && centavos === null) continue;
+    if (centavos === null || Number.isNaN(centavos)) { mostrarAviso("El importe del presupuesto " + (i + 1) + " no es válido.", "error"); return; }
+    presupuestos.push({ proveedor, centavos });
+  }
+  const monto = pesosACentavos(document.getElementById("corr-monto").value);
+  if (Number.isNaN(monto)) { mostrarAviso("El monto a convalidar no es válido.", "error"); return; }
+  const correctivo = {
+    procedimiento: document.getElementById("corr-procedimiento").value.trim(),
+    objeto_correctivo: document.getElementById("corr-objeto").value.trim(),
+    presupuestos,
+    informes: document.getElementById("corr-informes").value.split(/\n/).map((l) => l.trim()).filter(Boolean),
+    monto_convalidado: monto,
+  };
+  estado.recargar = () => abrirExpediente(exp.id, 5);
+  const actualizado = await api("PUT", "/api/expedientes/" + exp.id + "/correctivo", { version: exp.version, correctivo });
+  if (!actualizado) return;
+  expEstado.exp = actualizado;
+  pintarEncabezadoAsistente();
+  await pintarPaso5();
+  mostrarAviso("Correctivo guardado.", "exito");
+}
+
+async function informeMensualCorrectivos(mes, destino) {
+  limpiarAvisos();
+  const filas = await api("GET", "/api/correctivos/informe-mensual?mes=" + encodeURIComponent(mes));
+  if (!filas) { vaciar(destino); return; }
+  if (!filas.length) { vaciar(destino, el("p", { clase: "texto-suave", texto: "No hay correctivos con período " + mes + "." })); return; }
+  const lineas = filas.map((f) => [f.expediente || "N° " + f.id, f.oc, f.procedimiento, f.adjudicatario, f.detalle,
+    f.monto != null ? "$ " + formatoPesos(f.monto) : ""]);
+  const encabezados = ["Expediente", "OC", "Procedimiento", "Adjudicatario", "Detalle", "Monto"];
+  const comoTexto = [encabezados.join("\t"), ...lineas.map((l) => l.join("\t"))].join("\n");
+  vaciar(destino, tabla(encabezados, lineas),
+    el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario", texto: "Copiar tabla",
+      onclick: () => copiarTexto(comoTexto) })));
+}
+
 // Paso 7: estado.
 
 const TRANSICIONES_COMUN = {
@@ -1479,7 +1576,8 @@ function pintarPaso7() {
       el("p", { texto: "Pendiente: " + exp.motivo_pendiente + " · seguimiento " + (exp.fecha_seguimiento || "") })),
       el("div", { clase: "acciones" }, el("button", { type: "button", texto: "Reanudar", onclick: reanudar })));
   } else if (!ESTADOS_FINALES.includes(exp.estado)) {
-    const destinos = TRANSICIONES_COMUN[exp.estado] || [];
+    // los destinos los da el servidor según el tipo (ENVIADO solo por entrega)
+    const destinos = (exp.destinos || TRANSICIONES_COMUN[exp.estado] || []).filter((d) => d !== "ENVIADO");
     if (exp.estado === "FIRMADO") {
       partes.push(el("p", { clase: "texto-suave", texto: "Para marcarlo como enviado, asignalo a una entrega." }));
     }

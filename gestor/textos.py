@@ -183,6 +183,50 @@ def nota_central(ctx):
     return {"referencia": referencia, "cuerpo": cuerpo}
 
 
+# --- Mantenimiento correctivo ------------------------------------------------
+
+def referencia_correctivo(ctx):
+    """<sap> <razon> - OC <oc> - <procedimiento> - <objeto> - MANTENIMIENTO CORRECTIVO - <objeto_correctivo>."""
+    _requerir(ctx, "sap", "razon", "oc")
+    faltan = [nombre for clave, nombre in (
+        ("procedimiento", "el procedimiento del correctivo"),
+        ("objeto", "el objeto de la contratación de la OC"),
+        ("objeto_correctivo", "el objeto del correctivo"),
+    ) if not (ctx.get(clave) or "").strip()]
+    if faltan:
+        raise TextoIncompleto("Falta cargar " + ", ".join(faltan) + ".")
+    return "%s %s - OC %s - %s - %s - MANTENIMIENTO CORRECTIVO - %s" % (
+        ctx["sap"], ctx["razon"], ctx["oc"], ctx["procedimiento"].strip(), ctx["objeto"].strip(),
+        ctx["objeto_correctivo"].strip())
+
+
+def informe_economico(ctx):
+    """Informe económico del correctivo: líneas separadas por \n (presupuestos, diferencia y monto a convalidar)."""
+    _requerir(ctx, "sap", "razon", "oc")
+    if not (ctx.get("objeto_correctivo") or "").strip():
+        raise TextoIncompleto("Falta cargar el objeto del correctivo.")
+    montos = [int(p["centavos"]) for p in ctx.get("presupuestos") or []]
+    if len(montos) < 2:
+        raise TextoIncompleto("Cargá al menos dos presupuestos.")
+    if ctx.get("monto_convalidado") in (None, ""):
+        raise TextoIncompleto("Falta cargar el monto a convalidar.")
+    if not ctx.get("importe_renglon_correctivo"):
+        raise TextoIncompleto("Marcá en la OC %s el renglón de mantenimiento correctivo." % ctx["oc"])
+    menor, mayor = min(montos), max(montos)
+    monto, importe = int(ctx["monto_convalidado"]), int(ctx["importe_renglon_correctivo"])
+    lineas = [
+        "INFORME ECONÓMICO - MANTENIMIENTO CORRECTIVO",
+        "Orden de Compra N° %s - %s (SAP %s) - %s" % (ctx["oc"], ctx["razon"], ctx["sap"], ctx["objeto_correctivo"].strip()),
+        "Presupuesto menor: $ %s" % util.formato_pesos(menor),
+        "Presupuesto mayor: $ %s" % util.formato_pesos(mayor),
+        "Diferencia entre presupuestos: $ %s (%d %%)." % (
+            util.formato_pesos(mayor - menor), util.porcentaje_entero(mayor - menor, menor)),
+        "Monto a convalidar frente al renglón de correctivo: $ %s de $ %s (%d %%)." % (
+            util.formato_pesos(monto), util.formato_pesos(importe), util.porcentaje_entero(monto, importe)),
+    ]
+    return "\n".join(lineas)
+
+
 # --- Textos para SAP -------------------------------------------------------
 
 def _fecha_sap_iso(iso):

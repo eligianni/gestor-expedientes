@@ -216,3 +216,11 @@ def normalizar_gde(s):
 
 def validar_gde(s):
     return RE_GDE.fullmatch(normalizar_gde(s)) is not None
+
+
+def porcentaje_entero(parte, total):
+    """parte / total × 100 redondeado a entero (half-up); total 0 → 0. Acepta int o Decimal, nunca float."""
+    total = Decimal(total)
+    if total == 0:
+        return 0
+    return int((Decimal(parte) * 100 / total).to_integral_value(rounding=ROUND_HALF_UP))
