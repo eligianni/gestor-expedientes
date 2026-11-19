@@ -415,6 +415,16 @@ def exporte(h, m, cuerpo):
     return 200, Archivo(contenido, tipo, nombre, en_linea)
 
 
+def centralizadas(h, m, cuerpo):
+    q = _consulta(h)
+    return 200, _ok(negocio.centralizadas_por_periodo(h.conexion(), q.get("anio") or "", _efector_filtro(q.get("efector"))))
+
+
+def expediente_centralizada(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.guardar_centralizada(h.conexion(), m.group("id"), datos.get("version"), datos.get("centralizada")))
+
+
 def expediente_estado(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.cambiar_estado(
@@ -494,6 +504,8 @@ RUTAS = [
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/estado"), expediente_estado),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/reanudar"), expediente_reanudar),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
+    ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/centralizada"), expediente_centralizada),
+    ("GET", re.compile(r"/api/centralizadas"), centralizadas),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
     ("GET", re.compile(r"/api/exportes/(?P<nombre>[a-z0-9-]+)\.(?P<formato>[a-z]+)"), exporte),
     ("GET", re.compile(r"/api/entregas"), entregas_listar),

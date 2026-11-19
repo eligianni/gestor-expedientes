@@ -153,6 +153,36 @@ def constancia_comodato(ctx):
     return {"referencia": referencia, "cuerpo": cuerpo}
 
 
+# --- Nota a Central (centralizadas) ------------------------------------------
+
+def periodo_nota_central(ctx):
+    """Mes calendario → "08-2026"; período específico → "dd/mm/aaaa al dd/mm/aaaa"."""
+    _requerir(ctx, "periodo")
+    if int(ctx.get("dia_inicio") or 1) == 1:
+        anio, mes = ctx["periodo"].split("-")
+        return "%s-%s" % (mes, anio)
+    if not ctx.get("periodo_desde") or not ctx.get("periodo_hasta"):
+        raise TextoIncompleto("Faltan las fechas desde y hasta del período.")
+    return "%s al %s" % (util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_desde"])),
+                         util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_hasta"])))
+
+
+def nota_central(ctx):
+    """Nota a Central de una centralizada: {"referencia", "cuerpo"}; el cuerpo lista la documentación embebida."""
+    _requerir(ctx, "razon", "oc", "periodo")
+    if not ctx.get("expediente_contratacion"):
+        raise TextoIncompleto("Falta el expediente de la contratación en la OC %s." % ctx["oc"])
+    periodo = periodo_nota_central(ctx)
+    referencia = "VALIDACIÓN DE BIENES Y SERVICIOS %s - %s, período %s" % (
+        ctx["razon"], ctx["expediente_contratacion"], periodo)
+    cuerpo = (
+        "Se envían como archivos embebidos la validación del servicio y remito correspondientes al proveedor %s, "
+        "del %s, con orden de compra %s, período %s." % (ctx["razon"], ctx["expediente_contratacion"], ctx["oc"], periodo)
+    )
+    cuerpo += "\nDocumentación embebida:" + "".join("\n- %s" % doc for doc in ctx.get("doc_requerida_central") or [])
+    return {"referencia": referencia, "cuerpo": cuerpo}
+
+
 # --- Textos para SAP -------------------------------------------------------
 
 def _fecha_sap_iso(iso):

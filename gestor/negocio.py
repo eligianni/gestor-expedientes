@@ -1055,6 +1055,9 @@ def contexto_textos(con, id_expediente):
         "expediente": (datos.get("gde") or {}).get("expediente") or "",
         "expediente_contratacion": oc["expediente_contratacion"] if oc else "",
         "ca": oc["ca"] if oc else "",
+        "tipo_expediente": exp["tipo"],
+        "leyenda_cv": (oc["leyenda_cv"] or "").strip() if oc else "",
+        "doc_requerida_central": _lista_json(oc["doc_requerida_central"]) if oc else [],
     }
 
 
@@ -1075,6 +1078,11 @@ def textos_del_expediente(con, id_expediente):
             resultado["constancia_comodato"] = textos.constancia_comodato(ctx)
         except textos.TextoIncompleto as error:
             resultado["constancia_comodato_error"] = str(error)
+    if ctx["tipo_expediente"] == "CENTRALIZADA":
+        try:
+            resultado["nota_central"] = textos.nota_central(ctx)
+        except textos.TextoIncompleto as error:
+            resultado["nota_central_error"] = str(error)
     return resultado
 
 
@@ -1161,7 +1169,7 @@ def datos_cv(con, id_expediente):
         "periodo_texto": _texto_periodo_cv(ctx),
         "objeto": ctx["objeto"].strip(),
         "renglones": filas,
-        "observacion": "",
+        "observacion": ctx["leyenda_cv"] if ctx["tipo_expediente"] == "CENTRALIZADA" else "",
         "remitos": ctx["remitos"],
     }
     plantilla = (ctx["parametros_efector"] or {}).get("plantilla_cv")
@@ -1348,7 +1356,7 @@ def _fecha_hoy(hoy):
 def _expedientes_por_celda(con, anio):
     """{(oc, período): [filas]} de los expedientes no anulados del año, con el estado de su entrega."""
     filas = con.execute(
-        "SELECT e.id, e.oc, e.periodo, e.estado, en.estado AS estado_entrega FROM expediente e "
+        "SELECT e.id, e.tipo, e.oc, e.periodo, e.estado, e.datos, en.estado AS estado_entrega FROM expediente e "
         "LEFT JOIN entrega en ON en.id = e.entrega_id "
         "WHERE e.oc IS NOT NULL AND e.estado <> 'ANULADO' AND e.periodo LIKE ? ORDER BY e.id",
         ("%04d-%%" % anio,),
@@ -1366,6 +1374,7 @@ def _celda_calendario(periodo, vig_desde, vig_fin, expedientes, hoy, dias_gracia
     for exp in expedientes:
         por_estado.setdefault(_ESTADO_POR_EXPEDIENTE.get(exp["estado"]), exp)
     celda["entrega_enviada"] = any(e["estado_entrega"] == "ENVIADA" for e in expedientes)
+    celda["centralizada_enviada"] = any(e["tipo"] == "CENTRALIZADA" and centralizada_enviada(e) for e in expedientes)
     elegido = next((por_estado[e] for e in _PRIORIDAD_CALENDARIO if e in por_estado), None)
     if periodo.hasta < vig_desde or periodo.desde > vig_fin:
         estado = "fuera"
@@ -1765,3 +1774,77 @@ def pendientes(con, hoy=None):
         })
     resultado.sort(key=lambda f: (-f["dias_demora"], f["fecha_seguimiento"] or "", f["id"]))
     return resultado
+
+
+# --- Centralizadas (paso 27) --------------------------------------------------
+
+CLAVES_CENTRALIZADA = ("numero_cv", "numero_nota", "fecha_envio")
+
+
+def _lista_json(valor):
+    if isinstance(valor, list):
+        return valor
+    try:
+        lista = json.loads(valor or "[]")
+    except ValueError:
+        return []
+    return lista if isinstance(lista, list) else []
+
+
+def centralizada_enviada(fila):
+    """True si la centralizada ya tiene N° de nota y fecha de envío (marca ◆ del calendario)."""
+    central = _datos_de(fila).get("centralizada") or {}
+    return bool(central.get("numero_nota") and central.get("fecha_envio"))
+
+
+def guardar_centralizada(con, id_expediente, version, centralizada):
+    """Guarda datos.centralizada = {numero_cv, numero_nota (GDE validados), fecha_envio} de un expediente CENTRALIZADA."""
+    version = _version(version)
+    if not isinstance(centralizada, dict):
+        raise ErrorValidacion("Faltan los datos de la centralizada.")
+    desconocidas = [c for c in centralizada if c not in CLAVES_CENTRALIZADA]
+    if desconocidas:
+        raise ErrorValidacion("Campos desconocidos: %s." % ", ".join(sorted(desconocidas)))
+    nuevos = {
+        "numero_cv": _gde_valido(centralizada.get("numero_cv")),
+        "numero_nota": _gde_valido(centralizada.get("numero_nota")),
+        "fecha_envio": _fecha(centralizada.get("fecha_envio"), "de envío") or "",
+    }
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        if actual["tipo"] != "CENTRALIZADA":
+            raise ErrorNegocio("El expediente %d no es una centralizada." % actual["id"])
+        contenido = _datos_de(actual)
+        contenido["centralizada"] = nuevos
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version,
+                                  {"datos": contenido, "actualizado": db.ahora_utc()})
+    return obtener_expediente(con, id_expediente)
+
+
+def centralizadas_por_periodo(con, anio, efector=None):
+    """Expedientes CENTRALIZADA del año, ordenados por período, con su nota/CV y si ya se enviaron."""
+    try:
+        anio = int(anio)
+    except (TypeError, ValueError):
+        raise ErrorValidacion("El año no es válido.") from None
+    sql = ("SELECT e.id, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.estado, e.datos, e.version "
+           "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap "
+           "WHERE e.tipo = 'CENTRALIZADA' AND e.estado <> 'ANULADO' AND e.periodo LIKE ?")
+    valores = ["%04d-%%" % anio]
+    if efector in EFECTORES:
+        sql += " AND e.efector = ?"
+        valores.append(efector)
+    expedientes = []
+    for fila in con.execute(sql + " ORDER BY e.periodo, e.oc, e.id", valores):
+        fila = dict(fila)
+        datos = _datos_de(fila)
+        central = datos.get("centralizada") or {}
+        expedientes.append({
+            "id": fila["id"], "efector": fila["efector"], "oc": fila["oc"], "sap": fila["sap"],
+            "razon_social": fila["razon_social"] or "", "periodo": fila["periodo"], "estado": fila["estado"],
+            "version": fila["version"], "numero_cv": central.get("numero_cv") or "",
+            "numero_nota": central.get("numero_nota") or "", "fecha_envio": central.get("fecha_envio") or "",
+            "checklist": datos.get("checklist") or {}, "enviada": centralizada_enviada(fila),
+        })
+    return {"anio": anio, "expedientes": expedientes}

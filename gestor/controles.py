@@ -469,6 +469,15 @@ def control_documentacion_centralizada(ctx):
                       "Falta tildar como auditada la documentación: %s." % ", ".join(faltan))]
 
 
+def control_leyenda_cv_faltante(ctx):
+    oc = ctx.get("oc")
+    if ctx["expediente"].get("tipo") != "CENTRALIZADA" or not oc or not oc.get("centralizada"):
+        return []
+    if (oc.get("leyenda_cv") or "").strip():
+        return []
+    return [Resultado("leyenda_cv_faltante", "error", "oc", "Falta la leyenda del CV en la OC %s." % oc["numero"])]
+
+
 CONTROLES = [
     control_importe_factura,
     control_destinatario_factura,
@@ -491,6 +500,7 @@ CONTROLES = [
     control_renglon_por_agotarse,
     control_objeto_faltante,
     control_documentacion_centralizada,
+    control_leyenda_cv_faltante,
 ]
 
 
