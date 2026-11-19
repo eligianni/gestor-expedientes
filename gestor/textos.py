@@ -339,6 +339,42 @@ def solicitud_pago_eventual(ctx):
     }
 
 
+# --- Servicios del CASPH: AySA y Edenor (paso 30) -----------------------------------
+
+_PARRAFO_RESOL_CASPH = (
+    "Atento a que por el artículo 5 de la RESOL-2023-926-INSSJP-DE#INSSJP se estableció que el Centro Ambulatorio de "
+    "Salud PAMI Hurlingham, funcionará transitoriamente como una unidad orgánica anexa del Hospital de Alta complejidad "
+    "del Bicentenario Ituzaingó dependiente de la Gerencia de Efectores Sanitarios Propios, exclusivamente para proveer "
+    "los bienes y servicios esenciales necesarios que permitan su efectivo y habitual funcionamiento. Sin más, se eleva "
+    "para su intervención."
+)
+
+
+def autorizacion_servicio_casph(empresa, factura, centavos, mes, anio, expediente):
+    """Autorización de pago de AySA o Edenor del CASPH: dos párrafos (el segundo, el de la RESOL, es igual en ambos)."""
+    pesos, cc = divmod(int(centavos), 100)
+    en_letras = letras.numero_a_letras(pesos)
+    monto = util.formato_pesos(centavos)
+    mes = str(mes).upper()
+    if empresa == "AYSA":
+        primero = (
+            "Por medio de la presente se autoriza el pago de la factura N° %s de la empresa AySA (AGUA Y SANEAMIENTOS "
+            "ARGENTINOS S.A.), SAP 70262, por un monto de PESOS %s con %02d/100 CENTAVOS ($ %s-) correspondiente al mes "
+            "de %s %s, por el servicio de CLOACA del Centro Ambulatorio de Salud PAMI Hurlingham de acuerdo a la factura "
+            "vinculada al %s." % (factura, en_letras, cc, monto, mes, anio, expediente)
+        )
+    elif empresa == "EDENOR":
+        primero = (
+            "Por medio de la presente se autoriza el pago de la factura N° %s de la EMPRESA DISTRIBUIDORA Y "
+            "COMERCIALIZADORA NORTE S.A. por un monto de PESOS %s CON %02d/100 CENTAVOS ($ %s-), correspondiente al mes "
+            "de %s %s, por el servicio de provisión de energía eléctrica del Centro Ambulatorio de Salud PAMI Hurlingham, "
+            "de acuerdo a la factura vinculada al expediente %s." % (factura, en_letras, cc, monto, mes, anio, expediente)
+        )
+    else:
+        raise ValueError("Empresa desconocida: %r (se espera AYSA o EDENOR)." % (empresa,))
+    return [primero, _PARRAFO_RESOL_CASPH]
+
+
 # --- Textos para SAP -------------------------------------------------------
 
 def _fecha_sap_iso(iso):

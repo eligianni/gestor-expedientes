@@ -2074,3 +2074,33 @@ def _eventual_para_textos(con, exp, oc, remitos):
     guardado = exp["datos"].get("eventual") or {}
     valores.update({k: v for k, v in guardado.items() if v not in (None, "")})
     return valores
+
+
+# --- Servicios del CASPH: AySA y Edenor (paso 30) -----------------------------------
+
+EMPRESAS_SERVICIO_CASPH = ("AYSA", "EDENOR")
+
+
+def texto_servicio_casph(datos):
+    """Valida el pedido de POST /api/textos/servicio-casph y devuelve {"parrafos": [2 strings]}."""
+    if not isinstance(datos, dict):
+        raise ErrorValidacion("Faltan los datos de la autorización.")
+    empresa = datos.get("empresa")
+    if empresa not in EMPRESAS_SERVICIO_CASPH:
+        raise ErrorValidacion("Elegí la empresa: AYSA o EDENOR.")
+    factura = _texto(datos.get("factura"), "factura")
+    if not factura:
+        raise ErrorValidacion("Falta el N° de factura.")
+    centavos = _centavos_validos(datos.get("centavos"), "El importe")
+    mes = _texto(datos.get("mes"), "mes").lower()
+    if mes not in util.MESES:
+        raise ErrorValidacion("El mes no es válido (se espera el nombre del mes, por ejemplo agosto).")
+    anio = datos.get("anio")
+    if isinstance(anio, str) and anio.strip().isdigit():
+        anio = int(anio)
+    if isinstance(anio, bool) or not isinstance(anio, int) or not 2000 <= anio <= 2100:
+        raise ErrorValidacion("El año no es válido.")
+    expediente = _gde_valido(datos.get("expediente"))
+    if not expediente:
+        raise ErrorValidacion("Falta el N° de expediente.")
+    return {"parrafos": textos.autorizacion_servicio_casph(empresa, factura, centavos, mes, anio, expediente)}

@@ -805,6 +805,7 @@ function mostrarLista() {
   document.getElementById("expedientes-lista-bloque").hidden = false;
   estado.recargar = cargarExpedientes;
   listarPendientes();
+  pintarServiciosCasph();
   listarExpedientes();
 }
 
@@ -2129,3 +2130,47 @@ document.addEventListener("DOMContentLoaded", () => {
   iniciarCentralizadas();
   iniciarNavegacion();
 });
+
+// --- Servicios CASPH: autorizaciones de AySA y Edenor (dentro de Expedientes) ---------------
+
+function pintarServiciosCasph() {
+  const contenedor = document.getElementById("expedientes-servicios-casph");
+  if (!contenedor) return;
+  if (estado.efector === "HBI") { vaciar(contenedor); return; }
+  if (contenedor.querySelector("details")) return; // conserva lo que se estaba cargando
+  const hoy = new Date();
+  const anterior = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+  const resultado = el("div", { id: "servicios-casph-resultado", "aria-live": "polite" });
+  const formulario = el("form", { clase: "formulario filtros", novalidate: true, onsubmit: (e) => generarServicioCasph(e, resultado) },
+    campoFormulario("casph-empresa", "Empresa", selector("AYSA", [["AYSA", "AySA (cloaca)"], ["EDENOR", "Edenor (energía eléctrica)"]])),
+    campoFormulario("casph-factura", "N° de factura", entrada("", { autocomplete: "off", placeholder: "0001-00012345" })),
+    campoFormulario("casph-importe", "Importe $", entrada("", { inputmode: "decimal", clase: "entrada-corta" })),
+    campoFormulario("casph-mes", "Mes", selector(MESES[anterior.getMonth()], MESES.map((m) => [m, m]))),
+    campoFormulario("casph-anio", "Año", entrada(String(anterior.getFullYear()), { inputmode: "numeric", clase: "entrada-corta" })),
+    campoFormulario("casph-expediente", "Expediente (EX)", entrada("", { autocomplete: "off" })),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Generar autorización" })));
+  vaciar(contenedor, el("details", { clase: "panel" },
+    el("summary", { texto: "Servicios CASPH (AySA / Edenor)" }),
+    formulario, resultado));
+}
+
+async function generarServicioCasph(evento, destino) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const centavos = pesosACentavos(document.getElementById("casph-importe").value);
+  if (centavos === null || Number.isNaN(centavos)) { mostrarAviso("El importe no es válido.", "error"); return; }
+  const anio = Number(document.getElementById("casph-anio").value.trim());
+  if (!Number.isInteger(anio)) { mostrarAviso("El año no es válido.", "error"); return; }
+  const empresa = document.getElementById("casph-empresa").value;
+  const datos = await api("POST", "/api/textos/servicio-casph", {
+    empresa,
+    factura: document.getElementById("casph-factura").value.trim(),
+    centavos,
+    mes: document.getElementById("casph-mes").value,
+    anio,
+    expediente: document.getElementById("casph-expediente").value.trim(),
+  });
+  if (!datos) { vaciar(destino); return; }
+  const nombre = empresa === "AYSA" ? "AySA" : "Edenor";
+  vaciar(destino, bloqueTexto("Autorización de pago " + nombre, datos.parrafos.join("\n"), true));
+}

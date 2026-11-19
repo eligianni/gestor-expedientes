@@ -429,6 +429,10 @@ def correctivos_informe_mensual(h, m, cuerpo):
     return 200, _ok(negocio.informe_mensual_correctivos(h.conexion(), _consulta(h).get("mes") or ""))
 
 
+def texto_servicio_casph(h, m, cuerpo):
+    return 200, _ok(negocio.texto_servicio_casph(leer_json(h, cuerpo)))
+
+
 def expediente_eventual(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.guardar_eventual(h.conexion(), m.group("id"), datos.get("version"), datos.get("eventual")))
@@ -491,6 +495,7 @@ RUTAS = [
     ("PUT", re.compile(r"/api/config-local"), config_local_guardar),
     ("POST", re.compile(r"/api/apagar"), apagar),
     ("GET", re.compile(r"/api/pendientes"), pendientes),
+    ("POST", re.compile(r"/api/textos/servicio-casph"), texto_servicio_casph),
     ("GET", re.compile(r"/api/parametros"), parametros_leer),
     ("PUT", re.compile(r"/api/parametros"), parametros_guardar),
     ("POST", re.compile(r"/api/importar/vista-previa"), importar_vista_previa),
