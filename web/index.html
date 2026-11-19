@@ -32,6 +32,7 @@
         <li><button type="button" data-pantalla="pantalla-entregas">Entregas</button></li>
         <li><button type="button" data-pantalla="pantalla-importar">Importar</button></li>
         <li><button type="button" data-pantalla="pantalla-configuracion">Configuración</button></li>
+        <li><button type="button" data-pantalla="pantalla-ayuda">Ayuda</button></li>
       </ul>
     </nav>
 
@@ -147,7 +148,14 @@
           </div>
           <div id="centralizadas-botones"></div>
         </form>
-        <p class="texto-suave">La carga de centralizadas desde esta pantalla se completa más adelante.</p>
+        <form id="centralizadas-filtros" class="panel formulario filtros" novalidate>
+          <div class="campo">
+            <label for="central-anio">Año</label>
+            <input id="central-anio" type="text" inputmode="numeric" class="entrada-corta" autocomplete="off">
+          </div>
+          <div class="acciones"><button type="submit">Ver centralizadas</button></div>
+        </form>
+        <div id="centralizadas-tabla"></div>
       </section>
 
       <section id="pantalla-entregas" aria-labelledby="titulo-entregas" hidden>
@@ -189,6 +197,11 @@
       <section id="pantalla-configuracion" aria-labelledby="titulo-configuracion" hidden>
         <h1 id="titulo-configuracion">Configuración</h1>
         <div id="configuracion-contenido"></div>
+      </section>
+
+      <section aria-labelledby="titulo-ayuda" id="pantalla-ayuda" hidden>
+        <h1 id="titulo-ayuda">Ayuda</h1>
+        <pre id="ayuda-texto" class="panel instructivo">Cargando…</pre>
       </section>
     </main>
   </div>

@@ -125,6 +125,8 @@ const AL_MOSTRAR = {
   "pantalla-entregas": cargarEntregas,
   "pantalla-importar": cargarImportar,
   "pantalla-configuracion": cargarConfiguracion,
+  "pantalla-centralizadas": cargarCentralizadas,
+  "pantalla-ayuda": cargarAyuda,
 };
 
 function mostrarPantalla(id, enfocar) {
@@ -2105,7 +2107,7 @@ async function cerrarPrograma() {
     el("p", { texto: "Ya podés cerrar esta pestaña. Para volver a usarlo, hacé doble clic en Iniciar.bat." })));
 }
 
-// --- Centralizadas (exportes; la pantalla completa llega en el paso 32) ----------
+// --- Centralizadas: exportes ------------------------------------------------------
 
 function pintarBotonesCentralizadas() {
   const periodo = document.getElementById("central-periodo").value.trim();
@@ -2118,7 +2120,88 @@ function iniciarCentralizadas() {
   campo.addEventListener("input", pintarBotonesCentralizadas);
   document.getElementById("centralizadas-exporte").addEventListener("submit", (e) => e.preventDefault());
   pintarBotonesCentralizadas();
+  document.getElementById("central-anio").value = String(new Date().getFullYear());
+  document.getElementById("centralizadas-filtros").addEventListener("submit", (e) => { e.preventDefault(); cargarCentralizadas(); });
 }
+
+// --- Centralizadas: tabla OC × período con CV, nota, fecha de envío y checklist ----------
+
+async function cargarCentralizadas() {
+  const destino = document.getElementById("centralizadas-tabla");
+  const anio = document.getElementById("central-anio").value.trim();
+  if (!/^\d{4}$/.test(anio)) { mostrarAviso("El año debe tener 4 dígitos (por ejemplo 2026).", "error"); return; }
+  cargando(destino);
+  const parametros = new URLSearchParams({ anio });
+  if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
+  const datos = await api("GET", "/api/centralizadas?" + parametros.toString());
+  if (!datos) { vaciar(destino); return; }
+  if (!datos.expedientes.length) {
+    vaciar(destino, el("p", { clase: "texto-suave", texto: "No hay expedientes centralizados en " + datos.anio + "." }));
+    return;
+  }
+  const encabezados = ["OC", "Período", "Proveedor", "Estado", "N° de CV", "N° de nota", "Fecha de envío", "Documentación auditada", "Enviada", ""];
+  vaciar(destino, el("div", { clase: "tabla-desplazable" }, el("table", {},
+    el("caption", { texto: "Centralizadas " + datos.anio }),
+    el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
+    el("tbody", {}, ...datos.expedientes.map(filaCentralizada)))));
+}
+
+function filaCentralizada(c) {
+  const sufijo = "-" + c.id;
+  const etiqueta = "OC " + c.oc + " " + c.periodo;
+  const cv = entrada(c.numero_cv, { autocomplete: "off", "aria-label": "N° de CV, " + etiqueta, id: "central-cv" + sufijo });
+  const nota = entrada(c.numero_nota, { autocomplete: "off", "aria-label": "N° de nota, " + etiqueta, id: "central-nota" + sufijo });
+  const fecha = entrada(c.fecha_envio, { type: "date", "aria-label": "Fecha de envío, " + etiqueta, id: "central-fecha" + sufijo });
+  const casillas = c.documentos.map((doc) => {
+    const casilla = el("input", { type: "checkbox" });
+    casilla.checked = !!c.checklist[doc];
+    casilla.dataset.documento = doc;
+    return el("label", {}, casilla, el("span", { texto: doc }));
+  });
+  const checklist = casillas.length
+    ? el("div", { clase: "checklist-central", role: "group", "aria-label": "Documentación auditada, " + etiqueta }, ...casillas)
+    : el("span", { clase: "texto-suave", texto: "La OC no tiene documentación requerida" });
+  return el("tr", {},
+    el("td", { texto: c.oc }),
+    el("td", { texto: c.periodo }),
+    el("td", { texto: c.razon_social }),
+    el("td", { texto: ESTADOS_TEXTO[c.estado] || c.estado }),
+    el("td", {}, cv),
+    el("td", {}, nota),
+    el("td", {}, fecha),
+    el("td", {}, checklist),
+    el("td", { texto: c.enviada ? "◆ Sí" : "No" }),
+    el("td", {}, el("button", { type: "button", texto: "Guardar", "aria-label": "Guardar " + etiqueta,
+      onclick: () => guardarFilaCentralizada(c, cv.value.trim(), nota.value.trim(), fecha.value, checklist) })));
+}
+
+async function guardarFilaCentralizada(c, numeroCv, numeroNota, fechaEnvio, checklist) {
+  limpiarAvisos();
+  estado.recargar = cargarCentralizadas;
+  let exp = await api("PUT", "/api/expedientes/" + c.id + "/centralizada", {
+    version: c.version, centralizada: { numero_cv: numeroCv, numero_nota: numeroNota, fecha_envio: fechaEnvio },
+  });
+  if (!exp) return;
+  const marcadas = {};
+  for (const casilla of checklist.querySelectorAll("input[type=checkbox]")) marcadas[casilla.dataset.documento] = casilla.checked;
+  const antes = JSON.stringify(c.documentos.map((d) => !!c.checklist[d]));
+  const ahora = JSON.stringify(c.documentos.map((d) => !!marcadas[d]));
+  if (antes !== ahora) {
+    exp = await api("PUT", "/api/expedientes/" + c.id, { version: exp.version, cambios: { datos: { checklist: marcadas } } });
+    if (!exp) return;
+  }
+  await cargarCentralizadas();
+  mostrarAviso("Centralizada de la OC " + c.oc + " (" + c.periodo + ") guardada.", "exito");
+}
+
+// --- Ayuda: el instructivo tal cual ------------------------------------------------
+
+async function cargarAyuda() {
+  const destino = document.getElementById("ayuda-texto");
+  const datos = await api("GET", "/api/ayuda");
+  destino.textContent = datos ? datos.markdown : "No se pudo cargar el instructivo.";
+}
+
 
 // --- Arranque ---------------------------------------------------------------
 

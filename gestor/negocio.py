@@ -1890,9 +1890,9 @@ def centralizadas_por_periodo(con, anio, efector=None):
         anio = int(anio)
     except (TypeError, ValueError):
         raise ErrorValidacion("El año no es válido.") from None
-    sql = ("SELECT e.id, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.estado, e.datos, e.version "
-           "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap "
-           "WHERE e.tipo = 'CENTRALIZADA' AND e.estado <> 'ANULADO' AND e.periodo LIKE ?")
+    sql = ("SELECT e.id, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.estado, e.datos, e.version, "
+           "o.doc_requerida_central FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap "
+           "LEFT JOIN oc o ON o.numero = e.oc WHERE e.tipo = 'CENTRALIZADA' AND e.estado <> 'ANULADO' AND e.periodo LIKE ?")
     valores = ["%04d-%%" % anio]
     if efector in EFECTORES:
         sql += " AND e.efector = ?"
@@ -1908,6 +1908,7 @@ def centralizadas_por_periodo(con, anio, efector=None):
             "version": fila["version"], "numero_cv": central.get("numero_cv") or "",
             "numero_nota": central.get("numero_nota") or "", "fecha_envio": central.get("fecha_envio") or "",
             "checklist": datos.get("checklist") or {}, "enviada": centralizada_enviada(fila),
+            "documentos": _lista_json(fila["doc_requerida_central"]),
         })
     return {"anio": anio, "expedientes": expedientes}
 

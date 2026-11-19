@@ -429,6 +429,15 @@ def correctivos_informe_mensual(h, m, cuerpo):
     return 200, _ok(negocio.informe_mensual_correctivos(h.conexion(), _consulta(h).get("mes") or ""))
 
 
+def ayuda(h, m, cuerpo):
+    """El instructivo (docs/INSTRUCTIVO.md) tal cual, para la pantalla Ayuda."""
+    try:
+        markdown = (config.RAIZ / "docs" / "INSTRUCTIVO.md").read_bytes().decode("utf-8")
+    except OSError:
+        raise ErrorHTTP(404, "no_encontrado", "No se encontró el instructivo (docs/INSTRUCTIVO.md).") from None
+    return 200, _ok({"markdown": markdown})
+
+
 def texto_servicio_casph(h, m, cuerpo):
     return 200, _ok(negocio.texto_servicio_casph(leer_json(h, cuerpo)))
 
@@ -495,6 +504,7 @@ RUTAS = [
     ("PUT", re.compile(r"/api/config-local"), config_local_guardar),
     ("POST", re.compile(r"/api/apagar"), apagar),
     ("GET", re.compile(r"/api/pendientes"), pendientes),
+    ("GET", re.compile(r"/api/ayuda"), ayuda),
     ("POST", re.compile(r"/api/textos/servicio-casph"), texto_servicio_casph),
     ("GET", re.compile(r"/api/parametros"), parametros_leer),
     ("PUT", re.compile(r"/api/parametros"), parametros_guardar),
