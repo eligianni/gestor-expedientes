@@ -12,7 +12,7 @@ import sqlite3
 import urllib.request
 from urllib.parse import parse_qs, quote, urlsplit
 
-from gestor import APP_ID, __version__, comprobantes, config, controles, db, docx_gen, importar, negocio, textos, xlsx
+from gestor import APP_ID, __version__, comprobantes, config, controles, db, docx_gen, exportes, importar, negocio, textos, xlsx
 
 WEB = config.RAIZ / "web"
 
@@ -58,6 +58,7 @@ def responder_json(h, estado, dic):
 
 
 TIPO_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+TIPO_CSV = "text/csv; charset=utf-8"
 
 
 class Archivo:
@@ -310,6 +311,49 @@ def expediente_autorizacion_docx(h, m, cuerpo):
     return 200, Archivo(contenido, TIPO_DOCX, autorizacion["archivo"])
 
 
+def _efector_filtro(valor):
+    return None if valor in (None, "", "Ambos") else valor
+
+
+def entregas_listar(h, m, cuerpo):
+    q = _consulta(h)
+    con = h.conexion()
+    efector = _efector_filtro(q.get("efector"))
+    return 200, _ok({"entregas": negocio.listar_entregas(con, efector),
+                     "firmados_sin_entrega": negocio.firmados_sin_entrega(con, efector)})
+
+
+def entrega_crear(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.crear_entrega(h.conexion(), datos.get("efector"), datos.get("nombre") or ""))
+
+
+def entrega_obtener(h, m, cuerpo):
+    return 200, _ok(negocio.obtener_entrega(h.conexion(), m.group("id")))
+
+
+def entrega_asignar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.asignar_a_entrega(h.conexion(), m.group("id"), datos.get("version"), datos.get("expedientes")))
+
+
+def entrega_quitar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.quitar_de_entrega(h.conexion(), m.group("id"), datos.get("version"), datos.get("expedientes")))
+
+
+def entrega_enviar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.enviar_entrega(h.conexion(), m.group("id"), datos.get("version"), datos.get("fecha")))
+
+
+def entrega_numeracion_csv(h, m, cuerpo):
+    con = h.conexion()
+    entrega = negocio.obtener_entrega(con, m.group("id"))
+    contenido = exportes.a_csv(exportes.ENCABEZADOS_NUMERACION, exportes.filas_numeracion(con, entrega["id"]))
+    return 200, Archivo(contenido, TIPO_CSV, exportes.nombre_csv_numeracion(entrega))
+
+
 def expediente_estado(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.cambiar_estado(
@@ -385,6 +429,13 @@ RUTAS = [
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/reanudar"), expediente_reanudar),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
+    ("GET", re.compile(r"/api/entregas"), entregas_listar),
+    ("POST", re.compile(r"/api/entregas"), entrega_crear),
+    ("GET", re.compile(r"/api/entregas/(?P<id>\d+)"), entrega_obtener),
+    ("POST", re.compile(r"/api/entregas/(?P<id>\d+)/asignar"), entrega_asignar),
+    ("POST", re.compile(r"/api/entregas/(?P<id>\d+)/quitar"), entrega_quitar),
+    ("POST", re.compile(r"/api/entregas/(?P<id>\d+)/enviar"), entrega_enviar),
+    ("GET", re.compile(r"/api/entregas/(?P<id>\d+)/numeracion\.csv"), entrega_numeracion_csv),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/autorizacion\.docx"), expediente_autorizacion_docx),
 ]
 

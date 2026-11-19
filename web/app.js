@@ -110,6 +110,7 @@ const AL_MOSTRAR = {
   "pantalla-calendario": cargarCalendario,
   "pantalla-oc": cargarOC,
   "pantalla-expedientes": cargarExpedientes,
+  "pantalla-entregas": cargarEntregas,
   "pantalla-importar": cargarImportar,
 };
 
@@ -1624,6 +1625,133 @@ async function abrirDesdeCalendario(fila, celda) {
 
 function iniciarCalendario() {
   document.getElementById("calendario-filtros").addEventListener("submit", (e) => { e.preventDefault(); limpiarAvisos(); pedirCalendario(); });
+}
+
+// --- Entregas -----------------------------------------------------------------
+
+const entEstado = { abierta: null };
+
+function hoyIso() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+function descripcionExpediente(x) {
+  return "N° " + x.id + " · OC " + (x.oc || "—") + " · " + (x.razon_social || "") + " · " + (x.periodo || "sin período")
+    + (x.factura ? " · FC " + x.factura : "");
+}
+
+async function cargarEntregas() {
+  const contenedor = document.getElementById("entregas-contenido");
+  estado.recargar = cargarEntregas;
+  cargando(contenedor);
+  const parametros = new URLSearchParams();
+  if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
+  const datos = await api("GET", "/api/entregas?" + parametros.toString());
+  if (!datos) { vaciar(contenedor); return; }
+  const efectorInicial = estado.efector === "Ambos" ? "HBI" : estado.efector;
+  const alta = el("form", { clase: "panel formulario filtros", novalidate: true, onsubmit: crearEntrega },
+    el("h2", { clase: "titulo-chico", texto: "Nueva entrega" }),
+    campoFormulario("entrega-efector", "Efector", selector(efectorInicial, [["HBI", "HBI"], ["CASPH", "CASPH"]])),
+    campoFormulario("entrega-nombre", "Nombre (opcional)", entrada("", { autocomplete: "off", placeholder: "Entrega N" })),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Crear entrega" })));
+  const partes = [alta];
+  partes.push(el("p", { clase: "texto-suave", texto: datos.firmados_sin_entrega.length
+    ? (datos.firmados_sin_entrega.length === 1 ? "1 expediente firmado espera entrega."
+      : datos.firmados_sin_entrega.length + " expedientes firmados esperan entrega.")
+    : "No hay expedientes firmados sin entrega." }));
+  if (!datos.entregas.length) {
+    partes.push(el("p", { clase: "texto-suave", texto: "Todavía no hay entregas." }));
+  } else {
+    const filas = datos.entregas.map((e) => el("tr", {},
+      el("td", {}, el("button", { type: "button", clase: "secundario", texto: e.efector + " " + e.numero,
+        "aria-label": "Abrir la entrega " + e.efector + " " + e.numero, onclick: () => abrirEntrega(e.id) })),
+      el("td", { texto: e.nombre }),
+      el("td", { texto: e.estado === "ENVIADA" ? "Enviada" : "Abierta" }),
+      el("td", { texto: e.fecha_envio || "—" }),
+      el("td", { clase: "numero", texto: String(e.expedientes) })));
+    partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {},
+      el("thead", {}, el("tr", {}, ...["Entrega", "Nombre", "Estado", "Enviada el", "Expedientes"].map((t) => el("th", { scope: "col", texto: t })))),
+      el("tbody", {}, ...filas))));
+  }
+  vaciar(contenedor, ...partes);
+  if (entEstado.abierta) abrirEntrega(entEstado.abierta);
+}
+
+async function crearEntrega(evento) {
+  evento.preventDefault();
+  limpiarAvisos();
+  const entrega = await api("POST", "/api/entregas", {
+    efector: document.getElementById("entrega-efector").value, nombre: document.getElementById("entrega-nombre").value.trim(),
+  });
+  if (!entrega) return;
+  mostrarAviso("Entrega " + entrega.efector + " " + entrega.numero + " creada.", "exito");
+  entEstado.abierta = entrega.id;
+  cargarEntregas();
+}
+
+async function abrirEntrega(id) {
+  entEstado.abierta = id;
+  const detalle = document.getElementById("entrega-detalle");
+  cargando(detalle);
+  const entrega = await api("GET", "/api/entregas/" + id);
+  if (!entrega) { vaciar(detalle); return; }
+  const lista = await api("GET", "/api/entregas?efector=" + encodeURIComponent(entrega.efector));
+  const candidatos = lista ? lista.firmados_sin_entrega : [];
+  const abierta = entrega.estado === "ABIERTA";
+  const partes = [el("h2", { id: "entrega-titulo", tabindex: "-1", texto: "Entrega " + entrega.efector + " " + entrega.numero + " — " + entrega.nombre }),
+    el("p", { texto: abierta ? "Abierta: todavía se pueden agregar o quitar expedientes." : "Enviada el " + entrega.fecha_envio + "." })];
+  if (entrega.expedientes.length) {
+    partes.push(el("ul", { clase: "lista-simple" }, ...entrega.expedientes.map((x) => el("li", {},
+      el("span", { texto: descripcionExpediente(x) + " · " + (ESTADOS_TEXTO[x.estado] || x.estado) + " " }),
+      abierta ? el("button", { type: "button", clase: "secundario", texto: "Quitar",
+        "aria-label": "Quitar el expediente " + x.id + " de la entrega", onclick: () => cambiarEntrega(entrega, "/quitar", [x.id], "Expediente quitado.") }) : null))));
+    partes.push(el("div", { clase: "acciones" },
+      el("a", { clase: "boton secundario", href: "/api/entregas/" + entrega.id + "/numeracion.csv", download: "",
+        texto: "Descargar CSV NUMERACIÓN" })));
+  } else {
+    partes.push(el("p", { clase: "texto-suave", texto: "La entrega no tiene expedientes." }));
+  }
+  if (abierta && candidatos.length) {
+    const casillas = candidatos.map((x) => el("div", { clase: "campo campo-casilla" },
+      el("input", { type: "checkbox", id: "asignar-" + x.id, value: String(x.id) }),
+      el("label", { for: "asignar-" + x.id, texto: descripcionExpediente(x) })));
+    partes.push(el("form", { clase: "formulario", novalidate: true, onsubmit: (e) => {
+      e.preventDefault();
+      const ids = casillas.map((c) => c.querySelector("input")).filter((i) => i.checked).map((i) => Number(i.value));
+      if (!ids.length) { limpiarAvisos(); mostrarAviso("Marcá al menos un expediente.", "error"); return; }
+      cambiarEntrega(entrega, "/asignar", ids, ids.length === 1 ? "Expediente agregado." : ids.length + " expedientes agregados.");
+    } },
+    el("fieldset", {}, el("legend", { texto: "Expedientes firmados sin entrega (" + entrega.efector + ")" }), ...casillas),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Agregar a la entrega" }))));
+  }
+  if (abierta && entrega.expedientes.length) {
+    partes.push(el("form", { clase: "formulario filtros", novalidate: true, onsubmit: (e) => { e.preventDefault(); enviarEntrega(entrega); } },
+      campoFormulario("entrega-fecha", "Fecha de envío", entrada(hoyIso(), { type: "date" })),
+      el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Marcar como enviada" }))));
+  }
+  vaciar(detalle, el("div", { clase: "panel" }, ...partes));
+}
+
+async function cambiarEntrega(entrega, accion, ids, mensaje) {
+  limpiarAvisos();
+  estado.recargar = cargarEntregas;
+  const actualizada = await api("POST", "/api/entregas/" + entrega.id + accion, { version: entrega.version, expedientes: ids });
+  if (!actualizada) return;
+  mostrarAviso(mensaje, "exito");
+  await cargarEntregas();
+}
+
+async function enviarEntrega(entrega) {
+  limpiarAvisos();
+  const fecha = document.getElementById("entrega-fecha").value;
+  if (!fecha) { mostrarAviso("Indicá la fecha de envío.", "error"); return; }
+  if (!window.confirm("¿Marcar la entrega como enviada? Sus " + entrega.expedientes.length + " expedientes pasan a ENVIADO.")) return;
+  estado.recargar = cargarEntregas;
+  const enviada = await api("POST", "/api/entregas/" + entrega.id + "/enviar", { version: entrega.version, fecha });
+  if (!enviada) return;
+  mostrarAviso("Entrega " + enviada.efector + " " + enviada.numero + " enviada el " + enviada.fecha_envio + ".", "exito");
+  await cargarEntregas();
 }
 
 // --- Arranque ---------------------------------------------------------------

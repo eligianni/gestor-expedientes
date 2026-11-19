@@ -273,3 +273,9 @@ input[aria-invalid="true"] { border-color: var(--error); }
 .urgencia-2 .urgencia { color: var(--aviso); }
 .urgencia-3 { border-left-color: var(--info); }
 .urgencia-3 .urgencia { color: var(--info); }
+
+/* Entregas (paso 24) */
+.lista-simple { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+.lista-simple li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#entrega-detalle { margin-top: 16px; }
+fieldset { border: 1px solid var(--borde); border-radius: 6px; padding: 12px 16px; }

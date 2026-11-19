@@ -1576,3 +1576,166 @@ def alertas(con, hoy=None, integridad_ok=True):
     lista.sort(key=lambda a: (a["urgencia"], a["tipo"] != "base_con_errores", a["fecha"], a["oc"] or "",
                               a["expediente_id"] or 0))
     return lista
+
+
+# --- Entregas (paso 24) -----------------------------------------------------
+
+MENSAJE_ASIGNAR = "Solo se asignan expedientes FIRMADO del mismo efector."
+
+
+def _leer_entrega(con, entrega_id):
+    try:
+        entrega_id = int(entrega_id)
+    except (TypeError, ValueError):
+        raise ErrorValidacion("El número de entrega no es válido.") from None
+    fila = db.leer_fila(con, "entrega", {"id": entrega_id})
+    if fila is None:
+        raise NoEncontrado("No existe la entrega %d." % entrega_id)
+    return fila
+
+
+def _expedientes_de_entrega(con, entrega_id):
+    filas = con.execute(
+        "SELECT e.id, e.tipo, e.oc, e.sap, p.razon_social, e.periodo, e.factura, e.estado, e.version "
+        "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.entrega_id = ? ORDER BY e.id", (entrega_id,),
+    )
+    return [dict(f) for f in filas]
+
+
+def obtener_entrega(con, entrega_id):
+    entrega = _leer_entrega(con, entrega_id)
+    entrega["expedientes"] = _expedientes_de_entrega(con, entrega["id"])
+    return entrega
+
+
+def crear_entrega(con, efector, nombre=""):
+    """Alta de una entrega ABIERTA con el número correlativo siguiente del efector."""
+    if efector not in EFECTORES:
+        raise ErrorValidacion("Elegí el efector (HBI o CASPH).")
+    nombre = _texto(nombre or "", "nombre").strip()
+    with db.transaccion(con):
+        fila = con.execute("SELECT COALESCE(MAX(numero), 0) AS ultimo FROM entrega WHERE efector = ?", (efector,)).fetchone()
+        numero = int(fila["ultimo"]) + 1
+        nuevo_id = db.insertar(con, "entrega", {
+            "efector": efector, "numero": numero, "nombre": nombre or "Entrega %d" % numero, "estado": "ABIERTA",
+        })
+    return obtener_entrega(con, nuevo_id)
+
+
+def listar_entregas(con, efector=None):
+    sql = ("SELECT en.*, (SELECT COUNT(*) FROM expediente e WHERE e.entrega_id = en.id) AS expedientes "
+           "FROM entrega en")
+    parametros = []
+    if efector in EFECTORES:
+        sql += " WHERE en.efector = ?"
+        parametros.append(efector)
+    sql += " ORDER BY en.efector, en.numero DESC"
+    return [dict(f) for f in con.execute(sql, parametros)]
+
+
+def firmados_sin_entrega(con, efector=None):
+    """Expedientes FIRMADO que todavía no están en ninguna entrega (candidatos a asignar)."""
+    sql = ("SELECT e.id, e.tipo, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.factura, e.version "
+           "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.estado = 'FIRMADO' AND e.entrega_id IS NULL")
+    parametros = []
+    if efector in EFECTORES:
+        sql += " AND e.efector = ?"
+        parametros.append(efector)
+    return [dict(f) for f in con.execute(sql + " ORDER BY e.id", parametros)]
+
+
+def _ids_expedientes(ids):
+    if not isinstance(ids, list) or not ids:
+        raise ErrorValidacion("Elegí al menos un expediente.")
+    resultado = []
+    for valor in ids:
+        if isinstance(valor, bool):
+            raise ErrorValidacion("Los expedientes se indican por número.")
+        try:
+            resultado.append(int(valor))
+        except (TypeError, ValueError):
+            raise ErrorValidacion("Los expedientes se indican por número.") from None
+    return list(dict.fromkeys(resultado))
+
+
+def _nombre_entrega(entrega):
+    return "%s %d" % (entrega["efector"], entrega["numero"])
+
+
+def asignar_a_entrega(con, entrega_id, version, ids):
+    """Asigna expedientes FIRMADO del mismo efector a una entrega ABIERTA (cada uno con su versión y su evento)."""
+    version = _version(version)
+    ids = _ids_expedientes(ids)
+    with db.transaccion(con):
+        entrega = _leer_entrega(con, entrega_id)
+        if entrega["estado"] != "ABIERTA":
+            raise ErrorNegocio("La entrega %d ya se envió: no se le pueden agregar expedientes." % entrega["numero"])
+        db.actualizar_con_version(con, "entrega", {"id": entrega["id"]}, version, {"estado": "ABIERTA"})
+        for id_expediente in ids:
+            actual = _leer_expediente(con, id_expediente)
+            if actual["estado"] != "FIRMADO" or actual["efector"] != entrega["efector"]:
+                raise ErrorNegocio(MENSAJE_ASIGNAR)
+            if actual["entrega_id"] not in (None, entrega["id"]):
+                raise ErrorNegocio("El expediente %d ya está en otra entrega." % actual["id"])
+            if actual["entrega_id"] == entrega["id"]:
+                continue
+            contenido = _datos_de(actual)
+            entrada = _entrada_historial("ENTREGA", "FIRMADO")
+            entrada["entrega"] = _nombre_entrega(entrega)
+            contenido["historial"].append(entrada)
+            db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, actual["version"], {
+                "entrega_id": entrega["id"], "datos": contenido, "actualizado": db.ahora_utc(),
+            })
+    return obtener_entrega(con, entrega_id)
+
+
+def quitar_de_entrega(con, entrega_id, version, ids):
+    """Saca expedientes de una entrega que todavía no se envió."""
+    version = _version(version)
+    ids = _ids_expedientes(ids)
+    with db.transaccion(con):
+        entrega = _leer_entrega(con, entrega_id)
+        if entrega["estado"] != "ABIERTA":
+            raise ErrorNegocio("La entrega %d ya se envió: no se le pueden quitar expedientes." % entrega["numero"])
+        db.actualizar_con_version(con, "entrega", {"id": entrega["id"]}, version, {"estado": "ABIERTA"})
+        for id_expediente in ids:
+            actual = _leer_expediente(con, id_expediente)
+            if actual["entrega_id"] != entrega["id"]:
+                raise ErrorNegocio("El expediente %d no está en esta entrega." % actual["id"])
+            contenido = _datos_de(actual)
+            entrada = _entrada_historial("QUITAR_DE_ENTREGA", actual["estado"])
+            entrada["entrega"] = _nombre_entrega(entrega)
+            contenido["historial"].append(entrada)
+            db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, actual["version"], {
+                "entrega_id": None, "datos": contenido, "actualizado": db.ahora_utc(),
+            })
+    return obtener_entrega(con, entrega_id)
+
+
+def enviar_entrega(con, entrega_id, version, fecha):
+    """Marca la entrega ENVIADA con su fecha y pasa cada expediente asignado a ENVIADO (única vía a ENVIADO)."""
+    version = _version(version)
+    fecha = _fecha(fecha, "de envío", permitir_vacio=False)
+    with db.transaccion(con):
+        entrega = _leer_entrega(con, entrega_id)
+        if entrega["estado"] != "ABIERTA":
+            raise ErrorNegocio("La entrega %d ya se envió." % entrega["numero"])
+        expedientes = _expedientes_de_entrega(con, entrega["id"])
+        if not expedientes:
+            raise ErrorNegocio("La entrega no tiene expedientes asignados.")
+        no_firmados = [str(e["id"]) for e in expedientes if e["estado"] != "FIRMADO"]
+        if no_firmados:
+            raise ErrorNegocio("Para enviar la entrega, todos sus expedientes tienen que estar FIRMADO (revisá: %s)."
+                               % ", ".join(no_firmados))
+        db.actualizar_con_version(con, "entrega", {"id": entrega["id"]}, version,
+                                  {"estado": "ENVIADA", "fecha_envio": fecha})
+        for resumen in expedientes:
+            actual = _leer_expediente(con, resumen["id"])
+            contenido = _datos_de(actual)
+            entrada = _entrada_historial("ESTADO", "ENVIADO")
+            entrada.update(desde="FIRMADO", entrega=_nombre_entrega(entrega), fecha_envio=fecha)
+            contenido["historial"].append(entrada)
+            db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, actual["version"], {
+                "estado": "ENVIADO", "datos": contenido, "actualizado": db.ahora_utc(),
+            })
+    return obtener_entrega(con, entrega_id)
