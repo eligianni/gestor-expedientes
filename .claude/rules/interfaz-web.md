@@ -7,9 +7,10 @@ paths:
 
 # Interfaz web (sin framework)
 
-- Tres archivos: `web/index.html`, `web/app.js`, `web/style.css`. Sin CDN, sin build, sin dependencias.
+- Archivos: `web/index.html`, `web/app.js`, `web/style.css` y la fuente `web/fuentes/inter.woff2` (servidos por la lista
+  `server.ESTATICOS`). Sin CDN, sin build, sin dependencias: si hace falta algo de afuera, se guarda en `web/`.
 - Una `<section id="pantalla-...">` por pantalla; el menu lateral muestra una y oculta las demas (`hidden`).
-- Todo texto visible en espanol. Letra base 16 px. Botones minimo 44x44 px.
+- Todo texto visible en espanol. Letra base 15 px (Inter). Botones minimo 44x44 px.
 - Colores SOLO como variables CSS definidas en `:root` de `web/style.css` (ver CLAUDE.md, Sistema visual).
 - Cada estado del calendario tiene color Y letra/icono (no solo color): V, C, P, A, M, -, y ◆ / ● para marcas.
 - Foco visible: `outline: 3px solid var(--foco); outline-offset: 2px` en todo elemento interactivo.

@@ -28,7 +28,7 @@ Python ≥ 3.10 (objetivo 3.14). No hay archivo de dependencias porque no hay de
 
 ## Stack
 
-Python stdlib · `http.server.ThreadingHTTPServer` en 127.0.0.1 · SQLite (`sqlite3`) · HTML/CSS/JS sin framework en `web/` ·
+Python stdlib · `http.server.ThreadingHTTPServer` en 127.0.0.1 · SQLite (`sqlite3`) · HTML/CSS/JS sin framework en `web/` (fuente Inter local) ·
 Excel/Word con `zipfile` + `xml.etree.ElementTree` · `unittest` · local, sin nube.
 
 ## Architecture
@@ -52,7 +52,7 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | `gestor/tablas.py` | `util`, `xlsx_escritor` | escribir la base, `server` |
 | `gestor/textos.py`, `gestor/letras.py`, `gestor/util.py` | stdlib, `util`, `letras` | base, archivos, `negocio` |
 | `gestor/db.py` | stdlib | cualquier otro módulo de `gestor` salvo `config` |
-| `web/*` | nada externo (sin CDN) | llamar `fetch` fuera de `api()` |
+| `web/*` | nada externo (sin CDN); archivos propios en `web/` (la fuente en `web/fuentes/`) | llamar `fetch` fuera de `api()` |
 | `tests/*` | `gestor.*`, `tests.ayudas`, `tests.datos_prueba` | tocar `datos/` |
 
 **Dónde vive cada cosa.**
@@ -87,32 +87,37 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 
 ## Design system
 
-Tokens definidos una vez en `:root` de `web/style.css`; el CSS usa solo `var(--...)`. Sin modo oscuro.
+Estilo limpio de panel (inspirado en Stripe) con el azul institucional. Tokens definidos una vez en `:root` de
+`web/style.css`; el CSS usa solo `var(--...)`. Sin modo oscuro.
 
 | Token | Valor | Uso |
 |---|---|---|
-| `--primario` / `--primario-hover` | `#1F4E8C` / `#173D6E` | botones, enlaces, nav activo |
+| `--primario` / `--primario-hover` | `#1F4E8C` / `#173D6E` | botones, enlaces, foco |
+| `--primario-suave` / `--primario-borde` | `#EBF2FB` / `#B9CDE8` | ítem activo del menú, botones dentro de tablas |
 | `--primario-texto` | `#FFFFFF` | texto sobre primario |
-| `--fondo` | `#F6F8FA` | página |
-| `--superficie` | `#FFFFFF` | paneles, tablas |
-| `--borde` / `--borde-control` | `#D0D7DE` / `#8C959F` | divisores / bordes de inputs |
-| `--texto` / `--texto-suave` | `#1B2430` / `#57606A` | cuerpo / secundario |
-| `--error` / `--error-fondo` | `#B3261E` / `#FDECEA` | errores, atrasado |
-| `--exito` | `#2E7D32` | validado, confirmaciones |
-| `--aviso` / `--aviso-fondo` | `#8A5300` / `#FFF4E0` | avisos |
+| `--fondo` / `--superficie` / `--superficie-hundida` | `#F6F8FB` / `#FFFFFF` / `#F9FAFC` | página / paneles / encabezados de tabla |
+| `--borde` / `--borde-fuerte` / `--borde-control` | `#E3E8EF` / `#D5DCE5` / `#8792A2` | divisores / botones secundarios / inputs |
+| `--texto` / `--texto-suave` | `#1A1F36` / `#5E6A7D` | cuerpo / secundario |
+| `--error` / `--error-fondo` | `#B3261E` / `#FDF0EF` | errores, atrasado |
+| `--exito` / `--exito-fondo` | `#217A3C` / `#EAF6EE` | validado, confirmaciones |
+| `--aviso` / `--aviso-fondo` | `#8A5300` / `#FFF6E5` | avisos |
+| `--info` / `--info-fondo` | `#1565C0` / `#EAF2FD` | verificar, en curso |
+| `--violeta` / `--violeta-fondo` | `#6A3FA0` / `#F3EEFA` | salvable, pendiente con motivo |
 | `--pendiente-plazo` | `#FFE08A` | celda pendiente en plazo |
-| `--info` | `#1565C0` | verificar, en curso |
-| `--violeta` | `#6A3FA0` | salvable, pendiente con motivo |
-| `--gris-fuera` | `#C9CED6` | fuera de vigencia |
+| `--neutro-fondo` | `#EEF1F5` | fuera de vigencia, hover, pastilla neutra |
 | `--naranja` | `#C2410C` | borde OC por vencer |
 | `--foco` | `#1F4E8C` | `outline: 3px solid var(--foco); outline-offset: 2px` |
 
-- **Tipo:** `"Segoe UI", system-ui, sans-serif`; cuerpo 16px/1.5; títulos 24/20/18px peso 600; mono `Consolas, "Cascadia Mono", monospace` 15px; números `tabular-nums`.
-- **Espaciado:** base 4px — 4, 8, 12, 16, 24, 32, 48.
-- **Radio:** 4px botones e inputs, 6px paneles. **Sombras:** `0 1px 2px rgba(27, 36, 48, 0.08)`.
-- **Botones:** alto mínimo 44px. **Tablas:** compactas (padding 6px 8px).
+- **Tipo:** Inter guardada en `web/fuentes/inter.woff2` (OFL, licencia al lado), con `"Segoe UI", system-ui` de respaldo;
+  cuerpo 15px/1.55; títulos 26/19/16px peso 700/650; encabezados de tabla 12px en mayúsculas; mono `Consolas` 14px;
+  números de tablas con `tabular-nums` (`.numero`).
+- **Espaciado:** base 4px — 4, 8, 12, 16, 20, 24, 32. Paneles con padding 20px 24px.
+- **Radio:** 6px botones e inputs, 10px paneles, 999px pastillas. **Sombras:** `--sombra-panel` (anillo de 1px + sombra suave),
+  sin bordes duros en paneles.
+- **Botones:** alto mínimo 44px; primario azul lleno, secundario blanco con texto oscuro.
+- **Estados:** pastillas (`.pastilla .pastilla-<tono>`) con la palabra siempre visible; calendario con letra (`-` `V` `C` `P`
+  `A` `M` `·`) y marcas ● ◆. Nunca solo color.
 - **Motion:** solo transiciones de color de 120ms `ease-out`; `transition: none` con `prefers-reduced-motion: reduce`.
-- **Estados siempre con letra o palabra además del color** (calendario `-` `V` `C` `P` `A` `M` `·`, marcas ● ◆).
 
 ## Environment
 
@@ -145,6 +150,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - La carga del PDF de la OC no tiene columna propia: queda como `evento` `IMPORTACION` de la OC con `despues.fuente = "pdf_oc"`
   (`negocio.ultimo_pdf_oc`). Lo aplicado se marca en `campos_manuales`, así la importación del z_compras2 no lo pisa.
 - La exportación de Tablas se envía con un `<form>` POST (no `fetch`) para que el navegador descargue el archivo.
+- Copias de seguridad: una al arrancar (rotan, `backups_a_conservar`) y una por día en `<carpeta_backups>/diarios`
+  (`db.backup_diario`, hilo en `app.py` cada 30 min, `backups_diarios_a_conservar`). Restaurar usa solo las de arranque.
+- Todo archivo nuevo de `web/` se sirve solo si está en `server.ESTATICOS` (lista blanca); nunca desde internet.
 - `httpd.shutdown()` se llama desde otro thread (`POST /api/apagar`), nunca desde el que atiende.
 - En la prueba de concurrencia las funciones de `multiprocessing` van a nivel de módulo (Windows usa `spawn`).
 

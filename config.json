@@ -3,6 +3,7 @@
   "base_datos": "datos/expedientes.db",
   "carpeta_backups": "datos/backups",
   "backups_a_conservar": 30,
+  "backups_diarios_a_conservar": 90,
   "carpeta_salidas": "salidas",
   "puerto_preferido": 8765,
   "puerto_maximo": 8775,

@@ -965,6 +965,19 @@ const ESTADOS_TEXTO = {
   PARA_FACTURAR: "Para facturar", ARMADO: "Armado", EN_DTO_ECONOMICO_CONTABLE: "En Dto. Económico Contable",
   FINALIZADO: "Finalizado",
 };
+const TONO_ESTADO = {
+  BORRADOR: "", CONTROLADO: "info", EN_FIRMA: "violeta", FIRMADO: "violeta", ENVIADO: "info", CONTABILIZADO: "exito",
+  CERRADO: "exito", FINALIZADO: "exito", PENDIENTE: "aviso", ANULADO: "error", DEVUELTO: "aviso",
+  RECIBIDO_MANTENIMIENTO: "info", INFORME_ECONOMICO: "info", PARA_FACTURAR: "info", ARMADO: "info",
+  EN_DTO_ECONOMICO_CONTABLE: "violeta",
+};
+
+/** Estado del expediente como pastilla: la palabra siempre está; el color solo acompaña. */
+function pastillaEstado(estadoExp) {
+  const tono = TONO_ESTADO[estadoExp];
+  return el("span", { clase: "pastilla" + (tono ? " pastilla-" + tono : ""), texto: ESTADOS_TEXTO[estadoExp] || estadoExp });
+}
+
 const TIPOS_EXPEDIENTE = [["COMUN", "Común"], ["CENTRALIZADA", "Centralizada"], ["CORRECTIVO", "Correctivo"], ["EVENTUAL", "Pago eventual"]];
 
 const expEstado = { exp: null, ficha: null, paso: 1, sugerido: null, fuera: [], sii: null };
@@ -1012,7 +1025,7 @@ async function listarExpedientes() {
     el("td", { texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
     el("td", { texto: x.periodo || "—" }),
     el("td", { texto: x.factura || "—" }),
-    el("td", { texto: ESTADOS_TEXTO[x.estado] || x.estado })));
+    el("td", {}, pastillaEstado(x.estado))));
   vaciar(lista,
     el("p", { clase: "texto-suave", texto: expedientes.length + (expedientes.length === 1 ? " expediente" : " expedientes") }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
@@ -2229,6 +2242,9 @@ async function cargarConfiguracion() {
   const copia = el("div", { clase: "panel" },
     el("h2", { clase: "titulo-chico", texto: "Copias de seguridad y cierre" }),
     el("p", { id: "conf-ultimo-backup", texto: base.ultimo_backup ? "Última copia: " + base.ultimo_backup : "Todavía no hay copias de seguridad." }),
+    el("p", { id: "conf-backup-diario", clase: "texto-suave", texto: base.ultimo_backup_diario
+      ? "Copia diaria (una por día, en la carpeta «diarios»; se guardan 90 días): " + base.ultimo_backup_diario
+      : "Todavía no hay copia diaria: se hace sola al abrir el programa y una vez por día mientras está abierto." }),
     el("div", { clase: "acciones" },
       el("button", { type: "button", texto: "Copia de seguridad ahora", onclick: copiaManual }),
       el("button", { type: "button", clase: "secundario", texto: "Cerrar programa", onclick: cerrarPrograma })));
@@ -2634,6 +2650,8 @@ function celdaTabla(columna, fila) {
     const numero = nombre === "oc" ? fila.numero : fila.oc;
     td.append(el("button", { type: "button", clase: "secundario boton-celda", texto, "aria-label": "Ver la OC " + numero,
       onclick: () => irAOC(numero) }));
+  } else if (nombre === "expedientes" && columna.clave === "estado" && fila.estado) {
+    td.append(pastillaEstado(fila.estado));
   } else {
     td.textContent = texto;
   }

@@ -23,6 +23,8 @@ ESTATICOS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
+    # Fuente Inter (OFL, ver web/fuentes/LICENSE-Inter.txt) guardada en la app: se ve igual sin internet.
+    "/fuentes/inter.woff2": ("fuentes/inter.woff2", "font/woff2"),
 }
 
 _TAMANO_DESCARTE = 64 * 1024
@@ -142,7 +144,12 @@ def base_estado(h, m, cuerpo):
     return 200, _ok({
         "integridad": "ok" if h.server.integridad else "falla",
         "ultimo_backup": ultimo.name if ultimo is not None else None,
+        "ultimo_backup_diario": _nombre(db.ultimo_backup_diario(config.ruta(h.server.cfg, "carpeta_backups"))),
     })
+
+
+def _nombre(ruta):
+    return ruta.name if ruta is not None else None
 
 
 def base_restaurar(h, m, cuerpo):
