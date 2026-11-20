@@ -107,7 +107,14 @@ def objeto_sugerido(completo):
 
 
 def articulo_sugerido(objeto):
-    """«al», «a la», «a los» o «a las» según la primera palabra del objeto."""
+    """«a la» si el objeto habla de adquisición o provisión, «al» si es un servicio (manda la que aparece primero);
+    si no dice ninguna, según la primera palabra."""
+    sin_tildes = util.normalizar_texto(objeto or "")
+    posiciones = [(sin_tildes.find(clave), articulo) for clave, articulo in
+                  (("adquisicion", "a la"), ("aquisicion", "a la"), ("provision", "a la"), ("servicio", "al"))
+                  if sin_tildes.find(clave) >= 0]
+    if posiciones:
+        return min(posiciones)[1]
     palabra = (objeto or "").split(" ", 1)[0].lower().strip(",.")
     if palabra in _ARTICULOS:
         return _ARTICULOS[palabra]
@@ -118,6 +125,14 @@ def articulo_sugerido(objeto):
     if palabra.endswith("s"):
         return "a los"
     return "al"
+
+
+def dia_inicio_periodo(vig_desde):
+    """Día en que arranca cada período: el día de inicio de la vigencia (1 = mes calendario; 29 a 31 → 1)."""
+    if not vig_desde:
+        return None
+    dia = int(vig_desde[8:10])
+    return dia if dia <= 28 else 1
 
 
 def _objeto_completo(lineas):
@@ -263,7 +278,8 @@ def leer_oc(texto):
     if mca is not None:
         ca = "%d-%s" % (int(mca.group(1)), mca.group(2))
 
-    gde_pdf = _gde(_buscar(r"N[uú]mero\s*:\s*(IF-\d{4}-\d+-[A-Z0-9]+-[A-Z0-9]+#[A-Z0-9]+)", texto))
+    gde_pdf = (_gde(_buscar(r"numero_documento\s*:\s*(%s)" % _GDE, texto, re.IGNORECASE))
+               or _gde(_buscar(r"N[uú]mero\s*:\s*([A-Z]{2,6}-\d{4}-\d+-[A-Z0-9]+-[A-Z0-9]+#[A-Z0-9]+)", texto)))
     if not gde_pdf:
         candidatos = re.findall(r"\bIF-\d{4}-\d+-[A-Z0-9]+-[A-Z0-9]+#[A-Z0-9]+", texto)
         if candidatos:
@@ -280,10 +296,16 @@ def leer_oc(texto):
         avisos.append("La suma de los renglones ($ %s) no coincide con el importe total de la OC ($ %s)." % (
             util.formato_pesos(suma), util.formato_pesos(total)))
 
+    vig_desde = _fecha(_buscar(r"Desde\s*:\s*(\d{2}/\d{2}/\d{4})", texto))
+    uoc = _espacios(_buscar(r"UOC\s*:[ \t]*([^\n]*?)(?:[ \t]{2,}|$)", texto, re.MULTILINE))
     return {
         "numero": numero,
         "fecha_oc": _fecha(_buscar(r"Fecha\s*:\s*(\d{2}/\d{2}/\d{4})", texto)),
-        "vig_desde": _fecha(_buscar(r"Desde\s*:\s*(\d{2}/\d{2}/\d{4})", texto)),
+        "uoc": uoc,
+        # «UOC: Nivel central» = OC centralizada (la compra la hizo Nivel Central).
+        "centralizada": (1 if "nivel central" in util.normalizar_texto(uoc) else 0) if uoc else None,
+        "vig_desde": vig_desde,
+        "dia_inicio_periodo": dia_inicio_periodo(vig_desde),
         "vig_hasta": _fecha(_buscar(r"Hasta\s*:\s*(\d{2}/\d{2}/\d{4})", texto)),
         "prorroga": _espacios(_buscar(r"Opci[oó]n\s+a\s+Pr[oó]rroga\s*:\s*([^\n]*)", texto)),
         "procedimiento": _espacios(_buscar(r"Tipo\s*:[ \t]*([^\n]*?)(?:[ \t]{2,}|[ \t]*Ejercicio|$)", procedimiento,
@@ -297,7 +319,7 @@ def leer_oc(texto):
         "gde_pdf_oc": gde_pdf,
         "objeto_completo": objeto_completo,
         "objeto": objeto,
-        "objeto_articulo": articulo_sugerido(objeto),
+        "objeto_articulo": articulo_sugerido(objeto_completo or objeto),
         "importe_total_centavos": total,
         "renglones": renglones,
         "avisos": avisos,

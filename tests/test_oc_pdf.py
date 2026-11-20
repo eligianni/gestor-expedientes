@@ -108,6 +108,19 @@ class PruebaAvisosYErrores(unittest.TestCase):
         oc = oc_pdf.leer_oc(texto)
         self.assertEqual(oc["renglones"][0]["desglose"], {"cantidad": "3", "unidad": "MES", "precio_centavos": 10000})
 
+    def test_uoc_nivel_central_es_centralizada(self):
+        texto = texto_oc("EX-2026-89654857_EFIA")
+        self.assertEqual(oc_pdf.leer_oc(texto)["centralizada"], 0)
+        central = oc_pdf.leer_oc(texto.replace("UOC: Hospital del Bicentenario Ituzaingó", "UOC: Nivel Central", 1))
+        self.assertEqual((central["uoc"], central["centralizada"]), ("Nivel Central", 1))
+
+    def test_articulo_por_regla(self):
+        self.assertEqual(oc_pdf.articulo_sugerido("SERVICIO DE MANTENIMIENTO CON ADQUISICIÓN DE REPUESTOS"), "al")
+        self.assertEqual(oc_pdf.articulo_sugerido("Provisión de determinaciones con servicio técnico"), "a la")
+        self.assertEqual(oc_pdf.articulo_sugerido("ADQUISICION DE TELAS"), "a la")
+        self.assertEqual(oc_pdf.dia_inicio_periodo("2025-07-17"), 17)
+        self.assertEqual(oc_pdf.dia_inicio_periodo("2025-10-01"), 1)
+
     def test_objeto_y_articulo_sugeridos(self):
         self.assertEqual(oc_pdf.objeto_sugerido("ALQUILER DE EQUIPO, PARA EL HOSPITAL."), "alquiler de equipo")
         self.assertEqual(oc_pdf.articulo_sugerido("insumos de limpieza"), "a los")

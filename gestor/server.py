@@ -13,7 +13,7 @@ import threading
 import urllib.request
 from urllib.parse import parse_qs, quote, urlsplit
 
-from gestor import (APP_ID, __version__, comprobantes, config, controles, db, docx_gen, exportes, importar, negocio, oc_pdf,
+from gestor import (APP_ID, __version__, comprobantes, config, controles, db, docx_gen, exportes, importar, migracion, negocio, oc_pdf,
                     pdf_texto, tablas, textos, xlsx, xlsx_escritor)
 
 WEB = config.RAIZ / "web"
@@ -251,9 +251,13 @@ def _pedido_importacion(h, cuerpo):
         raise validacion("Elegí el archivo z_compras2 (.xlsx) a importar.")
     nombre, contenido = archivos["archivo"]
     parametros = db.leer_parametros(h.conexion())
-    centros = ((parametros.get("efectores") or {}).get(efector) or {}).get("centros") or []
-    if not centros:
-        raise ErrorHTTP(422, "negocio", "Configurá los centros SAP de %s antes de importar." % efector)
+    try:
+        encabezados, _ = xlsx.leer_tabla(io.BytesIO(contenido))
+    except xlsx.XlsxError:
+        encabezados = []  # el importador da el error del archivo
+    falta = importar.falta_configuracion(efector, parametros, encabezados)
+    if falta:
+        raise ErrorHTTP(422, "negocio", falta)
     return efector, nombre, contenido, parametros
 
 
@@ -267,6 +271,35 @@ def importar_confirmar(h, m, cuerpo):
     efector, nombre, contenido, parametros = _pedido_importacion(h, cuerpo)
     informe = importar.importar(h.conexion(), io.BytesIO(contenido), efector, parametros, archivo=nombre)
     return 200, _ok(informe)
+
+
+def _pedido_migracion(h, cuerpo):
+    _, archivos = leer_multipart(h, cuerpo)
+    faltan = [nombre for clave, nombre in (("numeracion", "la NUMERACIÓN"), ("remitos", "el seguimiento de remitos"))
+              if not (archivos.get(clave) and archivos[clave][1])]
+    if faltan:
+        raise validacion("Elegí %s (.xlsx)." % " y ".join(faltan))
+    try:
+        hojas_num, hojas_rem = migracion.leer_archivos(archivos["numeracion"][1], archivos["remitos"][1])
+    except migracion.ErrorMigracion as error:
+        raise validacion(str(error)) from None
+    return hojas_num, hojas_rem, "%s + %s" % (archivos["numeracion"][0], archivos["remitos"][0])
+
+
+def migracion_vista_previa(h, m, cuerpo):
+    hojas_num, hojas_rem, _ = _pedido_migracion(h, cuerpo)
+    try:
+        return 200, _ok(migracion.planificar(h.conexion(), hojas_num, hojas_rem))
+    except migracion.ErrorMigracion as error:
+        raise validacion(str(error)) from None
+
+
+def migracion_confirmar(h, m, cuerpo):
+    hojas_num, hojas_rem, nombres = _pedido_migracion(h, cuerpo)
+    try:
+        return 200, _ok(migracion.migrar(h.conexion(), hojas_num, hojas_rem, nombres))
+    except migracion.ErrorMigracion as error:
+        raise validacion(str(error)) from None
 
 
 def importaciones(h, m, cuerpo):
@@ -565,6 +598,8 @@ RUTAS = [
     ("POST", re.compile(r"/api/importar/vista-previa"), importar_vista_previa),
     ("POST", re.compile(r"/api/importar/confirmar"), importar_confirmar),
     ("GET", re.compile(r"/api/importaciones"), importaciones),
+    ("POST", re.compile(r"/api/importar/seguimiento/vista-previa"), migracion_vista_previa),
+    ("POST", re.compile(r"/api/importar/seguimiento/confirmar"), migracion_confirmar),
     ("GET", re.compile(r"/api/oc"), oc_listar),
     ("POST", re.compile(r"/api/oc"), oc_crear),
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_ficha),

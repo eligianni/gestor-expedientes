@@ -37,6 +37,12 @@ usuarias comparten la misma base. No necesita internet.
 
 ## Flujo de un expediente
 
+**Para empezar (una sola vez): migrar el seguimiento en Excel.** En **Importar → Migrar el seguimiento en Excel** elegir la NUMERACIÓN y el seguimiento de remitos (se lee solo la solapa
+«HBI 20252026») y tocar **Vista previa**. Se cruzan por N° de factura (o por N° de remito si la factura tiene un error).
+Lo que ya salió en una entrega queda Cerrado (o Enviado si no está contabilizado), la hoja de pendientes queda
+Pendiente, y los remitos de 2026 sin entrega quedan en Borrador. La tabla «No se importan» dice qué falta (por ejemplo,
+una OC que no está: importar antes el z_compras2). Se puede repetir: lo ya migrado no se duplica.
+
 1. **Importar** el reporte de OC (Excel de SAP) en Importar. Las OC nuevas aparecen en Órdenes de compra.
 2. **PDF de la OC** (una vez por OC, antes de validar): en la ficha de la OC, o en el paso 1 del expediente, subir el PDF
    digital de la OC (el firmado en GDE) y tocar **Leer y comparar**. El programa toma de ahí el objeto de la contratación,

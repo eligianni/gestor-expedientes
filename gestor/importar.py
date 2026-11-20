@@ -29,6 +29,7 @@ MAPA = {
     "importe": "importe",
     "org compras": "org_compras",
     "centro": "centro",
+    "centro gestor": "centro_gestor",
     "entrega final": "entrega_final",
     "factura final": "factura_final",
     "por entregar cantid": "sap_por_entregar",
@@ -49,7 +50,7 @@ MOTIVOS_DESCARTE = ("sin_oc", "partida", "centro", "exclusion_manual")
 # Campos de la OC que vienen del reporte o se infieren al importar (los demás se cargan a mano).
 CAMPOS_OC = (
     "efector", "sap", "clase", "org_compras", "centro", "ca", "expediente_contratacion",
-    "fecha_oc", "vig_desde", "vig_hasta", "cerrada_sap", "tipo", "comodato", "centralizada",
+    "fecha_oc", "vig_desde", "vig_hasta", "cerrada_sap", "tipo", "comodato", "centralizada", "dia_inicio_periodo",
 )
 # Campos del renglón que vienen del reporte o se infieren al importar.
 CAMPOS_RENGLON = (
@@ -118,14 +119,42 @@ def _columnas(encabezados):
     return presentes
 
 
-def _validar_efector(efector, parametros):
+# Centro gestor de cada efector y organización de compras propia, si la tabla config todavía no los tiene.
+CENTROS_GESTORES_POR_DEFECTO = {"HBI": ["4500"], "CASPH": ["4900"]}
+ORG_COMPRAS_POR_DEFECTO = {"HBI": ["1900"], "CASPH": ["1300"]}
+CENTROS_PROPIOS_POR_DEFECTO = {"HBI": ["1900"], "CASPH": ["1300"]}
+
+
+def _datos_efector(efector, parametros):
     efectores = parametros.get("efectores") or {}
     if efector not in efectores:
         raise ErrorImportacion("Elegí el efector (HBI o CASPH) antes de importar.")
-    centros = [str(c) for c in efectores[efector].get("centros") or []]
-    if not centros:
-        raise ErrorImportacion("Configurá los centros SAP de %s antes de importar." % efector)
-    return set(centros)
+    return efectores[efector] or {}
+
+
+def centros_gestores(efector, parametros):
+    datos = _datos_efector(efector, parametros)
+    valores = datos["centros_gestores"] if "centros_gestores" in datos else CENTROS_GESTORES_POR_DEFECTO.get(efector, [])
+    return {str(c).strip() for c in valores or [] if str(c).strip()}
+
+
+def usa_centro_gestor(encabezados):
+    return any(util.clave_encabezado(e or "") == "centro gestor" for e in encabezados)
+
+
+def falta_configuracion(efector, parametros, encabezados):
+    """Mensaje si falta configurar con qué se reconoce al efector en este reporte (centro gestor o centro), o None.
+
+    Los reportes por centro gestor (4500 HBI, 4900 CASPH) traen todo lo imputado al efector aunque el renglón tenga otro
+    centro (centralizadas con centro 0010, 1000, 1500…); los reportes viejos sin esa columna se filtran por centro.
+    """
+    if usa_centro_gestor(encabezados):
+        if not centros_gestores(efector, parametros):
+            return "Configurá el centro gestor de %s antes de importar." % efector
+        return None
+    if not [c for c in _datos_efector(efector, parametros).get("centros") or [] if str(c).strip()]:
+        return "Configurá los centros SAP de %s antes de importar." % efector
+    return None
 
 
 def _limpiar_fila(fila, columnas):
@@ -269,9 +298,41 @@ def _es_servicio(codigo):
     return codigo == "" or RE_CODIGO_SERVICIO.fullmatch(codigo) is not None
 
 
+CENTROS_CENTRALES_POR_DEFECTO = ["0010"]  # centro SAP de Nivel Central: sus OC son las centralizadas
+
+
+def centros_centrales(parametros):
+    return {str(c).strip() for c in parametros.get("centros_centrales", CENTROS_CENTRALES_POR_DEFECTO) or []}
+
+
+def centro_de_fila(renglon):
+    """Centro SAP de la fila del reporte que trajo el renglón ("" si no se sabe)."""
+    for encabezado, valor in (renglon.get("crudo") or {}).items():
+        if util.clave_encabezado(encabezado) == "centro":
+            return _texto(valor)
+    return ""
+
+
 def inferir_oc(oc, renglones, parametros):
-    """tipo, comodato y centralizada de la OC a partir de sus renglones y de org_compras."""
+    """tipo, comodato y centralizada de la OC a partir de sus renglones.
+
+    Centralizada (compra de Nivel Central, «UOC: Nivel Central BS» en el PDF): algún renglón del centro de Nivel Central
+    (0010), o comprada por otra organización de compras (0100, 0110…) para entregar en un centro propio del efector
+    (1900 HBI, 1300 CASPH). Lo comprado por otra organización para otro centro (farmacia o depósito 1000, 1500, 1700…)
+    no es centralizada: queda como «otro centro». Si el reporte no trae el centro, alcanza con la organización.
+    """
+    efector = oc.get("efector")
+    datos = ((parametros.get("efectores") or {}).get(efector) or {}) if efector else {}
     propias = {str(o) for o in parametros.get("org_compras_propias") or []}
+    if efector:
+        propias |= {str(o) for o in datos.get("org_compras", ORG_COMPRAS_POR_DEFECTO.get(efector, [])) or []}
+    org_ajena = (oc.get("org_compras") or "") not in propias
+    centros = {centro_de_fila(r) for r in renglones} - {""}
+    if centros:
+        centros_del_efector = {str(c) for c in datos.get("centros") or []} or set(CENTROS_PROPIOS_POR_DEFECTO.get(efector, []))
+        centralizada = 1 if (centros & centros_centrales(parametros)) or (org_ajena and centros & centros_del_efector) else 0
+    else:
+        centralizada = 1 if org_ajena else 0
     comodato = any("COMODATO" in (r.get("descripcion") or "").upper() for r in renglones)
     if comodato:
         tipo = "PROVISION"
@@ -282,8 +343,20 @@ def inferir_oc(oc, renglones, parametros):
     return {
         "tipo": tipo,
         "comodato": 1 if comodato else 0,
-        "centralizada": 0 if (oc.get("org_compras") or "") in propias else 1,
+        "centralizada": centralizada,
     }
+
+
+def dia_inicio_periodo(vig_desde):
+    """Día en que arranca cada período: el de inicio de la vigencia (1 = mes calendario).
+
+    Una OC que empieza el 17/07 se valida del 17 al 16 de cada mes. La base admite 1 a 28: si la vigencia arranca
+    del 29 al 31 se usa el mes calendario y se corrige a mano si hace falta.
+    """
+    desde = _a_fecha(vig_desde)
+    if desde is None or desde.day > 28:
+        return 1
+    return desde.day
 
 
 def _aplicar_inferencias(ocs, renglones, parametros):
@@ -293,16 +366,24 @@ def _aplicar_inferencias(ocs, renglones, parametros):
     for numero, oc in ocs.items():
         lista = por_oc.get(numero, [])
         oc.update(inferir_oc(oc, lista, parametros))
+        oc["dia_inicio_periodo"] = dia_inicio_periodo(oc.get("vig_desde"))
         for renglon in lista:
             renglon.update(inferir_desglose(renglon, oc["vig_desde"], oc["vig_hasta"]))
 
 
 def _leer(origen, efector, parametros):
     """Lee y limpia el reporte. Devuelve (informe sin comparar con la base, OC por número, renglones por (oc, pos))."""
-    centros = _validar_efector(efector, parametros)
+    _datos_efector(efector, parametros)
     encabezados, filas = xlsx.leer_tabla(origen)
     columnas = _columnas(encabezados)
-
+    falta = falta_configuracion(efector, parametros, encabezados)
+    if falta:
+        raise ErrorImportacion(falta)
+    if "centro_gestor" in columnas:
+        campo_filtro, valores_filtro = "centro_gestor", centros_gestores(efector, parametros)
+    else:
+        campo_filtro = "centro"
+        valores_filtro = {str(c) for c in _datos_efector(efector, parametros).get("centros") or []}
     excluidas = {str(p) for p in parametros.get("partidas_excluidas") or []}
     exclusiones = parametros.get("exclusiones") or {}
     sap_excluidos = {util.sap_sin_ceros(str(s)) for s in exclusiones.get("sap") or []}
@@ -334,7 +415,7 @@ def _leer(origen, efector, parametros):
         if "partida" in columnas and _texto(fila.get(columnas["partida"])) in excluidas:
             informe["descartes"]["partida"] += 1
             continue
-        if _texto(fila.get(columnas["centro"])) not in centros:
+        if _texto(fila.get(columnas[campo_filtro])) not in valores_filtro:
             informe["descartes"]["centro"] += 1
             continue
         oc_txt = util.sap_sin_ceros(_texto(fila.get(columnas["oc"])))

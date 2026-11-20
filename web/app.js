@@ -391,6 +391,79 @@ function iniciarImportar() {
     document.getElementById("importar-confirmar").disabled = true;
   });
   document.getElementById("importar-centros-guardar").addEventListener("click", guardarCentros);
+  document.getElementById("form-migracion").addEventListener("submit", (e) => { e.preventDefault(); enviarMigracion(false); });
+  document.getElementById("migracion-confirmar").addEventListener("click", () => enviarMigracion(true));
+  for (const id of ["migracion-numeracion", "migracion-remitos"]) {
+    document.getElementById(id).addEventListener("change", () => { document.getElementById("migracion-confirmar").disabled = true; });
+  }
+}
+
+// --- Migración del seguimiento en Excel (NUMERACIÓN + solapa de remitos) ------------------------------------
+
+function formularioMigracion() {
+  const numeracion = document.getElementById("migracion-numeracion").files[0];
+  const remitos = document.getElementById("migracion-remitos").files[0];
+  if (!numeracion || !remitos) {
+    mostrarAviso("Elegí los dos archivos: la NUMERACIÓN y el seguimiento de remitos.", "error");
+    return null;
+  }
+  const datos = new FormData();
+  datos.append("numeracion", numeracion, numeracion.name);
+  datos.append("remitos", remitos, remitos.name);
+  return datos;
+}
+
+async function enviarMigracion(confirmar) {
+  limpiarAvisos();
+  const datos = formularioMigracion();
+  if (!datos) return;
+  if (confirmar && !confirm("¿Crear los expedientes de la vista previa? Se puede repetir: lo ya migrado no se duplica.")) return;
+  const destino = document.getElementById("migracion-resultado");
+  cargando(destino);
+  const informe = await api("POST", "/api/importar/seguimiento/" + (confirmar ? "confirmar" : "vista-previa"), datos);
+  if (!informe) { vaciar(destino); return; }
+  pintarMigracion(informe, confirmar);
+  document.getElementById("migracion-confirmar").disabled = confirmar || !informe.resumen.expedientes;
+  if (confirmar) {
+    mostrarAviso("Migración hecha: " + informe.resumen.creados + " expedientes creados.", "exito");
+    cargarHistorial();
+  }
+}
+
+function pintarMigracion(informe, confirmado) {
+  const r = informe.resumen;
+  const estados = Object.entries(r.por_estado).map(([e, n]) => (ESTADOS_TEXTO[e] || e) + ": " + n).join(" · ");
+  const partes = [
+    el("h3", { texto: confirmado ? "Migración realizada" : "Vista previa de la migración" }),
+    tabla(["Concepto", "Cantidad"], [
+      [confirmado ? "Expedientes creados" : "Expedientes a crear", confirmado ? r.creados : r.expedientes],
+      ["Por estado", estados || "—"],
+      ["Ya estaban en el gestor (no se duplican)", r.ya_existentes],
+      ["Remitos", r.remitos],
+      ["Con cantidades por renglón deducidas", r.con_cantidades],
+      ["Entregas nuevas", r.entregas_nuevas],
+      ["Filas que no se importan", r.no_importados],
+    ], [null, "numero"]),
+  ];
+  if (informe.hojas_ignoradas.length) {
+    partes.push(el("p", { clase: "texto-suave", texto: "Hojas que no se leen: " + informe.hojas_ignoradas.join(", ") + "." }));
+  }
+  if (informe.no_importados.length) {
+    partes.push(el("h4", { texto: "No se importan" }),
+      tabla(["Origen", "Fila", "Detalle", "Motivo"], informe.no_importados.map((x) => [x.origen, x.fila, x.detalle, x.motivo])));
+  }
+  const filas = informe.expedientes.map((p) => [
+    p.origen, p.entrega ?? "—", p.oc || "—", p.razon_social, p.periodo, p.factura || "—",
+    p.centavos !== null && p.centavos !== undefined ? formatoPesos(p.centavos) : "—",
+    p.ya_existe ? "Ya existe (N° " + p.ya_existe + ")" : (ESTADOS_TEXTO[p.estado] || p.estado),
+    p.remitos.join(" / ") || "—",
+    p.items.map((i) => "Rgl. " + i.pos + ": " + i.cantidad).join(", ") || "—",
+    p.avisos.join(" "),
+  ]);
+  partes.push(el("h4", { texto: "Expedientes" }),
+    tabla(["Origen", "Entrega", "OC", "Proveedor", "Período", "Factura", "Importe $", "Estado", "Remitos", "Cantidades", "Avisos"],
+      filas, [null, "numero", null, null, null, null, "numero"]));
+  vaciar(document.getElementById("migracion-resultado"), el("div", { clase: "panel" }, ...partes));
 }
 
 // --- Montos (sin float: todo en centavos enteros) ---------------------------
@@ -492,7 +565,9 @@ async function listarOC() {
   }
   const filas = ocs.map((oc) => {
     const marcas = [oc.tipo, oc.comodato ? "comodato" : "", oc.centralizada ? "centralizada" : "",
-      oc.excluida ? "EXCLUIDA" : "", oc.origen === "MANUAL" ? "manual" : ""].filter(Boolean).join(" · ");
+      oc.excluida ? "EXCLUIDA" : "", oc.origen === "MANUAL" ? "manual" : "",
+      oc.renglones_otro_centro ? (oc.renglones_otro_centro === oc.renglones ? "otro centro"
+        : oc.renglones_otro_centro + " de " + oc.renglones + " renglones de otro centro") : ""].filter(Boolean).join(" · ");
     return el("tr", {},
       el("td", {}, el("button", { type: "button", clase: "secundario", texto: oc.numero,
         "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) })),
@@ -500,7 +575,7 @@ async function listarOC() {
       el("td", { texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
       el("td", { texto: oc.objeto || "—" }),
       el("td", { texto: marcas }),
-      el("td", { texto: (oc.vig_desde || "") + (oc.vig_hasta ? " a " + oc.vig_hasta : " (sin fin)") }),
+      el("td", { texto: oc.tipo === "BIEN" ? "—" : (oc.vig_desde || "") + (oc.vig_hasta ? " a " + oc.vig_hasta : " (sin fin)") }),
       el("td", { clase: "numero", texto: oc.renglones }),
       el("td", { clase: "numero", texto: formatoPesos(oc.importe_centavos) }));
   });
@@ -545,10 +620,11 @@ const CAMPOS_OC_FORM = [
   ["leyenda_cv", "Leyenda del CV", "texto"],
   ["vig_desde", "Vigencia desde", "fecha"],
   ["vig_hasta", "Vigencia hasta", "fecha"],
-  ["prorroga", "Prórroga hasta", "fecha"],
   ["excluida", "Excluir esta OC (no aparece en las listas)", "casilla"],
   ["motivo_exclusion", "Motivo de la exclusión", "texto"],
 ];
+
+const CAMPOS_PERIODO_OC = ["dia_inicio_periodo", "vig_desde", "vig_hasta", "prorroga"];
 
 function controlCampoOC(campo, tipo, valor) {
   const id = "oc-campo-" + campo;
@@ -571,10 +647,23 @@ function valorCampoOC(campo, tipo) {
   return control.value;
 }
 
+/** Pastilla para un renglón de otro centro: se recibe, pero casi nunca lleva factura del efector. */
+function marcaOtroCentro(r) {
+  if (r.central) {
+    return el("span", { clase: "pastilla pastilla-violeta marca-otro-centro", texto: "Centralizada · centro " + r.centro,
+      title: "Renglón de Nivel Central (centro " + r.centro + ")." });
+  }
+  if (!r.otro_centro) return null;
+  return el("span", { clase: "pastilla pastilla-aviso marca-otro-centro", texto: "Otro centro " + r.centro,
+    title: "Renglón del centro " + r.centro + ": a veces se recibe sin factura del efector." });
+}
+
 function pintarFichaOC(ficha) {
   const { oc, proveedor, renglones, expedientes } = ficha;
   const manuales = new Set(oc.campos_manuales || []);
-  const campos = CAMPOS_OC_FORM.map(([campo, etiqueta, tipo]) => {
+  // Los bienes no tienen períodos: sin vigencia, prórroga ni día de inicio.
+  const camposVisibles = CAMPOS_OC_FORM.filter(([campo]) => oc.tipo !== "BIEN" || !CAMPOS_PERIODO_OC.includes(campo));
+  const campos = camposVisibles.map(([campo, etiqueta, tipo]) => {
     const control = controlCampoOC(campo, tipo, oc[campo]);
     const texto = etiqueta + (manuales.has(campo) ? " (editado a mano)" : "");
     if (tipo === "casilla") {
@@ -589,9 +678,9 @@ function pintarFichaOC(ficha) {
     ...campos,
     el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar cambios de la OC" })));
 
-  const filasRenglones = renglones.map((r) => el("tr", {},
+  const filasRenglones = renglones.map((r) => el("tr", { clase: r.otro_centro ? "fila-otro-centro" : null },
     el("td", { clase: "numero", texto: r.pos }),
-    el("td", { texto: (r.codigo ? r.codigo + " · " : "") + r.descripcion }),
+    el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
     el("td", { clase: "numero", texto: r.cantidad + (r.unidad ? " " + r.unidad : "") }),
     el("td", { clase: "numero", texto: formatoPesos(r.precio_centavos) }),
     el("td", { clase: "numero", texto: formatoPesos(r.importe_centavos) }),
@@ -637,7 +726,9 @@ const CAMPOS_MONEDA_PDF = new Set(["precio_centavos", "importe_centavos", "desgl
 
 function valorPdf(campo, valor) {
   if (valor === null || valor === undefined || valor === "") return "—";
+  if (campo === "centralizada") return valor ? "Sí" : "No";
   if (CAMPOS_MONEDA_PDF.has(campo)) return "$ " + formatoPesos(valor);
+  if (campo === "cantidad" || campo === "desglose_cantidad") return String(valor).replace(".", ",");
   return String(valor);
 }
 
@@ -718,9 +809,10 @@ function pintarRevisionPdf(destino, comparacion, alTerminar) {
       valorNuevo.setAttribute("aria-label", "Artículo del objeto a guardar");
     }
     const tomar = c.distinto
-      ? casillaTomar(id, "Tomar del PDF: " + c.etiqueta, !c.manual || c.actual === "" || c.actual === null)
+      ? casillaTomar(id, "Tomar del PDF: " + c.etiqueta, c.automatico || !c.manual || c.actual === "" || c.actual === null)
       : el("span", { clase: "texto-suave", texto: "Igual" });
-    return el("tr", {}, el("td", {}, tomar), el("th", { scope: "row", texto: c.etiqueta + (c.manual ? " (editado a mano)" : "") }),
+    const nota = c.automatico ? " (automático)" : c.campo === "objeto" ? " (revisalo)" : c.manual ? " (editado a mano)" : "";
+    return el("tr", {}, el("td", {}, tomar), el("th", { scope: "row", texto: c.etiqueta + nota }),
       el("td", { texto: valorPdf(c.campo, c.actual) }), el("td", {}, valorNuevo));
   });
   partes.push(el("h5", { texto: "Datos de la OC" }),
@@ -731,7 +823,7 @@ function pintarRevisionPdf(destino, comparacion, alTerminar) {
   // Renglones
   const filasRenglones = [];
   for (const r of comparacion.renglones) {
-    const subrenglones = r.subrenglones.map((s) => "Subrenglón " + s.pos + ": " + s.cantidad + " " + s.unidad
+    const subrenglones = r.subrenglones.map((s) => "Subrenglón " + s.pos + ": " + valorPdf("cantidad", s.cantidad) + " " + s.unidad
       + (s.precio_centavos !== null ? " × $ " + formatoPesos(s.precio_centavos) : "")
       + (s.importe_centavos !== null ? " = $ " + formatoPesos(s.importe_centavos) : "")).join(" · ");
     const encabezado = el("th", { scope: "row", rowspan: String(Math.max(1, r.existe ? r.diferencias.length : 1)) },
@@ -810,6 +902,7 @@ async function guardarOC(evento) {
   const { oc } = ocEstado.ficha;
   const cambios = {};
   for (const [campo, , tipo] of CAMPOS_OC_FORM) {
+    if (!document.getElementById("oc-campo-" + campo)) continue;
     const valor = valorCampoOC(campo, tipo);
     const actual = oc[campo] ?? (tipo === "fecha" || tipo === "dia" ? null : "");
     if (valor !== actual) cambios[campo] = valor;
@@ -1232,7 +1325,7 @@ function pintarPaso2() {
         const idBase = "rem-" + i + "-" + r.pos;
         return el("tr", {},
           el("td", { clase: "numero", texto: r.pos }),
-          el("td", { texto: (r.codigo ? r.codigo + " · " : "") + r.descripcion }),
+          el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
           el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
             "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + remito.numero })),
           el("td", {}, entrada(item.codigo || "", { id: idBase + "-codigo", clase: "entrada-corta mono", placeholder: r.codigo || "",
@@ -2178,8 +2271,16 @@ async function listarPendientes() {
 
 // Parámetros compartidos editables: clave de la tabla config, ruta dentro del valor y tipo de dato.
 const CAMPOS_PARAMETROS = [
-  { id: "par-centros-hbi", etiqueta: "Centros SAP del HBI", clave: "efectores", ruta: ["HBI", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
-  { id: "par-centros-casph", etiqueta: "Centros SAP del CASPH", clave: "efectores", ruta: ["CASPH", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
+  { id: "par-gestor-hbi", etiqueta: "Centro gestor del HBI", clave: "efectores", ruta: ["HBI", "centros_gestores"], tipo: "lista",
+    defecto: ["4500"], ayuda: "Al importar el z_compras2 entra todo lo imputado a este centro gestor, aunque el renglón tenga otro centro." },
+  { id: "par-gestor-casph", etiqueta: "Centro gestor del CASPH", clave: "efectores", ruta: ["CASPH", "centros_gestores"], tipo: "lista",
+    defecto: ["4900"], ayuda: "Al importar el z_compras2 entra todo lo imputado a este centro gestor, aunque el renglón tenga otro centro." },
+  { id: "par-org-hbi", etiqueta: "Organización de compras propia del HBI", clave: "efectores", ruta: ["HBI", "org_compras"], tipo: "lista",
+    defecto: ["1900"], ayuda: "Las OC de otra organización de compras se marcan como centralizadas." },
+  { id: "par-org-casph", etiqueta: "Organización de compras propia del CASPH", clave: "efectores", ruta: ["CASPH", "org_compras"], tipo: "lista",
+    defecto: ["1300"], ayuda: "Las OC de otra organización de compras se marcan como centralizadas." },
+  { id: "par-centros-hbi", etiqueta: "Centros SAP del HBI (solo reportes sin la columna Centro gestor)", clave: "efectores", ruta: ["HBI", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
+  { id: "par-centros-casph", etiqueta: "Centros SAP del CASPH (solo reportes sin la columna Centro gestor)", clave: "efectores", ruta: ["CASPH", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
   { id: "par-partidas", etiqueta: "Partidas excluidas", clave: "partidas_excluidas", ruta: [], tipo: "lista", ayuda: "Las OC con estas partidas no se importan." },
   { id: "par-excl-sap", etiqueta: "Proveedores excluidos (SAP)", clave: "exclusiones", ruta: ["sap"], tipo: "lista" },
   { id: "par-excl-oc", etiqueta: "OC excluidas", clave: "exclusiones", ruta: ["oc"], tipo: "lista" },
@@ -2208,7 +2309,7 @@ function escribirRuta(valor, ruta, nuevo) {
 }
 
 function valorParaCampo(campo, valor) {
-  if (campo.tipo === "lista") return (valor || []).join(", ");
+  if (campo.tipo === "lista") return (valor === undefined && campo.defecto ? campo.defecto : valor || []).join(", ");
   return valor === undefined || valor === null ? "" : String(valor);
 }
 

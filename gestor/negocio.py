@@ -225,6 +225,15 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
         sql += " WHERE " + " AND ".join(condiciones)
     sql += " ORDER BY oc.numero DESC"
     filas = [dict(fila) for fila in con.execute(sql, parametros)]
+    # Renglones de otro centro (recepciones que a veces no llevan factura del efector).
+    parametros_base = db.leer_parametros(con)
+    otros = {}
+    for r in con.execute("SELECT r.oc, r.crudo, oc.efector FROM renglon r JOIN oc ON oc.numero = r.oc"):
+        centro = centro_de_renglon({"crudo": r["crudo"]})
+        if centro and centro not in CENTROS_CENTRALES and centro not in centros_propios(parametros_base, r["efector"]):
+            otros[r["oc"]] = otros.get(r["oc"], 0) + 1
+    for f in filas:
+        f["renglones_otro_centro"] = otros.get(f["numero"], 0)
     buscado = util.normalizar_texto(texto or "")
     if buscado:
         filas = [
@@ -234,14 +243,52 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
     return filas
 
 
+# Centro físico propio de cada efector cuando la tabla config no lo tiene (CASPH no tiene `centros` cargados por defecto).
+CENTROS_PROPIOS_POR_DEFECTO = {"HBI": ["1900"], "CASPH": ["1300"]}
+
+
+def centros_propios(parametros, efector):
+    """Centros SAP propios del efector: los de Configuración o, si no hay, los de siempre (1900 HBI, 1300 CASPH)."""
+    datos = (parametros.get("efectores") or {}).get(efector) or {}
+    valores = [str(c).strip() for c in datos.get("centros") or [] if str(c).strip()]
+    return set(valores or CENTROS_PROPIOS_POR_DEFECTO.get(efector, []))
+
+
+def centro_de_renglon(renglon):
+    """Centro SAP del renglón según la fila del z_compras2 que lo trajo ("" si se cargó a mano)."""
+    crudo = renglon.get("crudo")
+    if isinstance(crudo, str):
+        try:
+            crudo = json.loads(crudo)
+        except ValueError:
+            crudo = {}
+    for encabezado, valor in (crudo or {}).items():
+        if util.clave_encabezado(encabezado) == "centro":
+            return str(valor or "").strip()
+    return ""
+
+
+CENTROS_CENTRALES = ("0010",)  # Nivel Central: sus renglones son de una OC centralizada
+
+
+def marcar_otro_centro(renglones, propios):
+    """Agrega a cada renglón `centro`, `central` (1 si es del centro de Nivel Central: centralizada) y `otro_centro`
+    (1 si es de otro centro que no es del efector ni de Nivel Central: se recibe y a veces no lleva factura)."""
+    for r in renglones:
+        r["centro"] = centro_de_renglon(r)
+        r["central"] = 1 if r["centro"] in CENTROS_CENTRALES else 0
+        r["otro_centro"] = 1 if r["centro"] and not r["central"] and r["centro"] not in propios else 0
+    return renglones
+
+
 def ficha_oc(con, numero):
-    """OC + proveedor + renglones + expedientes."""
+    """OC + proveedor + renglones (marcados si son de otro centro) + expedientes."""
     oc = _decodificar(_leer_oc(con, numero), _JSON_OC)
     proveedor = db.leer_fila(con, "proveedor", {"sap": oc["sap"]})
-    renglones = [
+    renglones = marcar_otro_centro([
         _decodificar(dict(fila), _JSON_RENGLON)
         for fila in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (oc["numero"],))
-    ]
+    ], centros_propios(db.leer_parametros(con), oc["efector"]))
     expedientes = [
         dict(fila)
         for fila in con.execute(
@@ -401,13 +448,20 @@ def actualizar_renglon(con, numero, pos, version, cambios):
 # muestra mal (servicios medidos en meses, renglones con subrenglones). Se lee, se compara con la base y la usuaria
 # elige qué aplicar; lo aplicado queda como campo manual para que la próxima importación no lo pise.
 
-CAMPOS_OC_PDF = ("objeto", "objeto_articulo", "ca", "expediente_contratacion", "gde_pdf_oc", "vig_desde", "vig_hasta")
+CAMPOS_OC_PDF = ("objeto", "objeto_articulo", "ca", "expediente_contratacion", "gde_pdf_oc", "vig_desde", "vig_hasta",
+                 "dia_inicio_periodo", "centralizada")
+# Se resuelven solos con reglas fijas: vienen tildados aunque el dato se haya editado a mano.
+CAMPOS_OC_PDF_AUTOMATICOS = ("objeto_articulo", "dia_inicio_periodo", "gde_pdf_oc", "centralizada")
+# En los bienes no hay períodos: la vigencia y el día de inicio no se toman del PDF.
+CAMPOS_SIN_PERIODO = ("vig_desde", "vig_hasta", "dia_inicio_periodo")
 CAMPOS_RENGLON_PDF = ("codigo", "descripcion", "cantidad", "unidad", "precio_centavos", "importe_centavos",
                       "desglose_cantidad", "desglose_unidad", "desglose_precio_centavos")
 ETIQUETAS_PDF = {
     "objeto": "Objeto", "objeto_articulo": "Artículo del objeto", "ca": "CA (licitación-año)",
     "expediente_contratacion": "Expediente de contratación", "gde_pdf_oc": "N° GDE del PDF de la OC",
-    "vig_desde": "Vigencia desde", "vig_hasta": "Vigencia hasta", "codigo": "Código", "descripcion": "Descripción",
+    "vig_desde": "Vigencia desde", "vig_hasta": "Vigencia hasta", "dia_inicio_periodo": "Día de inicio del período",
+    "centralizada": "Es centralizada (UOC: Nivel central)",
+    "codigo": "Código", "descripcion": "Descripción",
     "cantidad": "Cantidad", "unidad": "Unidad", "precio_centavos": "Precio unitario", "importe_centavos": "Importe",
     "desglose_cantidad": "Desglose: cantidad", "desglose_unidad": "Desglose: unidad",
     "desglose_precio_centavos": "Desglose: precio",
@@ -473,11 +527,12 @@ def comparar_oc_pdf(con, numero, leido):
     campos_oc = []
     for campo in CAMPOS_OC_PDF:
         pdf = leido.get(campo)
-        if pdf in (None, ""):
+        if pdf in (None, "") or (oc["tipo"] == "BIEN" and campo in CAMPOS_SIN_PERIODO):
             continue
         actual = oc.get(campo)
         campos_oc.append({"campo": campo, "etiqueta": ETIQUETAS_PDF[campo], "actual": actual, "pdf": pdf,
-                          "distinto": not _iguales(campo, actual, pdf), "manual": campo in manuales_oc})
+                          "distinto": not _iguales(campo, actual, pdf), "manual": campo in manuales_oc,
+                          "automatico": campo in CAMPOS_OC_PDF_AUTOMATICOS})
 
     actuales = {r["pos"]: r for r in ficha["renglones"]}
     renglones = []

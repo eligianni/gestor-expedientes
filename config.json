@@ -14,6 +14,8 @@
         "nombre": "Hospital del Bicentenario de Ituzaingó",
         "destino": "al Hospital del Bicentenario de Ituzaingó",
         "centros": ["1900"],
+        "centros_gestores": ["4500"],
+        "org_compras": ["1900"],
         "prefijo_referencia": "",
         "sigla": "HBI",
         "plantilla_cv": "plantillas/cv_hbi.docx"
@@ -22,6 +24,8 @@
         "nombre": "Centro Ambulatorio de Salud PAMI Hurlingham",
         "destino": "al Centro Ambulatorio de Salud PAMI Hurlingham",
         "centros": [],
+        "centros_gestores": ["4900"],
+        "org_compras": ["1300"],
         "prefijo_referencia": "CASPH - ",
         "sigla": "CASPH",
         "plantilla_cv": "plantillas/cv_casph.docx"
