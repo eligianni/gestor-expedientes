@@ -156,9 +156,11 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`db.backup_diario`, hilo en `app.py` cada 30 min, `backups_diarios_a_conservar`). Restaurar usa solo las de arranque.
 - Importar z_compras2: si el reporte trae la columna «Centro Gestor», entra todo lo imputado al centro gestor del efector
   (`efectores.<X>.centros_gestores`, por defecto 4500 HBI y 4900 CASPH) aunque el renglón tenga otro centro; sin esa
-  columna se filtra por `centros`. Centralizada = algún renglón del centro de Nivel Central (0010,
-  `parametros.centros_centrales`) o «UOC: Nivel central» en el PDF; solo si el reporte no trae centro se usa la
-  organización de compras distinta de la propia (`efectores.<X>.org_compras`, 1900 HBI y 1300 CASPH). El día de inicio del período sale del día de
+  columna se filtra por `centros`. Centralizada (compra de Nivel Central, «UOC: Nivel Central BS» en el PDF) = algún
+  renglón del centro 0010 (`parametros.centros_centrales`), o comprada por otra organización de compras (0100, 0110…)
+  para entregar en un centro propio (1900 HBI, 1300 CASPH); otra organización para otro centro (1000, 1500, 1700) es
+  «otro centro». Sin centro en el reporte alcanza con la organización distinta de la propia
+  (`efectores.<X>.org_compras`, 1900 HBI y 1300 CASPH). El día de inicio del período sale del día de
   `vig_desde` (29 a 31 → 1), salvo que se haya editado a mano. La prórroga no se carga en la ficha: sale como otra OC.
 - Renglón de «otro centro»: su centro (de la fila del z_compras2 en `renglon.crudo`) no es un centro propio del efector
   (`efectores.<X>.centros` o, si está vacío, 1900 HBI / 1300 CASPH) ni el de Nivel Central (0010, que se marca como

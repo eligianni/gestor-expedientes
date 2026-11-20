@@ -9,6 +9,7 @@ from tests.xlsx_prueba import xlsx_con_hojas
 ASCENSORES = "4500563620"     # centro 1900, org 1900, vigencia desde 09/09/2025
 CENTRALIZADA = "4500565075"   # centro 1000, org 0110: con el filtro por centro se perdía (es de «otro centro»)
 DE_OTRO_GESTOR = "4500563687"
+HABITAT = "4500570841"        # centro 1900, org 0100: residuos patogénicos, compra de Nivel Central
 SERVICIO_MES = "4500600299"   # EFIA, vigencia desde 01/10/2026
 
 
@@ -53,6 +54,8 @@ class PruebaImportarCentroGestor(ayudas.CasoConEntorno):
         # Centro 1000 con otra organización de compras: entra (es del centro gestor) pero no es centralizada.
         self.assertEqual((otro_centro["efector"], otro_centro["centralizada"]), ("HBI", 0))
         self.assertEqual(self._oc(ASCENSORES)["centralizada"], 0)
+        # Centro 1900 comprada por Nivel Central (org 0100): centralizada («UOC: Nivel Central BS» en su PDF).
+        self.assertEqual(self._oc(HABITAT)["centralizada"], 1)
         self.assertIsNone(self._oc(DE_OTRO_GESTOR))
         self.assertIsNone(self._oc("4500999001"))
 

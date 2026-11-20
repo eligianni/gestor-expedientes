@@ -122,6 +122,7 @@ def _columnas(encabezados):
 # Centro gestor de cada efector y organización de compras propia, si la tabla config todavía no los tiene.
 CENTROS_GESTORES_POR_DEFECTO = {"HBI": ["4500"], "CASPH": ["4900"]}
 ORG_COMPRAS_POR_DEFECTO = {"HBI": ["1900"], "CASPH": ["1300"]}
+CENTROS_PROPIOS_POR_DEFECTO = {"HBI": ["1900"], "CASPH": ["1300"]}
 
 
 def _datos_efector(efector, parametros):
@@ -315,19 +316,23 @@ def centro_de_fila(renglon):
 def inferir_oc(oc, renglones, parametros):
     """tipo, comodato y centralizada de la OC a partir de sus renglones.
 
-    Centralizada: si el reporte trae el centro de los renglones, la OC es centralizada cuando alguno es del centro de
-    Nivel Central (0010); si no se sabe el centro, se usa la organización de compras (distinta de la propia).
+    Centralizada (compra de Nivel Central, «UOC: Nivel Central BS» en el PDF): algún renglón del centro de Nivel Central
+    (0010), o comprada por otra organización de compras (0100, 0110…) para entregar en un centro propio del efector
+    (1900 HBI, 1300 CASPH). Lo comprado por otra organización para otro centro (farmacia o depósito 1000, 1500, 1700…)
+    no es centralizada: queda como «otro centro». Si el reporte no trae el centro, alcanza con la organización.
     """
+    efector = oc.get("efector")
+    datos = ((parametros.get("efectores") or {}).get(efector) or {}) if efector else {}
+    propias = {str(o) for o in parametros.get("org_compras_propias") or []}
+    if efector:
+        propias |= {str(o) for o in datos.get("org_compras", ORG_COMPRAS_POR_DEFECTO.get(efector, [])) or []}
+    org_ajena = (oc.get("org_compras") or "") not in propias
     centros = {centro_de_fila(r) for r in renglones} - {""}
     if centros:
-        centralizada = 1 if centros & centros_centrales(parametros) else 0
+        centros_del_efector = {str(c) for c in datos.get("centros") or []} or set(CENTROS_PROPIOS_POR_DEFECTO.get(efector, []))
+        centralizada = 1 if (centros & centros_centrales(parametros)) or (org_ajena and centros & centros_del_efector) else 0
     else:
-        propias = {str(o) for o in parametros.get("org_compras_propias") or []}
-        efector = oc.get("efector")
-        if efector:
-            datos = (parametros.get("efectores") or {}).get(efector) or {}
-            propias |= {str(o) for o in datos.get("org_compras", ORG_COMPRAS_POR_DEFECTO.get(efector, [])) or []}
-        centralizada = 0 if (oc.get("org_compras") or "") in propias else 1
+        centralizada = 1 if org_ajena else 0
     comodato = any("COMODATO" in (r.get("descripcion") or "").upper() for r in renglones)
     if comodato:
         tipo = "PROVISION"
