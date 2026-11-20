@@ -113,7 +113,7 @@ Estilo limpio de panel (inspirado en Stripe) con el azul institucional. Tokens d
 - **Tipo:** Inter guardada en `web/fuentes/inter.woff2` (OFL, licencia al lado), con `"Segoe UI", system-ui` de respaldo;
   cuerpo 15px/1.55; títulos 26/19/16px peso 700/650; encabezados de tabla 12px en mayúsculas; mono `Consolas` 14px;
   números de tablas con `tabular-nums` (`.numero`).
-- **Espaciado:** base 4px — 4, 8, 12, 16, 20, 24, 32. Paneles con padding 20px 24px.
+- **Espaciado:** base 4px — 4, 8, 12, 16, 20, 24, 32. Margen de la app: `--margen` (34px) en encabezado, menú y contenido. Paneles con padding 20px 24px.
 - **Radio:** 6px botones e inputs, 10px paneles, 999px pastillas. **Sombras:** `--sombra-panel` (anillo de 1px + sombra suave),
   sin bordes duros en paneles.
 - **Botones:** alto mínimo 44px; primario azul lleno, secundario blanco con texto oscuro.
@@ -166,8 +166,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`efectores.<X>.centros` o, si está vacío, 1900 HBI / 1300 CASPH) ni el de Nivel Central (0010, que se marca como
   «Centralizada»). Se marca en la ficha, el paso 2, la lista de OC y
   Tablas (`negocio.marcar_otro_centro`); no cambia controles ni calendario.
-- «Nueva OC» (Órdenes de compra): `POST /api/oc/pdf` lee el PDF sin guardar (si la OC ya existe, se abre su ficha y se
-  compara); la ventana confirma los datos y `POST /api/oc/desde-pdf` → `negocio.crear_oc_desde_pdf` (origen MANUAL, todo
+- «Nueva OC» (Órdenes de compra): acepta varios PDF; `POST /api/oc/pdf` lee cada uno sin guardar y la ventana
+  `#dialogo-pdf-oc` (`colaPdf` en `app.js`) los recorre «Confirmar datos (i/n)»: OC nueva → formulario, OC existente →
+  comparación (`/api/oc/<n>/pdf`), al final un resumen. La comparación desde la ficha o el paso 1 usa la misma ventana. Confirmar y `POST /api/oc/desde-pdf` → `negocio.crear_oc_desde_pdf` (origen MANUAL, todo
   lo del PDF como manual, evento `pdf_oc`). «Sin PDF (escaneada)» abre el alta a mano. El artículo va chiquito a la
   izquierda del objeto (`campoObjeto` en `app.js`).
 - PDF de la OC: artículo («a la» si dice adquisición/provisión, «al» si dice servicio; manda el primero), día de inicio y
