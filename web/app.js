@@ -565,7 +565,9 @@ async function listarOC() {
   }
   const filas = ocs.map((oc) => {
     const marcas = [oc.tipo, oc.comodato ? "comodato" : "", oc.centralizada ? "centralizada" : "",
-      oc.excluida ? "EXCLUIDA" : "", oc.origen === "MANUAL" ? "manual" : ""].filter(Boolean).join(" · ");
+      oc.excluida ? "EXCLUIDA" : "", oc.origen === "MANUAL" ? "manual" : "",
+      oc.renglones_otro_centro ? (oc.renglones_otro_centro === oc.renglones ? "otro centro"
+        : oc.renglones_otro_centro + " de " + oc.renglones + " renglones de otro centro") : ""].filter(Boolean).join(" · ");
     return el("tr", {},
       el("td", {}, el("button", { type: "button", clase: "secundario", texto: oc.numero,
         "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) })),
@@ -645,6 +647,13 @@ function valorCampoOC(campo, tipo) {
   return control.value;
 }
 
+/** Pastilla para un renglón de otro centro: se recibe, pero casi nunca lleva factura del efector. */
+function marcaOtroCentro(r) {
+  if (!r.otro_centro) return null;
+  return el("span", { clase: "pastilla pastilla-aviso marca-otro-centro", texto: "Otro centro " + r.centro,
+    title: "Renglón del centro " + r.centro + ": a veces se recibe sin factura del efector." });
+}
+
 function pintarFichaOC(ficha) {
   const { oc, proveedor, renglones, expedientes } = ficha;
   const manuales = new Set(oc.campos_manuales || []);
@@ -665,9 +674,9 @@ function pintarFichaOC(ficha) {
     ...campos,
     el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar cambios de la OC" })));
 
-  const filasRenglones = renglones.map((r) => el("tr", {},
+  const filasRenglones = renglones.map((r) => el("tr", { clase: r.otro_centro ? "fila-otro-centro" : null },
     el("td", { clase: "numero", texto: r.pos }),
-    el("td", { texto: (r.codigo ? r.codigo + " · " : "") + r.descripcion }),
+    el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro ? " " : null, marcaOtroCentro(r)),
     el("td", { clase: "numero", texto: r.cantidad + (r.unidad ? " " + r.unidad : "") }),
     el("td", { clase: "numero", texto: formatoPesos(r.precio_centavos) }),
     el("td", { clase: "numero", texto: formatoPesos(r.importe_centavos) }),
@@ -1311,7 +1320,7 @@ function pintarPaso2() {
         const idBase = "rem-" + i + "-" + r.pos;
         return el("tr", {},
           el("td", { clase: "numero", texto: r.pos }),
-          el("td", { texto: (r.codigo ? r.codigo + " · " : "") + r.descripcion }),
+          el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro ? " " : null, marcaOtroCentro(r)),
           el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
             "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + remito.numero })),
           el("td", {}, entrada(item.codigo || "", { id: idBase + "-codigo", clase: "entrada-corta mono", placeholder: r.codigo || "",

@@ -441,3 +441,7 @@ th[aria-sort="ascending"] .orden-columna, th[aria-sort="descending"] .orden-colu
   border-color: var(--primario-borde); background: var(--superficie); }
 .boton-celda:hover, td > button.secundario:hover { background: var(--primario-suave); border-color: var(--primario); }
 #tablas-resumen { margin: 4px 0 10px; font-size: 14px; }
+
+/* Renglones de otro centro: se marcan con palabra (no solo color) */
+.marca-otro-centro { margin-left: 4px; vertical-align: 1px; }
+.fila-otro-centro td { background: var(--superficie-hundida); }

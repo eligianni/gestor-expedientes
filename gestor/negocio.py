@@ -225,6 +225,15 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
         sql += " WHERE " + " AND ".join(condiciones)
     sql += " ORDER BY oc.numero DESC"
     filas = [dict(fila) for fila in con.execute(sql, parametros)]
+    # Renglones de otro centro (recepciones que a veces no llevan factura del efector).
+    parametros_base = db.leer_parametros(con)
+    otros = {}
+    for r in con.execute("SELECT r.oc, r.crudo, oc.efector FROM renglon r JOIN oc ON oc.numero = r.oc"):
+        centro = centro_de_renglon({"crudo": r["crudo"]})
+        if centro and centro not in centros_propios(parametros_base, r["efector"]):
+            otros[r["oc"]] = otros.get(r["oc"], 0) + 1
+    for f in filas:
+        f["renglones_otro_centro"] = otros.get(f["numero"], 0)
     buscado = util.normalizar_texto(texto or "")
     if buscado:
         filas = [
@@ -234,14 +243,47 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
     return filas
 
 
+# Centro físico propio de cada efector cuando la tabla config no lo tiene (CASPH no tiene `centros` cargados por defecto).
+CENTROS_PROPIOS_POR_DEFECTO = {"HBI": ["1900"], "CASPH": ["1300"]}
+
+
+def centros_propios(parametros, efector):
+    """Centros SAP propios del efector: los de Configuración o, si no hay, los de siempre (1900 HBI, 1300 CASPH)."""
+    datos = (parametros.get("efectores") or {}).get(efector) or {}
+    valores = [str(c).strip() for c in datos.get("centros") or [] if str(c).strip()]
+    return set(valores or CENTROS_PROPIOS_POR_DEFECTO.get(efector, []))
+
+
+def centro_de_renglon(renglon):
+    """Centro SAP del renglón según la fila del z_compras2 que lo trajo ("" si se cargó a mano)."""
+    crudo = renglon.get("crudo")
+    if isinstance(crudo, str):
+        try:
+            crudo = json.loads(crudo)
+        except ValueError:
+            crudo = {}
+    for encabezado, valor in (crudo or {}).items():
+        if util.clave_encabezado(encabezado) == "centro":
+            return str(valor or "").strip()
+    return ""
+
+
+def marcar_otro_centro(renglones, propios):
+    """Agrega `centro` y `otro_centro` (1 si el renglón es de un centro que no es del efector) a cada renglón."""
+    for r in renglones:
+        r["centro"] = centro_de_renglon(r)
+        r["otro_centro"] = 1 if r["centro"] and r["centro"] not in propios else 0
+    return renglones
+
+
 def ficha_oc(con, numero):
-    """OC + proveedor + renglones + expedientes."""
+    """OC + proveedor + renglones (marcados si son de otro centro) + expedientes."""
     oc = _decodificar(_leer_oc(con, numero), _JSON_OC)
     proveedor = db.leer_fila(con, "proveedor", {"sap": oc["sap"]})
-    renglones = [
+    renglones = marcar_otro_centro([
         _decodificar(dict(fila), _JSON_RENGLON)
         for fila in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (oc["numero"],))
-    ]
+    ], centros_propios(db.leer_parametros(con), oc["efector"]))
     expedientes = [
         dict(fila)
         for fila in con.execute(

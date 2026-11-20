@@ -92,3 +92,34 @@ class PruebaImportarCentroGestor(ayudas.CasoConEntorno):
         negocio.actualizar_oc(self.con, ASCENSORES, self._oc(ASCENSORES)["version"], {"dia_inicio_periodo": 1})
         self._importar("HBI")
         self.assertEqual(self._oc(ASCENSORES)["dia_inicio_periodo"], 1)
+
+
+class PruebaRenglonesDeOtroCentro(ayudas.CasoConEntorno):
+
+    def setUp(self):
+        super().setUp()
+        self.parametros = copy.deepcopy(self.entorno.config["parametros_iniciales"])
+        db.inicializar(self.entorno.ruta_base, self.parametros)
+        self.con = db.conectar(self.entorno.ruta_base)
+        self.addCleanup(self.con.close)
+        reporte = reporte_con_centro_gestor()
+        for efector in ("HBI", "CASPH"):
+            importar.importar(self.con, io.BytesIO(reporte), efector, self.parametros, archivo="z.xlsx")
+
+    def test_marca_en_la_ficha_la_lista_y_tablas(self):
+        from gestor import tablas
+        centralizada = negocio.ficha_oc(self.con, CENTRALIZADA)["renglones"][0]
+        self.assertEqual((centralizada["centro"], centralizada["otro_centro"]), ("1000", 1))
+        propio = negocio.ficha_oc(self.con, ASCENSORES)["renglones"][0]
+        self.assertEqual((propio["centro"], propio["otro_centro"]), ("1900", 0))
+        # CASPH: el propio es 1300 aunque no tenga centros cargados; el renglón de centro 0010 queda marcado.
+        hur = negocio.ficha_oc(self.con, "4500999001")["renglones"][0]
+        self.assertEqual((hur["centro"], hur["otro_centro"]), ("0010", 1))
+        lista = {o["numero"]: o for o in negocio.listar_oc(self.con)}
+        self.assertEqual(lista[CENTRALIZADA]["renglones_otro_centro"], lista[CENTRALIZADA]["renglones"])
+        self.assertEqual(lista[ASCENSORES]["renglones_otro_centro"], 0)
+        filas = {(f["oc"], f["pos"]): f for f in tablas.tabla(self.con, "renglones")["filas"]}
+        self.assertEqual((filas[(CENTRALIZADA, 1)]["centro"], filas[(CENTRALIZADA, 1)]["otro_centro"]), ("1000", 1))
+
+    def test_renglon_cargado_a_mano_no_se_marca(self):
+        self.assertEqual(negocio.marcar_otro_centro([{"crudo": {}}], {"1900"}), [{"crudo": {}, "centro": "", "otro_centro": 0}])

@@ -49,7 +49,7 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | `gestor/controles.py` | `util`, `letras` | leer la base (recibe `ctx` de `armar_contexto`) |
 | `gestor/pdf_texto.py` | stdlib | base, archivos, otros módulos de `gestor` |
 | `gestor/oc_pdf.py` | `util` | base, archivos, `negocio` |
-| `gestor/tablas.py` | `util`, `xlsx_escritor` | escribir la base, `server` |
+| `gestor/tablas.py` | `db`, `negocio` (solo lectura), `util`, `xlsx_escritor` | escribir la base, `server` |
 | `gestor/migracion.py` | `db`, `util`, `xlsx`, `negocio` | `server` |
 | `gestor/textos.py`, `gestor/letras.py`, `gestor/util.py` | stdlib, `util`, `letras` | base, archivos, `negocio` |
 | `gestor/db.py` | stdlib | cualquier otro módulo de `gestor` salvo `config` |
@@ -159,6 +159,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   columna se filtra por `centros`. Centralizada = organización de compras distinta de la propia
   (`efectores.<X>.org_compras`, por defecto 1900 HBI y 1300 CASPH). El día de inicio del período sale del día de
   `vig_desde` (29 a 31 → 1), salvo que se haya editado a mano. La prórroga no se carga en la ficha: sale como otra OC.
+- Renglón de «otro centro»: su centro (de la fila del z_compras2 en `renglon.crudo`) no es un centro propio del efector
+  (`efectores.<X>.centros` o, si está vacío, 1900 HBI / 1300 CASPH). Se marca en la ficha, el paso 2, la lista de OC y
+  Tablas (`negocio.marcar_otro_centro`); no cambia controles ni calendario.
 - PDF de la OC: artículo («a la» si dice adquisición/provisión, «al» si dice servicio; manda el primero), día de inicio y
   N° GDE (también de los campos de formulario del PDF) vienen tildados solos; el objeto se corta antes de «con destino».
   En los bienes no se muestran ni se toman vigencia, prórroga ni día de inicio.

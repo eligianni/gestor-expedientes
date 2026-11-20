@@ -9,7 +9,7 @@ import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from gestor import util, xlsx_escritor
+from gestor import db, negocio, util, xlsx_escritor
 
 TIPOS = ("texto", "numero", "moneda", "cantidad", "fecha", "fecha_hora", "si_no")
 
@@ -144,7 +144,7 @@ def tabla_oc(con, efector=None):
 COLUMNAS_RENGLONES = [
     _col("oc", "OC"), _col("efector", "Efector"), _col("razon_social", "Proveedor"), _col("pos", "Renglón", "numero"),
     _col("codigo", "Código"), _col("descripcion", "Descripción"), _col("cantidad", "Cantidad", "cantidad"),
-    _col("unidad", "Unidad"), _col("precio_centavos", "Precio unitario", "moneda"),
+    _col("unidad", "Unidad"), _col("centro", "Centro"), _col("otro_centro", "Otro centro", "si_no"), _col("precio_centavos", "Precio unitario", "moneda"),
     _col("importe_centavos", "Importe", "moneda"), _col("desglose_cantidad", "Desglose: cantidad", "cantidad"),
     _col("desglose_unidad", "Desglose: unidad"), _col("desglose_precio_centavos", "Desglose: precio", "moneda"),
     _col("partida", "Partida", visible=False), _col("sap_entregado", "Entregado (SAP)", "cantidad"),
@@ -165,11 +165,14 @@ def tabla_renglones(con, efector=None):
         parametros.append(efector)
     sql += " ORDER BY r.oc, r.pos"
     _, del_pdf = _cargas_pdf(con)
+    parametros = db.leer_parametros(con)
     filas = []
     for fila in con.execute(sql, parametros):
         dic = {c["clave"]: fila[c["clave"]] for c in COLUMNAS_RENGLONES if c["clave"] in fila.keys()}
         dic["razon_social"] = dic.get("razon_social") or ""
         dic["del_pdf"] = 1 if (fila["oc"], fila["pos"]) in del_pdf else 0
+        dic["centro"] = negocio.centro_de_renglon({"crudo": fila["crudo"]})
+        dic["otro_centro"] = 1 if dic["centro"] and dic["centro"] not in negocio.centros_propios(parametros, fila["efector"]) else 0
         filas.append(dic)
     return {"columnas": COLUMNAS_RENGLONES, "filas": filas}
 
