@@ -53,7 +53,7 @@ COLUMNAS_EXPEDIENTES = [
     _col("periodo_hasta", "Período hasta", "fecha", False), _col("factura", "Factura"),
     _col("factura_fecha", "Fecha factura", "fecha", False), _col("factura_importe", "Importe factura", "moneda"),
     _col("remitos", "Remitos", visible=False), _col("sii", "SII", visible=False),
-    _col("gde_expediente", "Expediente GDE"), _col("entrega", "Entrega", visible=False),
+    _col("gde_expediente", "Expediente GDE"), _col("entrega", "Entrega"),
     _col("motivo_pendiente", "Motivo pendiente", visible=False), _col("fecha_seguimiento", "Seguimiento", "fecha", False),
     _col("motivo_anulacion", "Motivo anulación", visible=False), _col("creado", "Creado", "fecha_hora", False),
     _col("actualizado", "Actualizado", "fecha_hora"), _col("usuario", "Usuario", visible=False),
@@ -178,10 +178,52 @@ def tabla_renglones(con, efector=None):
     return {"columnas": COLUMNAS_RENGLONES, "filas": filas}
 
 
+COLUMNAS_ENTREGAS = [
+    _col("numero", "N°", "numero"), _col("efector", "Efector"), _col("nombre", "Nombre"), _col("estado", "Estado"),
+    _col("fecha_envio", "Fecha de envío", "fecha"), _col("expedientes", "Expedientes", "numero"),
+    _col("importe", "Importe total", "moneda"), _col("proveedores", "Proveedores", visible=False),
+    _col("estados_expedientes", "Estado de sus expedientes"), _col("observaciones", "Observaciones", visible=False),
+]
+ESTADOS_ENTREGA = {"ABIERTA": "Abierta (en armado)", "ENVIADA": "Enviada"}
+
+
+def tabla_entregas(con, efector=None):
+    """Una fila por entrega: las enviadas y las que todavía se están armando, con sus expedientes e importe."""
+    sql = "SELECT * FROM entrega"
+    parametros = []
+    if _filtro_efector(efector):
+        sql += " WHERE efector = ?"
+        parametros.append(efector)
+    sql += " ORDER BY efector, numero DESC"
+    filas = []
+    for entrega in con.execute(sql, parametros).fetchall():
+        expedientes = con.execute(
+            "SELECT e.estado, e.datos, p.razon_social FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap "
+            "WHERE e.entrega_id = ? AND e.estado <> 'ANULADO'", (entrega["id"],)).fetchall()
+        importe, proveedores, estados = 0, [], {}
+        for e in expedientes:
+            centavos = (_json(e["datos"], {}).get("factura") or {}).get("centavos")
+            if isinstance(centavos, int) and not isinstance(centavos, bool):
+                importe += centavos
+            if e["razon_social"] and e["razon_social"] not in proveedores:
+                proveedores.append(e["razon_social"])
+            estados[e["estado"]] = estados.get(e["estado"], 0) + 1
+        filas.append({
+            "numero": entrega["numero"], "efector": entrega["efector"], "nombre": entrega["nombre"],
+            "estado": ESTADOS_ENTREGA.get(entrega["estado"], entrega["estado"]), "fecha_envio": entrega["fecha_envio"],
+            "expedientes": len(expedientes), "importe": importe if expedientes else None,
+            "proveedores": ", ".join(proveedores),
+            "estados_expedientes": ", ".join("%s: %d" % (k.capitalize().replace("_", " "), n) for k, n in sorted(estados.items())),
+            "observaciones": entrega["observaciones"],
+        })
+    return {"columnas": COLUMNAS_ENTREGAS, "filas": filas}
+
+
 TABLAS = {
     "expedientes": ("Expedientes", tabla_expedientes),
     "oc": ("Órdenes de compra", tabla_oc),
     "renglones": ("Renglones de OC", tabla_renglones),
+    "entregas": ("Entregas", tabla_entregas),
 }
 
 

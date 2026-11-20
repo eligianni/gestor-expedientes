@@ -358,6 +358,40 @@ def oc_pdf_leer(h, m, cuerpo):
     return 200, _ok(comparacion)
 
 
+def _leer_pdf_de_pedido(h, cuerpo):
+    """(nombre del archivo, datos de la OC leídos) de un formulario con el PDF (`archivo`) o su texto (`texto`)."""
+    campos, archivos = leer_multipart(h, cuerpo)
+    nombre = ""
+    if archivos.get("archivo") and archivos["archivo"][1]:
+        nombre, contenido = archivos["archivo"]
+        try:
+            texto = pdf_texto.texto_de_pdf(contenido)
+        except pdf_texto.PdfError as error:
+            raise ErrorHTTP(422, "negocio", str(error)) from None
+    else:
+        texto = (campos.get("texto") or "").strip()
+        if not texto:
+            raise validacion("Elegí el PDF de la OC o pegá su texto.")
+    try:
+        return nombre, oc_pdf.leer_oc(texto)
+    except oc_pdf.OcIlegible as error:
+        raise ErrorHTTP(422, "negocio", str(error)) from None
+
+
+def oc_nueva_leer(h, m, cuerpo):
+    """PDF de una OC nueva → datos para confirmar en la ventana «Nueva OC» (no guarda nada)."""
+    nombre, leido = _leer_pdf_de_pedido(h, cuerpo)
+    if not leido.get("numero"):
+        raise ErrorHTTP(422, "negocio", "No se encontró el número de la OC en el PDF.")
+    existe = db.leer_fila(h.conexion(), "oc", {"numero": leido["numero"]}) is not None
+    return 200, _ok({"leido": leido, "existe": existe, "archivo": nombre})
+
+
+def oc_nueva_crear(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.crear_oc_desde_pdf(h.conexion(), datos.get("oc"), datos.get("archivo") or "", datos.get("leido")))
+
+
 def oc_pdf_aplicar(h, m, cuerpo):
     return 200, _ok(negocio.aplicar_oc_pdf(h.conexion(), m.group("numero"), leer_json(h, cuerpo)))
 
@@ -606,6 +640,8 @@ RUTAS = [
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_editar),
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)/consumo"), oc_consumo),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
+    ("POST", re.compile(r"/api/oc/pdf"), oc_nueva_leer),
+    ("POST", re.compile(r"/api/oc/desde-pdf"), oc_nueva_crear),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/pdf"), oc_pdf_leer),
     ("GET", re.compile(r"/api/tablas/(?P<nombre>[a-z]+)"), tabla_ver),
     ("POST", re.compile(r"/api/tablas/exportar\.xlsx"), tabla_exportar),

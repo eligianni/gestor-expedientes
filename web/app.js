@@ -36,10 +36,17 @@ function cargando(nodo) {
   vaciar(nodo, el("p", { texto: "Cargando…" }));
 }
 
+// Columnas de texto largo: van alineadas a la izquierda; todo lo demás, centrado.
+const RE_COLUMNA_TEXTO = /proveedor|objeto|descripci|detalle|motivo|referencia|observaci|concepto|aviso|archivo|nombre|problema|raz[oó]n social/i;
+
+function claseColumna(titulo, extra) {
+  return [RE_COLUMNA_TEXTO.test(titulo || "") ? "izq" : "", extra || ""].filter(Boolean).join(" ") || null;
+}
+
 function tabla(encabezados, filas, clasesColumnas) {
-  const thead = el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t }))));
+  const thead = el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t }))));
   const tbody = el("tbody", {}, ...filas.map((fila) => el("tr", {},
-    ...fila.map((valor, i) => el("td", { clase: (clasesColumnas && clasesColumnas[i]) || null, texto: valor ?? "" })))));
+    ...fila.map((valor, i) => el("td", { clase: claseColumna(encabezados[i], clasesColumnas && clasesColumnas[i]), texto: valor ?? "" })))));
   return el("div", { clase: "tabla-desplazable" }, el("table", {}, thead, tbody));
 }
 
@@ -132,6 +139,7 @@ const AL_MOSTRAR = {
 
 function mostrarPantalla(id, enfocar) {
   if (!document.getElementById(id)) id = "pantalla-inicio";
+  if (id !== "pantalla-tablas") document.body.classList.remove("vista-amplia");
   estado.pantalla = id;
   estado.recargar = AL_MOSTRAR[id] || null;
   for (const seccion of document.querySelectorAll("main > section")) {
@@ -330,36 +338,6 @@ async function confirmarImportacion() {
   cargarHistorial();
 }
 
-async function revisarCentros() {
-  const efector = document.getElementById("importar-efector").value;
-  const bloque = document.getElementById("importar-centros");
-  if (efector !== "CASPH") { bloque.hidden = true; return; }
-  const datos = await api("GET", "/api/parametros");
-  if (!datos) return;
-  const centros = (((datos.parametros.efectores || {}).CASPH || {}).centros) || [];
-  bloque.hidden = centros.length > 0;
-}
-
-async function guardarCentros() {
-  limpiarAvisos();
-  const texto = document.getElementById("importar-centros-valor").value;
-  const centros = texto.split(",").map((c) => c.trim()).filter((c) => c);
-  if (!centros.length || centros.some((c) => !/^\d+$/.test(c))) {
-    mostrarAviso("Escribí los centros SAP como números separados por coma (por ejemplo 2100, 2101).", "error");
-    return;
-  }
-  const datos = await api("GET", "/api/parametros");
-  if (!datos) return;
-  const efectores = JSON.parse(JSON.stringify(datos.parametros.efectores));
-  efectores.CASPH.centros = centros;
-  const guardado = await api("PUT", "/api/parametros",
-    { clave: "efectores", valor: efectores, version: datos.versiones.efectores });
-  if (guardado) {
-    mostrarAviso("Centros de CASPH guardados.", "exito");
-    revisarCentros();
-  }
-}
-
 async function cargarHistorial() {
   const contenedor = document.getElementById("importar-historial");
   cargando(contenedor);
@@ -376,7 +354,6 @@ async function cargarHistorial() {
 function cargarImportar() {
   const selectorEfector = document.getElementById("importar-efector");
   if (estado.efector === "HBI" || estado.efector === "CASPH") selectorEfector.value = estado.efector;
-  revisarCentros();
   cargarHistorial();
 }
 
@@ -385,12 +362,10 @@ function iniciarImportar() {
   document.getElementById("importar-confirmar").addEventListener("click", confirmarImportacion);
   document.getElementById("importar-efector").addEventListener("change", () => {
     document.getElementById("importar-confirmar").disabled = true;
-    revisarCentros();
   });
   document.getElementById("importar-archivo").addEventListener("change", () => {
     document.getElementById("importar-confirmar").disabled = true;
   });
-  document.getElementById("importar-centros-guardar").addEventListener("click", guardarCentros);
   document.getElementById("form-migracion").addEventListener("submit", (e) => { e.preventDefault(); enviarMigracion(false); });
   document.getElementById("migracion-confirmar").addEventListener("click", () => enviarMigracion(true));
   for (const id of ["migracion-numeracion", "migracion-remitos"]) {
@@ -515,6 +490,40 @@ function casilla(id, etiqueta, marcada) {
   return el("div", { clase: "campo campo-casilla" }, control, el("label", { for: id, texto: etiqueta }));
 }
 
+// --- Objeto con su artículo (chiquito, a la izquierda: «al servicio de…») -------------------------------------
+
+const OPCIONES_ARTICULO = [["al", "al"], ["a la", "a la"], ["a los", "a los"], ["a las", "a las"]];
+
+/** Campo «Objeto» con el selector de artículo a la izquierda, en el orden en que se lee en la autorización. */
+function campoObjeto(idArticulo, idObjeto, articulo, objeto, etiqueta, ayuda) {
+  const sel = selector(articulo || "al", OPCIONES_ARTICULO);
+  sel.id = idArticulo;
+  sel.className = "selector-articulo";
+  sel.setAttribute("aria-label", "Artículo del objeto (sale solo según el objeto)");
+  sel.title = "Artículo: «a la» si dice adquisición o provisión, «al» si dice servicio.";
+  const texto = entrada(objeto || "", { id: idObjeto, clase: "entrada-objeto" });
+  const partes = [el("label", { for: idObjeto, texto: etiqueta }), el("div", { clase: "objeto-con-articulo" }, sel, texto)];
+  if (ayuda) partes.push(ayuda);
+  return el("div", { clase: "campo campo-ancho" }, ...partes);
+}
+
+/** Ícono de PDF (SVG armado con el DOM, sin innerHTML). */
+function iconoPdf() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  for (const [k, v] of [["viewBox", "0 0 24 24"], ["width", "18"], ["height", "18"], ["aria-hidden", "true"], ["focusable", "false"]]) svg.setAttribute(k, v);
+  const hoja = document.createElementNS(ns, "path");
+  hoja.setAttribute("d", "M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V8h4.5");
+  hoja.setAttribute("fill", "none"); hoja.setAttribute("stroke", "currentColor"); hoja.setAttribute("stroke-width", "1.8");
+  hoja.setAttribute("stroke-linejoin", "round");
+  const texto = document.createElementNS(ns, "text");
+  texto.setAttribute("x", "12"); texto.setAttribute("y", "17.5"); texto.setAttribute("text-anchor", "middle");
+  texto.setAttribute("font-size", "6.5"); texto.setAttribute("font-weight", "700"); texto.setAttribute("fill", "currentColor");
+  texto.textContent = "PDF";
+  svg.append(hoja, texto);
+  return svg;
+}
+
 // --- Órdenes de compra -------------------------------------------------------
 
 const ocEstado = { ficha: null };
@@ -525,12 +534,16 @@ function contenedorOC() {
   if (!raiz) {
     for (const p of seccion.querySelectorAll(":scope > p")) p.remove();
     const buscar = entrada("", { id: "oc-buscar", type: "search", placeholder: "N° de OC, SAP, proveedor u objeto" });
-    const filtros = el("form", { clase: "panel formulario", id: "oc-filtros", onsubmit: (e) => { e.preventDefault(); listarOC(); } },
+    const filtros = el("form", { clase: "panel formulario", id: "oc-filtros", onsubmit: (e) => { e.preventDefault(); cerrarFichaOC(); } },
       el("div", { clase: "campo" }, el("label", { for: "oc-buscar", texto: "Buscar" }), buscar),
       casilla("oc-excluidas", "Mostrar también las OC excluidas", false),
       el("div", { clase: "acciones" },
         el("button", { type: "submit", texto: "Buscar" }),
-        el("button", { type: "button", clase: "secundario", texto: "Nueva OC manual", onclick: mostrarAltaOC })));
+        el("button", { type: "button", id: "oc-nueva", "aria-label": "Nueva OC desde su PDF",
+          onclick: () => document.getElementById("oc-nueva-archivo").click() }, iconoPdf(), "Nueva OC"),
+        el("button", { type: "button", clase: "enlace", texto: "Sin PDF (escaneada): cargar a mano", onclick: mostrarAltaOC })),
+      el("input", { type: "file", id: "oc-nueva-archivo", accept: "application/pdf,.pdf", hidden: true,
+        "aria-label": "PDF de la nueva OC", onchange: (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) leerNuevaOC(f); } }));
     raiz = el("div", { id: "oc-raiz" }, filtros, el("div", { id: "oc-detalle" }), el("div", { id: "oc-lista" }));
     seccion.append(raiz);
   }
@@ -563,29 +576,53 @@ async function listarOC() {
       : "Todavía no hay OC. Importá un z_compras2 desde la pantalla Importar." }));
     return;
   }
-  const filas = ocs.map((oc) => {
-    const marcas = [oc.tipo, oc.comodato ? "comodato" : "", oc.centralizada ? "centralizada" : "",
-      oc.excluida ? "EXCLUIDA" : "", oc.origen === "MANUAL" ? "manual" : "",
-      oc.renglones_otro_centro ? (oc.renglones_otro_centro === oc.renglones ? "otro centro"
-        : oc.renglones_otro_centro + " de " + oc.renglones + " renglones de otro centro") : ""].filter(Boolean).join(" · ");
-    return el("tr", {},
-      el("td", {}, el("button", { type: "button", clase: "secundario", texto: oc.numero,
-        "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) })),
-      el("td", { texto: oc.efector }),
-      el("td", { texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
-      el("td", { texto: oc.objeto || "—" }),
-      el("td", { texto: marcas }),
-      el("td", { texto: oc.tipo === "BIEN" ? "—" : (oc.vig_desde || "") + (oc.vig_hasta ? " a " + oc.vig_hasta : " (sin fin)") }),
-      el("td", { clase: "numero", texto: oc.renglones }),
-      el("td", { clase: "numero", texto: formatoPesos(oc.importe_centavos) }));
-  });
-  const encabezados = ["OC", "Efector", "Proveedor", "Objeto", "Tipo", "Vigencia", "Renglones", "Importe $"];
+  const filas = ocs.map((oc) => el("tr", {},
+    el("td", {}, el("div", { clase: "oc-con-lapiz" },
+      el("button", { type: "button", clase: "secundario boton-celda", texto: oc.numero,
+        "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) }),
+      botonLapiz("Editar los datos de la OC " + oc.numero, () => abrirDialogoEditarOC(oc.numero)))),
+    el("td", { texto: oc.efector }),
+    el("td", { clase: "izq", texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
+    el("td", { clase: "izq", texto: oc.objeto || "—" }),
+    el("td", { texto: TIPOS_OC_TEXTO[oc.tipo] || oc.tipo }),
+    el("td", {}, observacionesOC(oc)),
+    el("td", { clase: "sin-corte", texto: vigenciaCorta(oc) }),
+    el("td", { clase: "numero", texto: oc.renglones }),
+    el("td", { clase: "numero sin-corte", texto: formatoPesos(oc.importe_centavos) })));
+  const encabezados = [["OC"], ["Efector"], ["Proveedor", "izq"], ["Objeto", "izq"], ["Tipo"], ["Observaciones"], ["Vigencia"],
+    ["Renglones"], ["Importe $"]];
   vaciar(lista,
     botonesExporte("seguimiento-oc", { efector: estado.efector === "Ambos" ? "" : estado.efector, q: texto }, "del seguimiento de OC"),
     el("p", { clase: "texto-suave", texto: ocs.length + (ocs.length === 1 ? " OC" : " OC") }),
-    el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
+    el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-lista" },
+      el("thead", {}, el("tr", {}, ...encabezados.map(([t, c]) => el("th", { scope: "col", clase: c || null, texto: t })))),
       el("tbody", {}, ...filas))));
+}
+
+const TIPOS_OC_TEXTO = { SERVICIO: "Servicio", BIEN: "Bien", PROVISION: "Provisión" };
+
+/** "01/03/26 – 28/02/27" en un solo renglón; los bienes no tienen vigencia. */
+function vigenciaCorta(oc) {
+  if (oc.tipo === "BIEN") return "—";
+  const corta = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(2, 4) : "");
+  if (!oc.vig_desde && !oc.vig_hasta) return "—";
+  return corta(oc.vig_desde) + " – " + (oc.vig_hasta ? corta(oc.vig_hasta) : "sin fin");
+}
+
+/** Etiquetas de color (con su palabra) para lo que hay que tener en cuenta de la OC. */
+function observacionesOC(oc) {
+  const etiquetas = [];
+  const etiqueta = (texto, tono, titulo) => etiquetas.push(el("span", { clase: "pastilla pastilla-" + tono, texto, title: titulo || null }));
+  if (oc.centralizada) etiqueta("Centralizada", "violeta", "Compra de Nivel Central");
+  if (oc.comodato) etiqueta("Comodato", "info", "Tiene equipo en comodato");
+  if (oc.renglones_otro_centro) {
+    etiqueta(oc.renglones_otro_centro === oc.renglones ? "Otro centro" : "Otro centro " + oc.renglones_otro_centro + "/" + oc.renglones,
+      "aviso", "Renglones de otro centro: se reciben y a veces no llevan factura");
+  }
+  if (oc.origen === "MANUAL") etiqueta("Manual", "neutra", "Cargada a mano o desde su PDF");
+  if (oc.cerrada_sap) etiqueta("Cerrada en SAP", "neutra");
+  if (oc.excluida) etiqueta("Excluida", "error");
+  return etiquetas.length ? el("div", { clase: "etiquetas" }, ...etiquetas) : "—";
 }
 
 async function abrirFichaOC(numero) {
@@ -617,7 +654,7 @@ const CAMPOS_OC_FORM = [
   ["ca", "CA (licitación-año)", "texto"],
   ["expediente_contratacion", "Expediente de contratación (GDE)", "gde"],
   ["gde_pdf_oc", "N° GDE del PDF de la OC", "gde"],
-  ["leyenda_cv", "Leyenda del CV", "texto"],
+  ["leyenda_cv", "Leyenda del CV (solo centralizadas: va en «Observaciones» del certificado de validación)", "texto"],
   ["vig_desde", "Vigencia desde", "fecha"],
   ["vig_hasta", "Vigencia hasta", "fecha"],
   ["excluida", "Excluir esta OC (no aparece en las listas)", "casilla"],
@@ -660,27 +697,11 @@ function marcaOtroCentro(r) {
 
 function pintarFichaOC(ficha) {
   const { oc, proveedor, renglones, expedientes } = ficha;
-  const manuales = new Set(oc.campos_manuales || []);
-  // Los bienes no tienen períodos: sin vigencia, prórroga ni día de inicio.
-  const camposVisibles = CAMPOS_OC_FORM.filter(([campo]) => oc.tipo !== "BIEN" || !CAMPOS_PERIODO_OC.includes(campo));
-  const campos = camposVisibles.map(([campo, etiqueta, tipo]) => {
-    const control = controlCampoOC(campo, tipo, oc[campo]);
-    const texto = etiqueta + (manuales.has(campo) ? " (editado a mano)" : "");
-    if (tipo === "casilla") {
-      control.querySelector("label").textContent = texto;
-      return control;
-    }
-    return el("div", { clase: "campo" }, el("label", { for: control.id, texto }), control);
-  });
-  const formulario = el("form", { clase: "formulario", onsubmit: guardarOC, novalidate: true },
-    el("h3", { texto: "Datos que se cargan a mano" }),
-    el("p", { clase: "texto-suave", texto: "Lo que edites acá queda marcado y la importación del z_compras2 no lo vuelve a pisar." }),
-    ...campos,
-    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar cambios de la OC" })));
+  const formulario = resumenDatosOC(oc);
 
   const filasRenglones = renglones.map((r) => el("tr", { clase: r.otro_centro ? "fila-otro-centro" : null },
     el("td", { clase: "numero", texto: r.pos }),
-    el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
+    el("td", { clase: "izq" }, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
     el("td", { clase: "numero", texto: r.cantidad + (r.unidad ? " " + r.unidad : "") }),
     el("td", { clase: "numero", texto: formatoPesos(r.precio_centavos) }),
     el("td", { clase: "numero", texto: formatoPesos(r.importe_centavos) }),
@@ -702,7 +723,7 @@ function pintarFichaOC(ficha) {
     formulario,
     el("h3", { texto: "Renglones" }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...encabezadosRenglones.map((t) => el("th", { scope: "col", texto: t })))),
+      el("thead", {}, el("tr", {}, ...encabezadosRenglones.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t })))),
       el("tbody", {}, ...filasRenglones))),
     el("div", { id: "oc-renglon-edicion" }),
     el("h3", { texto: "Consumo de la OC" }),
@@ -792,15 +813,20 @@ function pintarRevisionPdf(destino, comparacion, alTerminar) {
       el("ul", { clase: "lista-avisos" }, ...comparacion.avisos.map((a) => el("li", { texto: a })))));
   }
 
-  // Datos de la OC
-  const filasOc = comparacion.campos_oc.map((c) => {
+  // Datos de la OC (el artículo va chiquito a la izquierda del objeto, no en una fila propia)
+  const hayObjeto = comparacion.campos_oc.some((c) => c.campo === "objeto" && c.distinto);
+  const filasOc = comparacion.campos_oc.filter((c) => !(c.campo === "objeto_articulo" && hayObjeto)).map((c) => {
     const id = "pdf-oc-" + c.campo;
     let valorNuevo = el("span", { texto: valorPdf(c.campo, c.pdf) });
     if (!c.distinto) {
       // igual en el gestor y en el PDF: solo se muestra
     } else if (c.campo === "objeto") {
       const editor = entrada(c.pdf, { id: id + "-valor", "aria-label": "Objeto a guardar", clase: "entrada-objeto" });
-      valorNuevo = el("div", {}, editor, leido.objeto_completo
+      const articulo = selector(leido.objeto_articulo || "al", OPCIONES_ARTICULO);
+      articulo.id = "pdf-oc-objeto_articulo-valor";
+      articulo.className = "selector-articulo";
+      articulo.setAttribute("aria-label", "Artículo del objeto a guardar");
+      valorNuevo = el("div", {}, el("div", { clase: "objeto-con-articulo" }, articulo, editor), leido.objeto_completo
         ? el("details", {}, el("summary", { texto: "Texto completo del PDF" }), el("p", { clase: "texto-suave", texto: leido.objeto_completo }))
         : null);
     } else if (c.campo === "objeto_articulo") {
@@ -866,7 +892,11 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
   limpiarAvisos();
   const marcado = (id) => { const c = document.getElementById(id); return !!(c && c.checked); };
   const cambiosOc = {};
+  const selArticulo = document.getElementById("pdf-oc-objeto_articulo-valor");
+  const actualArticulo = (comparacion.campos_oc.find((c) => c.campo === "objeto_articulo") || {}).actual;
+  if (selArticulo && marcado("pdf-oc-objeto") && selArticulo.value !== actualArticulo) cambiosOc.objeto_articulo = selArticulo.value;
   for (const c of comparacion.campos_oc) {
+    if (c.campo === "objeto_articulo" && selArticulo) continue;
     if (!c.distinto || !marcado("pdf-oc-" + c.campo)) continue;
     const editor = document.getElementById("pdf-oc-" + c.campo + "-valor");
     cambiosOc[c.campo] = editor ? editor.value.trim() : c.pdf;
@@ -896,27 +926,132 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
     : "Quedó registrado que la OC " + ficha.oc.numero + " coincide con su PDF.", "exito");
 }
 
-async function guardarOC(evento) {
-  evento.preventDefault();
+/** Botón chiquito con un lápiz (44 px de alto igual, por accesibilidad). */
+function botonLapiz(etiqueta, alHacerClic) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  for (const [k, v] of [["viewBox", "0 0 24 24"], ["width", "16"], ["height", "16"], ["aria-hidden", "true"], ["focusable", "false"]]) svg.setAttribute(k, v);
+  const trazo = document.createElementNS(ns, "path");
+  trazo.setAttribute("d", "M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4");
+  trazo.setAttribute("fill", "none"); trazo.setAttribute("stroke", "currentColor"); trazo.setAttribute("stroke-width", "1.8");
+  trazo.setAttribute("stroke-linejoin", "round"); trazo.setAttribute("stroke-linecap", "round");
+  svg.append(trazo);
+  return el("button", { type: "button", clase: "secundario boton-lapiz", "aria-label": etiqueta, title: etiqueta, onclick: alHacerClic }, svg);
+}
+
+/** Datos de la OC en modo lectura, con el lápiz para editarlos en una ventana. */
+function resumenDatosOC(oc) {
+  const fila = (etiqueta, valor) => [el("dt", { texto: etiqueta }), el("dd", { texto: valor === null || valor === undefined || valor === "" ? "—" : String(valor) })];
+  const fecha = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : "");
+  const datos = [
+    ...fila("Objeto", oc.objeto ? oc.objeto_articulo + " " + oc.objeto : ""),
+    ...fila("Tipo", TIPOS_OC_TEXTO[oc.tipo] || oc.tipo),
+    ...fila("Concepto corto (Texto SAP)", oc.concepto_corto),
+    ...fila("CA", oc.ca),
+    ...fila("Expediente de contratación", oc.expediente_contratacion),
+    ...fila("N° GDE del PDF de la OC", oc.gde_pdf_oc),
+  ];
+  if (oc.tipo !== "BIEN") {
+    datos.push(...fila("Vigencia", (oc.vig_desde ? fecha(oc.vig_desde) : "") + (oc.vig_hasta ? " al " + fecha(oc.vig_hasta) : " (sin fin)")),
+      ...fila("Día de inicio del período", oc.dia_inicio_periodo === 1 ? "1 (mes calendario)" : oc.dia_inicio_periodo));
+  }
+  if (oc.centralizada) datos.push(...fila("Leyenda del CV", oc.leyenda_cv));
+  if (oc.excluida) datos.push(...fila("Excluida", oc.motivo_exclusion || "sí"));
+  return el("section", { clase: "resumen-oc", "aria-labelledby": "oc-datos-titulo" },
+    el("div", { clase: "resumen-oc-titulo" }, el("h3", { id: "oc-datos-titulo", texto: "Datos de la OC" }),
+      botonLapiz("Editar los datos de la OC " + oc.numero, () => abrirDialogoEditarOC(oc.numero)),
+      el("div", { clase: "etiquetas" }, observacionesOC(Object.assign({}, oc, { renglones_otro_centro: 0 })))),
+    el("dl", { clase: "datos-oc" }, ...datos));
+}
+
+async function abrirDialogoEditarOC(numero) {
   limpiarAvisos();
-  const { oc } = ocEstado.ficha;
+  const ficha = await api("GET", "/api/oc/" + encodeURIComponent(numero));
+  if (!ficha) return;
+  const anterior = document.getElementById("dialogo-editar-oc");
+  if (anterior) anterior.remove();
+  let oc = ficha.oc;
+  const manuales = new Set(oc.campos_manuales || []);
+  const etiquetaDe = (campo, etiqueta) => etiqueta + (manuales.has(campo) ? " (editado a mano)" : "");
+  const bloque = (campo) => {
+    const [, etiqueta, tipo] = CAMPOS_OC_FORM.find(([c]) => c === campo);
+    const control = controlCampoOC(campo, tipo, oc[campo]);
+    if (tipo === "casilla") { control.querySelector("label").textContent = etiquetaDe(campo, etiqueta); return control; }
+    return el("div", { clase: "campo", "data-campo": campo }, el("label", { for: control.id, texto: etiquetaDe(campo, etiqueta) }), control);
+  };
+  const periodo = el("div", { clase: "grilla-dialogo" }, bloque("vig_desde"), bloque("vig_hasta"), bloque("dia_inicio_periodo"));
+  const leyenda = bloque("leyenda_cv");
+  const exclusion = el("div", { clase: "grilla-dialogo" }, bloque("excluida"), bloque("motivo_exclusion"));
+  const estadoGuardado = el("div", { id: "editar-oc-estado", "aria-live": "polite" });
+  const formulario = el("form", { method: "dialog", clase: "formulario", novalidate: true,
+    onsubmit: (e) => { e.preventDefault(); guardarDialogoOC(dialogo, () => oc, (nueva) => { oc = nueva; }); } },
+    el("div", { clase: "dialogo-encabezado" },
+      el("h2", { id: "editar-oc-titulo", texto: "Editar OC " + oc.numero + (ficha.proveedor ? " — " + ficha.proveedor.razon_social : "") }),
+      el("p", { clase: "texto-suave", texto: "Lo que cambies queda marcado como cargado a mano: la importación del z_compras2 no lo pisa." })),
+    estadoGuardado,
+    campoObjeto("oc-campo-objeto_articulo", "oc-campo-objeto", oc.objeto_articulo, oc.objeto, etiquetaDe("objeto", "Objeto (como va en la autorización)")),
+    el("div", { clase: "grilla-dialogo" }, bloque("tipo"), bloque("concepto_corto"), bloque("comodato"), bloque("centralizada")),
+    periodo,
+    el("div", { clase: "grilla-dialogo" }, bloque("ca"), bloque("expediente_contratacion"), bloque("gde_pdf_oc")),
+    leyenda,
+    exclusion,
+    el("div", { clase: "acciones dialogo-acciones" },
+      el("button", { type: "submit", texto: "Guardar cambios" }),
+      el("button", { type: "button", clase: "secundario", texto: "Cerrar", onclick: () => dialogo.close() })));
+  const dialogo = el("dialog", { id: "dialogo-editar-oc", clase: "dialogo dialogo-mediano", "aria-labelledby": "editar-oc-titulo" }, formulario);
+  const actualizarVisibles = () => {
+    periodo.hidden = document.getElementById("oc-campo-tipo").value === "BIEN";
+    leyenda.hidden = !document.getElementById("oc-campo-centralizada").checked;
+  };
+  dialogo.addEventListener("change", (e) => {
+    if (["oc-campo-tipo", "oc-campo-centralizada"].includes(e.target.id)) actualizarVisibles();
+    if (e.target.closest("form")) vaciar(estadoGuardado);
+  });
+  dialogo.addEventListener("close", () => {
+    dialogo.remove();
+    if (ocEstado.ficha && ocEstado.ficha.oc.numero === numero) abrirFichaOC(numero);
+  });
+  document.body.append(dialogo);
+  actualizarVisibles();
+  dialogo.showModal();
+  document.getElementById("oc-campo-objeto").focus();
+}
+
+/** Guarda lo cambiado en la ventana y muestra la confirmación ahí mismo (la ventana queda abierta). */
+async function guardarDialogoOC(dialogo, ocActual, alGuardar) {
+  const oc = ocActual();
+  const estadoGuardado = document.getElementById("editar-oc-estado");
   const cambios = {};
   for (const [campo, , tipo] of CAMPOS_OC_FORM) {
-    if (!document.getElementById("oc-campo-" + campo)) continue;
+    const control = document.getElementById("oc-campo-" + campo);
+    if (!control || control.closest("[hidden]")) continue;
     const valor = valorCampoOC(campo, tipo);
     const actual = oc[campo] ?? (tipo === "fecha" || tipo === "dia" ? null : "");
     if (valor !== actual) cambios[campo] = valor;
   }
   if (!Object.keys(cambios).length) {
-    mostrarAviso("No hay cambios para guardar.", "aviso");
+    vaciar(estadoGuardado, el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "No hay cambios para guardar." })));
     return;
   }
-  estado.recargar = () => abrirFichaOC(oc.numero);
+  limpiarAvisos();
+  estado.recargar = () => { dialogo.close(); abrirDialogoEditarOC(oc.numero); };
   const ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero), { version: oc.version, cambios });
-  if (!ficha) return;
-  ocEstado.ficha = ficha;
-  pintarFichaOC(ficha);
-  mostrarAviso("Cambios de la OC " + oc.numero + " guardados.", "exito");
+  if (!ficha) {
+    const error = document.querySelector("#avisos .mensaje-error p");
+    vaciar(estadoGuardado, el("div", { clase: "mensaje mensaje-error", role: "alert" },
+      el("p", { texto: error ? error.textContent : "No se pudo guardar." })));
+    return;
+  }
+  limpiarAvisos();
+  alGuardar(ficha.oc);
+  const nombres = Object.keys(cambios).map((c) => {
+    const def = CAMPOS_OC_FORM.find(([k]) => k === c);
+    return def ? def[1].replace(/ \(.*$/, "") : c;
+  });
+  vaciar(estadoGuardado, el("div", { clase: "mensaje mensaje-exito", role: "status" },
+    el("p", { texto: "✓ Guardado: " + nombres.join(", ") + "." })));
+  estadoGuardado.scrollIntoView({ block: "nearest" });
+  if (document.getElementById("oc-lista")) listarOC();
 }
 
 function editarRenglon(renglon) {
@@ -1003,8 +1138,7 @@ function mostrarAltaOC() {
     campoFormulario("alta-hasta", "Vigencia hasta", entrada("", { type: "date" })),
     campoFormulario("alta-ca", "CA (licitación-año, por ejemplo 195-2025)", entrada("")),
     campoFormulario("alta-expediente", "Expediente de contratación (GDE)", entrada("", { clase: "mono" })),
-    campoFormulario("alta-objeto", "Objeto", entrada("")),
-    campoFormulario("alta-articulo", "Artículo del objeto", selector("al", [["al", "al"], ["a la", "a la"], ["a los", "a los"], ["a las", "a las"]])),
+    campoObjeto("alta-articulo", "alta-objeto", "al", "", "Objeto"),
     campoFormulario("alta-concepto", "Concepto corto (Texto SAP)", entrada("")),
     campoFormulario("alta-dia", "Día de inicio del período", entrada("1", { type: "number", min: "1", max: "28" })),
     el("h3", { texto: "Renglón 1" }),
@@ -1047,6 +1181,177 @@ async function crearOC(evento) {
   pintarFichaOC(ficha);
   mostrarAviso("OC " + ficha.oc.numero + " creada.", "exito");
   listarOC();
+}
+
+// --- Nueva OC desde su PDF: se lee el PDF y se confirman los datos en una ventana ------------------------------
+
+async function leerNuevaOC(archivo) {
+  limpiarAvisos();
+  const datos = new FormData();
+  datos.append("archivo", archivo, archivo.name);
+  const boton = document.getElementById("oc-nueva");
+  boton.disabled = true;
+  const respuesta = await api("POST", "/api/oc/pdf", datos);
+  boton.disabled = false;
+  if (!respuesta) return;
+  const { leido } = respuesta;
+  if (respuesta.existe) {
+    // Ya está cargada (por ejemplo, del z_compras2): se abre su ficha y se compara con el PDF.
+    mostrarAviso("La OC " + leido.numero + " ya está en el gestor: abajo ves qué cambia con el PDF.", "aviso");
+    await abrirFichaOC(leido.numero);
+    const entradaPdf = document.getElementById("pdf-" + leido.numero + "-archivo");
+    if (entradaPdf && window.DataTransfer) {
+      const lista = new DataTransfer();
+      lista.items.add(archivo);
+      entradaPdf.files = lista.files;
+      entradaPdf.form.requestSubmit();
+    }
+    return;
+  }
+  abrirDialogoNuevaOC(leido, respuesta.archivo);
+}
+
+function textoCantidad(valor) {
+  return valor === null || valor === undefined ? "" : String(valor).replace(".", ",");
+}
+
+function abrirDialogoNuevaOC(leido, archivo) {
+  const anterior = document.getElementById("dialogo-nueva-oc");
+  if (anterior) anterior.remove();
+  const efectorPorDefecto = leido.efector || (estado.efector === "CASPH" ? "CASPH" : "HBI");
+  const tipo = selector(leido.tipo || "SERVICIO", [["SERVICIO", "Servicio"], ["BIEN", "Bien"], ["PROVISION", "Provisión"]]);
+  const campo = (id, etiqueta, control, ayuda) => campoFormulario("noc-" + id, etiqueta, control, ayuda);
+  const periodo = el("div", { clase: "grilla-dialogo", id: "noc-periodo" },
+    campo("desde", "Vigencia desde", entrada(leido.vig_desde || "", { type: "date" })),
+    campo("hasta", "Vigencia hasta", entrada(leido.vig_hasta || "", { type: "date" })),
+    campo("dia", "Día de inicio del período", entrada(String(leido.dia_inicio_periodo || 1), { type: "number", min: "1", max: "28" }),
+      "Sale del día en que arranca la vigencia (1 = mes calendario)."));
+  const mostrarPeriodo = () => { periodo.hidden = tipo.value === "BIEN"; };
+  tipo.addEventListener("change", mostrarPeriodo);
+  const centralizada = casilla("noc-centralizada", "Es centralizada (UOC: Nivel central)", leido.centralizada === 1);
+
+  const filas = (leido.renglones || []).map((r) => {
+    const d = r.desglose || {};
+    const celda = (campoR, valor, atributos) => el("td", {}, entrada(valor ?? "", Object.assign({
+      "data-campo": campoR, "aria-label": campoR.replace(/_/g, " ") + " del renglón " + r.pos }, atributos || {})));
+    return el("tr", { "data-pos": String(r.pos) },
+      el("td", { clase: "numero", texto: String(r.pos) }),
+      celda("codigo", r.codigo, { clase: "entrada-chica" }),
+      celda("descripcion", r.descripcion),
+      celda("cantidad", textoCantidad(r.cantidad), { inputmode: "decimal", clase: "entrada-chica" }),
+      celda("unidad", r.unidad, { clase: "entrada-mini" }),
+      celda("precio", formatoPesos(r.precio_centavos), { inputmode: "decimal", clase: "entrada-plata" }),
+      celda("importe", formatoPesos(r.importe_centavos), { inputmode: "decimal", clase: "entrada-plata" }),
+      celda("desglose_cantidad", textoCantidad(d.cantidad), { inputmode: "decimal", clase: "entrada-chica" }),
+      celda("desglose_unidad", d.unidad || "", { clase: "entrada-mini" }),
+      celda("desglose_precio", d.precio_centavos ? formatoPesos(d.precio_centavos) : "", { inputmode: "decimal", clase: "entrada-plata" }));
+  });
+
+  const avisos = (leido.avisos || []).length
+    ? el("div", { clase: "mensaje mensaje-aviso" }, el("ul", { clase: "lista-avisos" }, ...leido.avisos.map((a) => el("li", { texto: a }))))
+    : null;
+  const textoCompleto = leido.objeto_completo
+    ? el("details", {}, el("summary", { texto: "Texto completo del objeto en el PDF" }), el("p", { clase: "texto-suave", texto: leido.objeto_completo }))
+    : null;
+
+  const formulario = el("form", { method: "dialog", clase: "formulario", novalidate: true },
+    el("div", { clase: "dialogo-encabezado" },
+      el("h2", { id: "noc-titulo", texto: "Nueva OC " + (leido.numero || "") }),
+      el("p", { clase: "texto-suave", texto: "Datos leídos del PDF" + (archivo ? " (" + archivo + ")" : "")
+        + ". Revisalos y corregí lo que haga falta antes de crearla." })),
+    avisos,
+    el("div", { clase: "grilla-dialogo" },
+      campo("numero", "N° de OC", entrada(leido.numero || "", { inputmode: "numeric" })),
+      campo("efector", "Efector", selector(efectorPorDefecto, [["HBI", "HBI"], ["CASPH", "CASPH"]])),
+      campo("tipo", "Tipo", tipo),
+      campo("fecha", "Fecha de la OC", entrada(leido.fecha_oc || "", { type: "date" }))),
+    el("div", { clase: "grilla-dialogo" },
+      campo("sap", "N° SAP del proveedor", entrada(leido.sap || "", { inputmode: "numeric" })),
+      campo("razon", "Razón social", entrada(leido.razon_social || ""))),
+    campoObjeto("noc-articulo", "noc-objeto", leido.objeto_articulo, leido.objeto, "Objeto de la contratación (revisalo)", textoCompleto),
+    periodo,
+    el("div", { clase: "grilla-dialogo" },
+      campo("ca", "CA (licitación-año)", entrada(leido.ca || "")),
+      campo("expediente", "Expediente de contratación (GDE)", entrada(leido.expediente_contratacion || "", { clase: "mono" })),
+      campo("gde", "N° GDE del PDF de la OC", entrada(leido.gde_pdf_oc || "", { clase: "mono" }))),
+    el("div", { clase: "grilla-dialogo" },
+      campo("concepto", "Concepto corto (Texto SAP)", entrada(""), "Opcional: lo podés completar después."),
+      centralizada),
+    el("h3", { texto: "Renglones" }),
+    el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-renglones-dialogo" },
+      el("thead", {}, el("tr", {}, ...["Rgl.", "Código", "Descripción", "Cantidad", "Unidad", "Precio $", "Importe $",
+        "Desglose: cant.", "Unidad", "Precio $"].map((t) => el("th", { scope: "col", texto: t })))),
+      el("tbody", {}, ...filas))),
+    el("div", { clase: "acciones dialogo-acciones" },
+      el("button", { type: "button", id: "noc-crear", texto: "Crear OC", onclick: () => crearNuevaOC(dialogo, leido, archivo) }),
+      el("button", { type: "button", clase: "secundario", texto: "Cancelar", onclick: () => dialogo.close() })));
+  const dialogo = el("dialog", { id: "dialogo-nueva-oc", clase: "dialogo", "aria-labelledby": "noc-titulo" }, formulario);
+  dialogo.addEventListener("close", () => dialogo.remove());
+  document.body.append(dialogo);
+  mostrarPeriodo();
+  dialogo.showModal();
+  document.getElementById("noc-objeto").focus();
+}
+
+async function crearNuevaOC(dialogo, leido, archivo) {
+  const valor = (id) => document.getElementById("noc-" + id).value.trim();
+  const renglones = [];
+  for (const fila of dialogo.querySelectorAll("tbody tr")) {
+    const v = (campoR) => fila.querySelector('[data-campo="' + campoR + '"]').value.trim();
+    const pos = Number(fila.dataset.pos);
+    const precio = pesosACentavos(v("precio"));
+    const importe = pesosACentavos(v("importe"));
+    if (precio === null || Number.isNaN(precio)) { avisoEnDialogo(dialogo, "Revisá el precio del renglón " + pos + "."); return; }
+    if (Number.isNaN(importe)) { avisoEnDialogo(dialogo, "Revisá el importe del renglón " + pos + "."); return; }
+    const renglon = { pos, codigo: v("codigo"), descripcion: v("descripcion"), cantidad: v("cantidad") || "1", unidad: v("unidad"),
+      precio_centavos: precio };
+    if (importe !== null) renglon.importe_centavos = importe;
+    if (v("desglose_cantidad")) {
+      const precioDesglose = pesosACentavos(v("desglose_precio"));
+      if (precioDesglose === null || Number.isNaN(precioDesglose)) { avisoEnDialogo(dialogo, "Revisá el precio del desglose del renglón " + pos + "."); return; }
+      Object.assign(renglon, { desglose_cantidad: v("desglose_cantidad"), desglose_unidad: v("desglose_unidad") || "MES",
+        desglose_precio_centavos: precioDesglose });
+    }
+    renglones.push(renglon);
+  }
+  const tipo = valor("tipo");
+  const datos = {
+    numero: valor("numero"), efector: valor("efector"), sap: valor("sap"), razon_social: valor("razon"),
+    fecha_oc: valor("fecha") || null, tipo, ca: valor("ca"), expediente_contratacion: valor("expediente"),
+    gde_pdf_oc: valor("gde"), objeto: valor("objeto"), objeto_articulo: document.getElementById("noc-articulo").value,
+    concepto_corto: valor("concepto"), centralizada: document.getElementById("noc-centralizada").checked ? 1 : 0, renglones,
+  };
+  if (tipo !== "BIEN") {
+    Object.assign(datos, { vig_desde: valor("desde") || null, vig_hasta: valor("hasta") || null,
+      dia_inicio_periodo: Number(valor("dia") || "1") });
+  }
+  if (!datos.objeto) { avisoEnDialogo(dialogo, "Falta el objeto de la contratación."); return; }
+  const cabecera = Object.fromEntries(Object.entries(leido).filter(([k]) => k !== "renglones" && k !== "avisos"));
+  document.getElementById("noc-crear").disabled = true;
+  const ficha = await api("POST", "/api/oc/desde-pdf", { oc: datos, archivo: archivo || "", leido: cabecera });
+  if (!ficha) {
+    const boton = document.getElementById("noc-crear");
+    if (boton) boton.disabled = false;
+    const aviso = document.querySelector("#avisos .mensaje-error p");
+    if (aviso) avisoEnDialogo(dialogo, aviso.textContent);
+    return;
+  }
+  dialogo.close();
+  ocEstado.ficha = ficha;
+  pintarFichaOC(ficha);
+  listarOC();
+  mostrarAviso("OC " + ficha.oc.numero + " creada desde su PDF.", "exito");
+}
+
+/** Mensaje de error dentro de la ventana (los avisos de la página quedan tapados por el fondo del diálogo). */
+function avisoEnDialogo(dialogo, texto) {
+  let caja = dialogo.querySelector(".dialogo-error");
+  if (!caja) {
+    caja = el("div", { clase: "mensaje mensaje-error dialogo-error", role: "alert" }, el("p"));
+    dialogo.querySelector(".dialogo-encabezado").after(caja);
+  }
+  caja.querySelector("p").textContent = texto;
+  caja.scrollIntoView({ block: "nearest" });
 }
 
 // --- Expedientes: lista ------------------------------------------------------
@@ -1111,18 +1416,18 @@ async function listarExpedientes() {
   }
   const encabezados = ["N°", "Tipo", "OC", "Proveedor", "Período", "Factura", "Estado"];
   const filas = expedientes.map((x) => el("tr", {},
-    el("td", {}, el("button", { type: "button", clase: "secundario", texto: String(x.id),
+    el("td", {}, el("button", { type: "button", clase: "secundario boton-celda", texto: String(x.id),
       "aria-label": "Abrir el expediente " + x.id, onclick: () => abrirExpediente(x.id, 1) })),
-    el("td", { texto: x.tipo }),
+    el("td", { texto: (TIPOS_EXPEDIENTE.find(([v]) => v === x.tipo) || [null, x.tipo])[1] }),
     el("td", { texto: x.oc || "—" }),
-    el("td", { texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
+    el("td", { clase: "izq", texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
     el("td", { texto: x.periodo || "—" }),
     el("td", { texto: x.factura || "—" }),
     el("td", {}, pastillaEstado(x.estado))));
   vaciar(lista,
     el("p", { clase: "texto-suave", texto: expedientes.length + (expedientes.length === 1 ? " expediente" : " expedientes") }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
+      el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t })))),
       el("tbody", {}, ...filas))));
 }
 
@@ -2506,7 +2811,10 @@ async function cargarAyuda() {
 // El servidor manda todas las filas; el filtrado y el orden se hacen acá. Excel recibe exactamente lo que se ve.
 // Las vistas (columnas, orden y filtros) se recuerdan en esta PC; también se pueden guardar con nombre.
 
-const TABLAS_DISPONIBLES = [["expedientes", "Expedientes"], ["oc", "Órdenes de compra"], ["renglones", "Renglones de OC"]];
+const TABLAS_DISPONIBLES = [["expedientes", "Expedientes"], ["oc", "Órdenes de compra"], ["renglones", "Renglones de OC"],
+  ["entregas", "Entregas"]];
+const COLUMNAS_A_LA_IZQUIERDA = new Set(["razon_social", "objeto", "descripcion", "proveedores", "nombre", "observaciones",
+  "motivo_pendiente", "motivo_anulacion", "remitos", "estados_expedientes"]);
 const TABLA_FILAS_POR_TANDA = 300;
 const tablaEstado = { nombre: "expedientes", datos: null, vista: null, mostrar: TABLA_FILAS_POR_TANDA };
 
@@ -2534,6 +2842,10 @@ function fechaCorta(iso) {
 
 function textoCelda(columna, valor) {
   if (valor === null || valor === undefined || valor === "") return "";
+  if (columna.clave === "tipo" && tablaEstado.nombre === "expedientes") {
+    return (TIPOS_EXPEDIENTE.find(([v]) => v === valor) || [null, valor])[1];
+  }
+  if (columna.clave === "tipo" && tablaEstado.nombre === "oc") return TIPOS_OC_TEXTO[valor] || valor;
   switch (columna.tipo) {
     case "moneda": return formatoPesos(valor);
     case "fecha": return fechaCorta(valor);
@@ -2676,7 +2988,10 @@ function pintarTablas() {
         vista.filtros = {}; vista.buscar = ""; recordarVista(); pintarTablas(); } }),
       el("button", { type: "button", clase: "secundario", texto: "Restablecer vista", onclick: () => {
         tablaEstado.vista = vistaPredeterminada(datos.columnas); recordarVista(); pintarTablas(); } }),
-      el("button", { type: "button", texto: "Exportar a Excel", onclick: exportarTablaExcel })));
+      el("button", { type: "button", texto: "Exportar a Excel", onclick: exportarTablaExcel }),
+      el("button", { type: "button", clase: "secundario", id: "tablas-amplia",
+        texto: document.body.classList.contains("vista-amplia") ? "Salir de la vista amplia" : "Ver más grande",
+        "aria-pressed": document.body.classList.contains("vista-amplia") ? "true" : "false", onclick: alternarVistaAmplia })));
 
   const casillasColumnas = datos.columnas.map((c) => {
     const id = "tablas-col-" + c.clave;
@@ -2742,7 +3057,9 @@ function filtroDeColumna(columna, filas) {
 function celdaTabla(columna, fila) {
   const texto = textoCelda(columna, fila[columna.clave]);
   const numerica = ["moneda", "numero", "cantidad"].includes(columna.tipo);
-  const td = el("td", { clase: numerica ? "numero" : null });
+  const clases = [numerica ? "numero" : "", COLUMNAS_A_LA_IZQUIERDA.has(columna.clave) ? "izq" : "",
+    ["fecha", "fecha_hora", "moneda"].includes(columna.tipo) ? "sin-corte" : ""].filter(Boolean).join(" ");
+  const td = el("td", { clase: clases || null });
   const nombre = tablaEstado.nombre;
   if (nombre === "expedientes" && columna.clave === "id") {
     td.append(el("button", { type: "button", clase: "secundario boton-celda", texto, "aria-label": "Abrir el expediente " + texto,
@@ -2753,6 +3070,8 @@ function celdaTabla(columna, fila) {
       onclick: () => irAOC(numero) }));
   } else if (nombre === "expedientes" && columna.clave === "estado" && fila.estado) {
     td.append(pastillaEstado(fila.estado));
+  } else if (nombre === "entregas" && columna.clave === "estado") {
+    td.append(el("span", { clase: "pastilla pastilla-" + (texto.startsWith("Abierta") ? "aviso" : "exito"), texto }));
   } else {
     td.textContent = texto;
   }
@@ -2786,7 +3105,7 @@ function pintarCuerpoTabla(conEncabezado) {
     const encabezados = visibles.map((c) => {
       const orden = vista.orden && vista.orden.clave === c.clave ? (vista.orden.asc ? "ascending" : "descending") : null;
       const flecha = orden === "ascending" ? " ▲" : orden === "descending" ? " ▼" : "";
-      return el("th", { scope: "col", "aria-sort": orden || "none" },
+      return el("th", { scope: "col", "aria-sort": orden || "none", clase: COLUMNAS_A_LA_IZQUIERDA.has(c.clave) ? "izq" : null },
         el("button", { type: "button", clase: "orden-columna", texto: c.titulo + flecha,
           "aria-label": "Ordenar por " + c.titulo + (orden === "ascending" ? " (de mayor a menor)" : " (de menor a mayor)"),
           onclick: () => {
@@ -2827,6 +3146,21 @@ function pintarCuerpoTabla(conEncabezado) {
         onclick: () => { tablaEstado.mostrar += TABLA_FILAS_POR_TANDA; pintarCuerpoTabla(); } }))
     : null);
 }
+
+/** Vista amplia: oculta el menú y el encabezado para que la tabla use toda la pantalla (Esc también sale). */
+function alternarVistaAmplia() {
+  const amplia = document.body.classList.toggle("vista-amplia");
+  const boton = document.getElementById("tablas-amplia");
+  if (boton) {
+    boton.textContent = amplia ? "Salir de la vista amplia" : "Ver más grande";
+    boton.setAttribute("aria-pressed", amplia ? "true" : "false");
+    boton.focus();
+  }
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("vista-amplia") && !document.querySelector("dialog[open]")) alternarVistaAmplia();
+});
 
 function guardarVistaConNombre() {
   const nombre = (prompt("Nombre para esta vista (columnas, orden y filtros):") || "").trim();

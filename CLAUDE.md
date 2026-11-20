@@ -166,12 +166,23 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`efectores.<X>.centros` o, si está vacío, 1900 HBI / 1300 CASPH) ni el de Nivel Central (0010, que se marca como
   «Centralizada»). Se marca en la ficha, el paso 2, la lista de OC y
   Tablas (`negocio.marcar_otro_centro`); no cambia controles ni calendario.
+- «Nueva OC» (Órdenes de compra): `POST /api/oc/pdf` lee el PDF sin guardar (si la OC ya existe, se abre su ficha y se
+  compara); la ventana confirma los datos y `POST /api/oc/desde-pdf` → `negocio.crear_oc_desde_pdf` (origen MANUAL, todo
+  lo del PDF como manual, evento `pdf_oc`). «Sin PDF (escaneada)» abre el alta a mano. El artículo va chiquito a la
+  izquierda del objeto (`campoObjeto` en `app.js`).
 - PDF de la OC: artículo («a la» si dice adquisición/provisión, «al» si dice servicio; manda el primero), día de inicio y
   N° GDE (también de los campos de formulario del PDF) vienen tildados solos; el objeto se corta antes de «con destino».
   En los bienes no se muestran ni se toman vigencia, prórroga ni día de inicio.
 - La migración crea expedientes ya tramitados directo en su estado (CERRADO, ENVIADO, PENDIENTE, BORRADOR) con
   `periodo_manual = 1` e historial `MIGRACION`; reconoce lo ya migrado por factura + SAP (o OC + período si no hay
   factura). Las hojas "ENTREGA (n)" con paréntesis son copias y se ignoran.
+- Tablas: todo centrado salvo las columnas de texto largo (proveedor, objeto, descripción…), que llevan `.izq`
+  (`claseColumna` en `app.js` por el título; en Tablas, `COLUMNAS_A_LA_IZQUIERDA`). La lista de OC muestra las marcas
+  (centralizada, comodato, otro centro, manual, excluida) como etiquetas en «Observaciones», no en «Tipo». Tablas tiene
+  «Ver más grande» (`body.vista-amplia`, sin menú ni encabezado; Esc sale) y la tabla de Entregas (`tablas.tabla_entregas`).
+- Editar una OC: lápiz (`botonLapiz`) en la lista y en la ficha → ventana `abrirDialogoEditarOC` (campos de
+  `CAMPOS_OC_FORM`, `PUT /api/oc/<n>`); la confirmación se muestra dentro de la ventana y la ficha queda en lectura
+  (`resumenDatosOC`). Buscar cierra la ficha abierta. La leyenda del CV solo se muestra en centralizadas.
 - Todo archivo nuevo de `web/` se sirve solo si está en `server.ESTATICOS` (lista blanca); nunca desde internet.
 - `httpd.shutdown()` se llama desde otro thread (`POST /api/apagar`), nunca desde el que atiende.
 - En la prueba de concurrencia las funciones de `multiprocessing` van a nivel de módulo (Windows usa `spawn`).

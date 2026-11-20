@@ -75,3 +75,22 @@ class PruebaTablas(ayudas.CasoConServidor):
         self.assertEqual(resp.estado, 400)
         with self.assertRaises(ValueError):
             tablas.exportar_xlsx({"columnas": [{"titulo": "A"}], "filas": [["1", "2"]]})
+
+
+class PruebaTablaEntregas(ayudas.CasoConServidor):
+
+    def test_entregas_abiertas_y_enviadas(self):
+        con = db.conectar(self.entorno.ruta_base)
+        try:
+            from gestor import negocio
+            datos_prueba.armar_expediente_efia(con)
+            abierta = negocio.crear_entrega(con, "HBI", "Entrega de prueba")
+        finally:
+            con.close()
+        resp = self.servidor.get("/api/tablas/entregas")
+        self.assertEqual(resp.estado, 200, resp.texto())
+        filas = resp.json()["datos"]["filas"]
+        self.assertEqual(len(filas), 1)
+        self.assertEqual((filas[0]["numero"], filas[0]["estado"], filas[0]["expedientes"]), (abierta["numero"], "Abierta (en armado)", 0))
+        claves = [c["clave"] for c in resp.json()["datos"]["columnas"]]
+        self.assertIn("importe", claves)

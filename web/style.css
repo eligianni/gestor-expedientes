@@ -50,6 +50,7 @@
   --sombra-control: 0 1px 1px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(26, 31, 54, 0.02);
   --sombra-boton: 0 1px 1px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   --sombra-dialogo: 0 8px 24px rgba(26, 31, 54, 0.14);
+  --fondo-velo: rgba(26, 31, 54, 0.45);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -131,15 +132,17 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
 .marco {
   display: flex;
   align-items: flex-start;
-  max-width: 1440px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .menu {
   position: sticky;
   top: 64px;
-  flex: 0 0 232px;
-  padding: 24px 16px;
+  flex: 0 0 210px;
+  padding: 20px 12px 20px 16px;
+  min-height: calc(100vh - 64px);
+  border-right: 1px solid var(--borde);
+  background: var(--superficie);
 }
 .menu ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .menu button {
@@ -161,12 +164,13 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
 main {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 32px 32px 64px;
+  padding: 24px 28px 56px;
 }
 
 @media (max-width: 900px) {
   .marco { flex-direction: column; }
-  .menu { position: static; flex-basis: auto; width: 100%; padding: 8px 16px; border-bottom: 1px solid var(--borde); background: var(--superficie); }
+  .menu { position: static; flex-basis: auto; width: 100%; min-height: 0; padding: 8px 16px; border-right: 0;
+    border-bottom: 1px solid var(--borde); background: var(--superficie); }
   .menu ul { flex-direction: row; flex-wrap: wrap; }
   .menu button { width: auto; min-height: 44px; }
   .encabezado { padding: 8px 16px; position: static; }
@@ -244,9 +248,16 @@ table {
   border-collapse: collapse;
   background: var(--superficie);
   margin-bottom: 16px;
-  font-size: 14px;
+  font-size: 13.5px;
 }
-th, td { padding: 10px 12px; border-bottom: 1px solid var(--borde); text-align: left; vertical-align: top; }
+/* Tablas: todo centrado salvo las columnas de texto largo (proveedor, objeto, descripción…), que llevan .izq */
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--borde); text-align: center; vertical-align: middle; }
+th.izq, td.izq { text-align: left; }
+td.numero { text-align: center; }
+.sin-corte { white-space: nowrap; }
+.etiquetas { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.etiquetas .pastilla, td .pastilla { font-size: 12px; padding: 1px 8px; }
+.pastilla-neutra { background: var(--neutro-fondo); color: var(--texto-suave); }
 th { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--texto-suave);
   background: var(--superficie-hundida); }
 tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
@@ -342,7 +353,7 @@ input[aria-invalid="true"] { border-color: var(--error); }
 /* Calendario: cada estado lleva color y letra; las marcas, borde o símbolo. */
 .calendario { width: auto; }
 .calendario .cal-mes { text-align: center; min-width: 48px; }
-.calendario .cal-oc { min-width: 220px; font-weight: 400; font-size: 14px; text-transform: none; letter-spacing: 0; color: var(--texto);
+.calendario .cal-oc { text-align: left; min-width: 220px; font-weight: 400; font-size: 14px; text-transform: none; letter-spacing: 0; color: var(--texto);
   background: var(--superficie); }
 .cal-celda { text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; border: 2px solid var(--superficie);
   border-radius: 8px; cursor: pointer; transition: background-color 120ms ease-out; }
@@ -417,7 +428,7 @@ summary:focus { outline: 3px solid var(--foco); outline-offset: 2px; }
 .revision-pdf h4 { font-size: 16px; }
 .tabla-revision td:first-child { width: 64px; text-align: center; }
 .tabla-revision input[type="checkbox"] { width: 20px; height: 20px; min-height: 20px; margin: 0; accent-color: var(--primario); box-shadow: none; }
-.tabla-revision th[scope="row"] { font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--texto);
+.tabla-revision th[scope="row"] { text-align: left; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--texto);
   background: var(--superficie); }
 .entrada-objeto { width: 100%; min-width: 280px; }
 .subrenglones { margin: 4px 0 0; font-weight: 400; font-size: 13px; }
@@ -430,7 +441,7 @@ summary:focus { outline: 3px solid var(--foco); outline-offset: 2px; }
 .tabla-datos td.numero, .tabla-datos tfoot td { font-variant-numeric: tabular-nums; }
 .tabla-datos th { white-space: nowrap; padding: 0; vertical-align: bottom; }
 .orden-columna { width: 100%; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; box-shadow: none;
-  justify-content: flex-start; color: var(--texto-suave); font-size: 12px; font-weight: 600; text-transform: uppercase;
+  justify-content: center; color: var(--texto-suave); font-size: 12px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.04em; white-space: nowrap; }
 .orden-columna:hover { background: var(--neutro-fondo); color: var(--texto); border: 0; }
 th[aria-sort="ascending"] .orden-columna, th[aria-sort="descending"] .orden-columna { color: var(--primario); }
@@ -445,3 +456,57 @@ th[aria-sort="ascending"] .orden-columna, th[aria-sort="descending"] .orden-colu
 /* Renglones de otro centro: se marcan con palabra (no solo color) */
 .marca-otro-centro { margin-left: 4px; vertical-align: 1px; }
 .fila-otro-centro td { background: var(--superficie-hundida); }
+
+/* Objeto con su artículo chiquito a la izquierda («al» servicio de…) */
+.objeto-con-articulo { display: flex; gap: 8px; align-items: stretch; }
+.objeto-con-articulo .entrada-objeto { flex: 1 1 auto; min-width: 0; }
+.selector-articulo { flex: 0 0 auto; width: 76px; padding: 4px 6px; font-size: 13px; color: var(--texto-suave); }
+
+/* Botón con aspecto de enlace (acción secundaria) */
+button.enlace { background: transparent; border-color: transparent; box-shadow: none; color: var(--primario); font-weight: 500;
+  text-decoration: underline; text-underline-offset: 2px; padding: 8px 4px; }
+button.enlace:hover { background: transparent; color: var(--primario-hover); border-color: transparent; }
+
+/* Ventana «Nueva OC» */
+.dialogo { width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 24px 28px; border: 0;
+  border-radius: var(--radio-panel); box-shadow: var(--sombra-dialogo); color: var(--texto); background: var(--superficie); }
+.dialogo::backdrop { background: var(--fondo-velo); }
+.dialogo .campo { max-width: none; }
+.dialogo-encabezado h2 { margin: 0 0 4px; }
+.dialogo-encabezado p { margin: 0; }
+.grilla-dialogo { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 16px; align-items: start; }
+.grilla-dialogo .campo-casilla { min-height: 44px; margin-top: 26px; }
+.dialogo-acciones { position: sticky; bottom: -24px; margin: 0 -28px -24px; padding: 16px 28px; background: var(--superficie);
+  border-top: 1px solid var(--borde); }
+.tabla-renglones-dialogo td { padding: 4px; vertical-align: middle; }
+.tabla-renglones-dialogo input { width: 100%; min-height: 36px; padding: 4px 8px; font-size: 14px; }
+.tabla-renglones-dialogo .entrada-mini { width: 64px; }
+.tabla-renglones-dialogo .entrada-chica { width: 92px; }
+.tabla-renglones-dialogo .entrada-plata { width: 118px; text-align: right; font-variant-numeric: tabular-nums; }
+.tabla-renglones-dialogo td:nth-child(3) { min-width: 180px; }
+
+/* Listas con muchas columnas: el proveedor y el objeto se cortan en dos renglones, no los datos cortos */
+.tabla-lista td.izq, .tabla-datos td.izq { min-width: 180px; }
+
+/* Vista amplia de Tablas: sin menú ni encabezado, la tabla usa toda la pantalla (Esc o el botón vuelven) */
+body.vista-amplia .encabezado, body.vista-amplia .menu, body.vista-amplia #pantalla-tablas > h1,
+body.vista-amplia #pantalla-tablas > p { display: none; }
+body.vista-amplia main { padding: 12px 16px 24px; }
+body.vista-amplia .tabla-datos { font-size: 13px; }
+body.vista-amplia .fila-filtros input, body.vista-amplia .fila-filtros select { min-width: 72px; }
+th.izq .orden-columna { justify-content: flex-start; text-align: left; }
+
+/* Lápiz para editar la OC (chiquito, pero con 44 px de alto para tocarlo bien) */
+.oc-con-lapiz { display: inline-flex; align-items: center; gap: 6px; }
+.boton-lapiz { width: 44px; padding: 0; color: var(--texto-suave); }
+.boton-lapiz:hover { color: var(--primario); background: var(--primario-suave); border-color: var(--primario-borde); }
+
+/* Datos de la OC en lectura (ficha) */
+.resumen-oc { margin: 16px 0 20px; padding: 16px 20px; border-radius: var(--radio-panel); box-shadow: 0 0 0 1px var(--borde);
+  background: var(--superficie-hundida); }
+.resumen-oc-titulo { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.resumen-oc-titulo h3 { margin: 0; }
+.datos-oc { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; margin: 0; font-size: 14px; }
+.datos-oc dt { color: var(--texto-suave); font-weight: 500; }
+.datos-oc dd { margin: 0; overflow-wrap: anywhere; }
+.dialogo-mediano { width: min(860px, calc(100vw - 32px)); }
