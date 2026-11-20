@@ -534,7 +534,7 @@ function contenedorOC() {
   if (!raiz) {
     for (const p of seccion.querySelectorAll(":scope > p")) p.remove();
     const buscar = entrada("", { id: "oc-buscar", type: "search", placeholder: "N° de OC, SAP, proveedor u objeto" });
-    const filtros = el("form", { clase: "panel formulario", id: "oc-filtros", onsubmit: (e) => { e.preventDefault(); listarOC(); } },
+    const filtros = el("form", { clase: "panel formulario", id: "oc-filtros", onsubmit: (e) => { e.preventDefault(); cerrarFichaOC(); } },
       el("div", { clase: "campo" }, el("label", { for: "oc-buscar", texto: "Buscar" }), buscar),
       casilla("oc-excluidas", "Mostrar también las OC excluidas", false),
       el("div", { clase: "acciones" },
@@ -577,8 +577,10 @@ async function listarOC() {
     return;
   }
   const filas = ocs.map((oc) => el("tr", {},
-    el("td", {}, el("button", { type: "button", clase: "secundario boton-celda", texto: oc.numero,
-      "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) })),
+    el("td", {}, el("div", { clase: "oc-con-lapiz" },
+      el("button", { type: "button", clase: "secundario boton-celda", texto: oc.numero,
+        "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) }),
+      botonLapiz("Editar los datos de la OC " + oc.numero, () => abrirDialogoEditarOC(oc.numero)))),
     el("td", { texto: oc.efector }),
     el("td", { clase: "izq", texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
     el("td", { clase: "izq", texto: oc.objeto || "—" }),
@@ -652,7 +654,7 @@ const CAMPOS_OC_FORM = [
   ["ca", "CA (licitación-año)", "texto"],
   ["expediente_contratacion", "Expediente de contratación (GDE)", "gde"],
   ["gde_pdf_oc", "N° GDE del PDF de la OC", "gde"],
-  ["leyenda_cv", "Leyenda del CV", "texto"],
+  ["leyenda_cv", "Leyenda del CV (solo centralizadas: va en «Observaciones» del certificado de validación)", "texto"],
   ["vig_desde", "Vigencia desde", "fecha"],
   ["vig_hasta", "Vigencia hasta", "fecha"],
   ["excluida", "Excluir esta OC (no aparece en las listas)", "casilla"],
@@ -695,27 +697,7 @@ function marcaOtroCentro(r) {
 
 function pintarFichaOC(ficha) {
   const { oc, proveedor, renglones, expedientes } = ficha;
-  const manuales = new Set(oc.campos_manuales || []);
-  // Los bienes no tienen períodos: sin vigencia, prórroga ni día de inicio.
-  const camposVisibles = CAMPOS_OC_FORM.filter(([campo]) => oc.tipo !== "BIEN" || !CAMPOS_PERIODO_OC.includes(campo));
-  const campos = camposVisibles.filter(([campo]) => campo !== "objeto_articulo").map(([campo, etiqueta, tipo]) => {
-    if (campo === "objeto") {
-      return campoObjeto("oc-campo-objeto_articulo", "oc-campo-objeto", oc.objeto_articulo, oc.objeto,
-        etiqueta + (manuales.has("objeto") ? " (editado a mano)" : ""));
-    }
-    const control = controlCampoOC(campo, tipo, oc[campo]);
-    const texto = etiqueta + (manuales.has(campo) ? " (editado a mano)" : "");
-    if (tipo === "casilla") {
-      control.querySelector("label").textContent = texto;
-      return control;
-    }
-    return el("div", { clase: "campo" }, el("label", { for: control.id, texto }), control);
-  });
-  const formulario = el("form", { clase: "formulario", onsubmit: guardarOC, novalidate: true },
-    el("h3", { texto: "Datos que se cargan a mano" }),
-    el("p", { clase: "texto-suave", texto: "Lo que edites acá queda marcado y la importación del z_compras2 no lo vuelve a pisar." }),
-    ...campos,
-    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar cambios de la OC" })));
+  const formulario = resumenDatosOC(oc);
 
   const filasRenglones = renglones.map((r) => el("tr", { clase: r.otro_centro ? "fila-otro-centro" : null },
     el("td", { clase: "numero", texto: r.pos }),
@@ -944,27 +926,132 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
     : "Quedó registrado que la OC " + ficha.oc.numero + " coincide con su PDF.", "exito");
 }
 
-async function guardarOC(evento) {
-  evento.preventDefault();
+/** Botón chiquito con un lápiz (44 px de alto igual, por accesibilidad). */
+function botonLapiz(etiqueta, alHacerClic) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  for (const [k, v] of [["viewBox", "0 0 24 24"], ["width", "16"], ["height", "16"], ["aria-hidden", "true"], ["focusable", "false"]]) svg.setAttribute(k, v);
+  const trazo = document.createElementNS(ns, "path");
+  trazo.setAttribute("d", "M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4");
+  trazo.setAttribute("fill", "none"); trazo.setAttribute("stroke", "currentColor"); trazo.setAttribute("stroke-width", "1.8");
+  trazo.setAttribute("stroke-linejoin", "round"); trazo.setAttribute("stroke-linecap", "round");
+  svg.append(trazo);
+  return el("button", { type: "button", clase: "secundario boton-lapiz", "aria-label": etiqueta, title: etiqueta, onclick: alHacerClic }, svg);
+}
+
+/** Datos de la OC en modo lectura, con el lápiz para editarlos en una ventana. */
+function resumenDatosOC(oc) {
+  const fila = (etiqueta, valor) => [el("dt", { texto: etiqueta }), el("dd", { texto: valor === null || valor === undefined || valor === "" ? "—" : String(valor) })];
+  const fecha = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : "");
+  const datos = [
+    ...fila("Objeto", oc.objeto ? oc.objeto_articulo + " " + oc.objeto : ""),
+    ...fila("Tipo", TIPOS_OC_TEXTO[oc.tipo] || oc.tipo),
+    ...fila("Concepto corto (Texto SAP)", oc.concepto_corto),
+    ...fila("CA", oc.ca),
+    ...fila("Expediente de contratación", oc.expediente_contratacion),
+    ...fila("N° GDE del PDF de la OC", oc.gde_pdf_oc),
+  ];
+  if (oc.tipo !== "BIEN") {
+    datos.push(...fila("Vigencia", (oc.vig_desde ? fecha(oc.vig_desde) : "") + (oc.vig_hasta ? " al " + fecha(oc.vig_hasta) : " (sin fin)")),
+      ...fila("Día de inicio del período", oc.dia_inicio_periodo === 1 ? "1 (mes calendario)" : oc.dia_inicio_periodo));
+  }
+  if (oc.centralizada) datos.push(...fila("Leyenda del CV", oc.leyenda_cv));
+  if (oc.excluida) datos.push(...fila("Excluida", oc.motivo_exclusion || "sí"));
+  return el("section", { clase: "resumen-oc", "aria-labelledby": "oc-datos-titulo" },
+    el("div", { clase: "resumen-oc-titulo" }, el("h3", { id: "oc-datos-titulo", texto: "Datos de la OC" }),
+      botonLapiz("Editar los datos de la OC " + oc.numero, () => abrirDialogoEditarOC(oc.numero)),
+      el("div", { clase: "etiquetas" }, observacionesOC(Object.assign({}, oc, { renglones_otro_centro: 0 })))),
+    el("dl", { clase: "datos-oc" }, ...datos));
+}
+
+async function abrirDialogoEditarOC(numero) {
   limpiarAvisos();
-  const { oc } = ocEstado.ficha;
+  const ficha = await api("GET", "/api/oc/" + encodeURIComponent(numero));
+  if (!ficha) return;
+  const anterior = document.getElementById("dialogo-editar-oc");
+  if (anterior) anterior.remove();
+  let oc = ficha.oc;
+  const manuales = new Set(oc.campos_manuales || []);
+  const etiquetaDe = (campo, etiqueta) => etiqueta + (manuales.has(campo) ? " (editado a mano)" : "");
+  const bloque = (campo) => {
+    const [, etiqueta, tipo] = CAMPOS_OC_FORM.find(([c]) => c === campo);
+    const control = controlCampoOC(campo, tipo, oc[campo]);
+    if (tipo === "casilla") { control.querySelector("label").textContent = etiquetaDe(campo, etiqueta); return control; }
+    return el("div", { clase: "campo", "data-campo": campo }, el("label", { for: control.id, texto: etiquetaDe(campo, etiqueta) }), control);
+  };
+  const periodo = el("div", { clase: "grilla-dialogo" }, bloque("vig_desde"), bloque("vig_hasta"), bloque("dia_inicio_periodo"));
+  const leyenda = bloque("leyenda_cv");
+  const exclusion = el("div", { clase: "grilla-dialogo" }, bloque("excluida"), bloque("motivo_exclusion"));
+  const estadoGuardado = el("div", { id: "editar-oc-estado", "aria-live": "polite" });
+  const formulario = el("form", { method: "dialog", clase: "formulario", novalidate: true,
+    onsubmit: (e) => { e.preventDefault(); guardarDialogoOC(dialogo, () => oc, (nueva) => { oc = nueva; }); } },
+    el("div", { clase: "dialogo-encabezado" },
+      el("h2", { id: "editar-oc-titulo", texto: "Editar OC " + oc.numero + (ficha.proveedor ? " — " + ficha.proveedor.razon_social : "") }),
+      el("p", { clase: "texto-suave", texto: "Lo que cambies queda marcado como cargado a mano: la importación del z_compras2 no lo pisa." })),
+    estadoGuardado,
+    campoObjeto("oc-campo-objeto_articulo", "oc-campo-objeto", oc.objeto_articulo, oc.objeto, etiquetaDe("objeto", "Objeto (como va en la autorización)")),
+    el("div", { clase: "grilla-dialogo" }, bloque("tipo"), bloque("concepto_corto"), bloque("comodato"), bloque("centralizada")),
+    periodo,
+    el("div", { clase: "grilla-dialogo" }, bloque("ca"), bloque("expediente_contratacion"), bloque("gde_pdf_oc")),
+    leyenda,
+    exclusion,
+    el("div", { clase: "acciones dialogo-acciones" },
+      el("button", { type: "submit", texto: "Guardar cambios" }),
+      el("button", { type: "button", clase: "secundario", texto: "Cerrar", onclick: () => dialogo.close() })));
+  const dialogo = el("dialog", { id: "dialogo-editar-oc", clase: "dialogo dialogo-mediano", "aria-labelledby": "editar-oc-titulo" }, formulario);
+  const actualizarVisibles = () => {
+    periodo.hidden = document.getElementById("oc-campo-tipo").value === "BIEN";
+    leyenda.hidden = !document.getElementById("oc-campo-centralizada").checked;
+  };
+  dialogo.addEventListener("change", (e) => {
+    if (["oc-campo-tipo", "oc-campo-centralizada"].includes(e.target.id)) actualizarVisibles();
+    if (e.target.closest("form")) vaciar(estadoGuardado);
+  });
+  dialogo.addEventListener("close", () => {
+    dialogo.remove();
+    if (ocEstado.ficha && ocEstado.ficha.oc.numero === numero) abrirFichaOC(numero);
+  });
+  document.body.append(dialogo);
+  actualizarVisibles();
+  dialogo.showModal();
+  document.getElementById("oc-campo-objeto").focus();
+}
+
+/** Guarda lo cambiado en la ventana y muestra la confirmación ahí mismo (la ventana queda abierta). */
+async function guardarDialogoOC(dialogo, ocActual, alGuardar) {
+  const oc = ocActual();
+  const estadoGuardado = document.getElementById("editar-oc-estado");
   const cambios = {};
   for (const [campo, , tipo] of CAMPOS_OC_FORM) {
-    if (!document.getElementById("oc-campo-" + campo)) continue;
+    const control = document.getElementById("oc-campo-" + campo);
+    if (!control || control.closest("[hidden]")) continue;
     const valor = valorCampoOC(campo, tipo);
     const actual = oc[campo] ?? (tipo === "fecha" || tipo === "dia" ? null : "");
     if (valor !== actual) cambios[campo] = valor;
   }
   if (!Object.keys(cambios).length) {
-    mostrarAviso("No hay cambios para guardar.", "aviso");
+    vaciar(estadoGuardado, el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "No hay cambios para guardar." })));
     return;
   }
-  estado.recargar = () => abrirFichaOC(oc.numero);
+  limpiarAvisos();
+  estado.recargar = () => { dialogo.close(); abrirDialogoEditarOC(oc.numero); };
   const ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero), { version: oc.version, cambios });
-  if (!ficha) return;
-  ocEstado.ficha = ficha;
-  pintarFichaOC(ficha);
-  mostrarAviso("Cambios de la OC " + oc.numero + " guardados.", "exito");
+  if (!ficha) {
+    const error = document.querySelector("#avisos .mensaje-error p");
+    vaciar(estadoGuardado, el("div", { clase: "mensaje mensaje-error", role: "alert" },
+      el("p", { texto: error ? error.textContent : "No se pudo guardar." })));
+    return;
+  }
+  limpiarAvisos();
+  alGuardar(ficha.oc);
+  const nombres = Object.keys(cambios).map((c) => {
+    const def = CAMPOS_OC_FORM.find(([k]) => k === c);
+    return def ? def[1].replace(/ \(.*$/, "") : c;
+  });
+  vaciar(estadoGuardado, el("div", { clase: "mensaje mensaje-exito", role: "status" },
+    el("p", { texto: "✓ Guardado: " + nombres.join(", ") + "." })));
+  estadoGuardado.scrollIntoView({ block: "nearest" });
+  if (document.getElementById("oc-lista")) listarOC();
 }
 
 function editarRenglon(renglon) {

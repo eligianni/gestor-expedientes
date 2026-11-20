@@ -180,6 +180,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`claseColumna` en `app.js` por el título; en Tablas, `COLUMNAS_A_LA_IZQUIERDA`). La lista de OC muestra las marcas
   (centralizada, comodato, otro centro, manual, excluida) como etiquetas en «Observaciones», no en «Tipo». Tablas tiene
   «Ver más grande» (`body.vista-amplia`, sin menú ni encabezado; Esc sale) y la tabla de Entregas (`tablas.tabla_entregas`).
+- Editar una OC: lápiz (`botonLapiz`) en la lista y en la ficha → ventana `abrirDialogoEditarOC` (campos de
+  `CAMPOS_OC_FORM`, `PUT /api/oc/<n>`); la confirmación se muestra dentro de la ventana y la ficha queda en lectura
+  (`resumenDatosOC`). Buscar cierra la ficha abierta. La leyenda del CV solo se muestra en centralizadas.
 - Todo archivo nuevo de `web/` se sirve solo si está en `server.ESTATICOS` (lista blanca); nunca desde internet.
 - `httpd.shutdown()` se llama desde otro thread (`POST /api/apagar`), nunca desde el que atiende.
 - En la prueba de concurrencia las funciones de `multiprocessing` van a nivel de módulo (Windows usa `spawn`).
