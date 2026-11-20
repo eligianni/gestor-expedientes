@@ -36,10 +36,17 @@ function cargando(nodo) {
   vaciar(nodo, el("p", { texto: "Cargando…" }));
 }
 
+// Columnas de texto largo: van alineadas a la izquierda; todo lo demás, centrado.
+const RE_COLUMNA_TEXTO = /proveedor|objeto|descripci|detalle|motivo|referencia|observaci|concepto|aviso|archivo|nombre|problema|raz[oó]n social/i;
+
+function claseColumna(titulo, extra) {
+  return [RE_COLUMNA_TEXTO.test(titulo || "") ? "izq" : "", extra || ""].filter(Boolean).join(" ") || null;
+}
+
 function tabla(encabezados, filas, clasesColumnas) {
-  const thead = el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t }))));
+  const thead = el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t }))));
   const tbody = el("tbody", {}, ...filas.map((fila) => el("tr", {},
-    ...fila.map((valor, i) => el("td", { clase: (clasesColumnas && clasesColumnas[i]) || null, texto: valor ?? "" })))));
+    ...fila.map((valor, i) => el("td", { clase: claseColumna(encabezados[i], clasesColumnas && clasesColumnas[i]), texto: valor ?? "" })))));
   return el("div", { clase: "tabla-desplazable" }, el("table", {}, thead, tbody));
 }
 
@@ -132,6 +139,7 @@ const AL_MOSTRAR = {
 
 function mostrarPantalla(id, enfocar) {
   if (!document.getElementById(id)) id = "pantalla-inicio";
+  if (id !== "pantalla-tablas") document.body.classList.remove("vista-amplia");
   estado.pantalla = id;
   estado.recargar = AL_MOSTRAR[id] || null;
   for (const seccion of document.querySelectorAll("main > section")) {
@@ -568,29 +576,51 @@ async function listarOC() {
       : "Todavía no hay OC. Importá un z_compras2 desde la pantalla Importar." }));
     return;
   }
-  const filas = ocs.map((oc) => {
-    const marcas = [oc.tipo, oc.comodato ? "comodato" : "", oc.centralizada ? "centralizada" : "",
-      oc.excluida ? "EXCLUIDA" : "", oc.origen === "MANUAL" ? "manual" : "",
-      oc.renglones_otro_centro ? (oc.renglones_otro_centro === oc.renglones ? "otro centro"
-        : oc.renglones_otro_centro + " de " + oc.renglones + " renglones de otro centro") : ""].filter(Boolean).join(" · ");
-    return el("tr", {},
-      el("td", {}, el("button", { type: "button", clase: "secundario", texto: oc.numero,
-        "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) })),
-      el("td", { texto: oc.efector }),
-      el("td", { texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
-      el("td", { texto: oc.objeto || "—" }),
-      el("td", { texto: marcas }),
-      el("td", { texto: oc.tipo === "BIEN" ? "—" : (oc.vig_desde || "") + (oc.vig_hasta ? " a " + oc.vig_hasta : " (sin fin)") }),
-      el("td", { clase: "numero", texto: oc.renglones }),
-      el("td", { clase: "numero", texto: formatoPesos(oc.importe_centavos) }));
-  });
-  const encabezados = ["OC", "Efector", "Proveedor", "Objeto", "Tipo", "Vigencia", "Renglones", "Importe $"];
+  const filas = ocs.map((oc) => el("tr", {},
+    el("td", {}, el("button", { type: "button", clase: "secundario boton-celda", texto: oc.numero,
+      "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) })),
+    el("td", { texto: oc.efector }),
+    el("td", { clase: "izq", texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
+    el("td", { clase: "izq", texto: oc.objeto || "—" }),
+    el("td", { texto: TIPOS_OC_TEXTO[oc.tipo] || oc.tipo }),
+    el("td", {}, observacionesOC(oc)),
+    el("td", { clase: "sin-corte", texto: vigenciaCorta(oc) }),
+    el("td", { clase: "numero", texto: oc.renglones }),
+    el("td", { clase: "numero sin-corte", texto: formatoPesos(oc.importe_centavos) })));
+  const encabezados = [["OC"], ["Efector"], ["Proveedor", "izq"], ["Objeto", "izq"], ["Tipo"], ["Observaciones"], ["Vigencia"],
+    ["Renglones"], ["Importe $"]];
   vaciar(lista,
     botonesExporte("seguimiento-oc", { efector: estado.efector === "Ambos" ? "" : estado.efector, q: texto }, "del seguimiento de OC"),
     el("p", { clase: "texto-suave", texto: ocs.length + (ocs.length === 1 ? " OC" : " OC") }),
-    el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
+    el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-lista" },
+      el("thead", {}, el("tr", {}, ...encabezados.map(([t, c]) => el("th", { scope: "col", clase: c || null, texto: t })))),
       el("tbody", {}, ...filas))));
+}
+
+const TIPOS_OC_TEXTO = { SERVICIO: "Servicio", BIEN: "Bien", PROVISION: "Provisión" };
+
+/** "01/03/26 – 28/02/27" en un solo renglón; los bienes no tienen vigencia. */
+function vigenciaCorta(oc) {
+  if (oc.tipo === "BIEN") return "—";
+  const corta = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(2, 4) : "");
+  if (!oc.vig_desde && !oc.vig_hasta) return "—";
+  return corta(oc.vig_desde) + " – " + (oc.vig_hasta ? corta(oc.vig_hasta) : "sin fin");
+}
+
+/** Etiquetas de color (con su palabra) para lo que hay que tener en cuenta de la OC. */
+function observacionesOC(oc) {
+  const etiquetas = [];
+  const etiqueta = (texto, tono, titulo) => etiquetas.push(el("span", { clase: "pastilla pastilla-" + tono, texto, title: titulo || null }));
+  if (oc.centralizada) etiqueta("Centralizada", "violeta", "Compra de Nivel Central");
+  if (oc.comodato) etiqueta("Comodato", "info", "Tiene equipo en comodato");
+  if (oc.renglones_otro_centro) {
+    etiqueta(oc.renglones_otro_centro === oc.renglones ? "Otro centro" : "Otro centro " + oc.renglones_otro_centro + "/" + oc.renglones,
+      "aviso", "Renglones de otro centro: se reciben y a veces no llevan factura");
+  }
+  if (oc.origen === "MANUAL") etiqueta("Manual", "neutra", "Cargada a mano o desde su PDF");
+  if (oc.cerrada_sap) etiqueta("Cerrada en SAP", "neutra");
+  if (oc.excluida) etiqueta("Excluida", "error");
+  return etiquetas.length ? el("div", { clase: "etiquetas" }, ...etiquetas) : "—";
 }
 
 async function abrirFichaOC(numero) {
@@ -689,7 +719,7 @@ function pintarFichaOC(ficha) {
 
   const filasRenglones = renglones.map((r) => el("tr", { clase: r.otro_centro ? "fila-otro-centro" : null },
     el("td", { clase: "numero", texto: r.pos }),
-    el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
+    el("td", { clase: "izq" }, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
     el("td", { clase: "numero", texto: r.cantidad + (r.unidad ? " " + r.unidad : "") }),
     el("td", { clase: "numero", texto: formatoPesos(r.precio_centavos) }),
     el("td", { clase: "numero", texto: formatoPesos(r.importe_centavos) }),
@@ -711,7 +741,7 @@ function pintarFichaOC(ficha) {
     formulario,
     el("h3", { texto: "Renglones" }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...encabezadosRenglones.map((t) => el("th", { scope: "col", texto: t })))),
+      el("thead", {}, el("tr", {}, ...encabezadosRenglones.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t })))),
       el("tbody", {}, ...filasRenglones))),
     el("div", { id: "oc-renglon-edicion" }),
     el("h3", { texto: "Consumo de la OC" }),
@@ -1299,18 +1329,18 @@ async function listarExpedientes() {
   }
   const encabezados = ["N°", "Tipo", "OC", "Proveedor", "Período", "Factura", "Estado"];
   const filas = expedientes.map((x) => el("tr", {},
-    el("td", {}, el("button", { type: "button", clase: "secundario", texto: String(x.id),
+    el("td", {}, el("button", { type: "button", clase: "secundario boton-celda", texto: String(x.id),
       "aria-label": "Abrir el expediente " + x.id, onclick: () => abrirExpediente(x.id, 1) })),
-    el("td", { texto: x.tipo }),
+    el("td", { texto: (TIPOS_EXPEDIENTE.find(([v]) => v === x.tipo) || [null, x.tipo])[1] }),
     el("td", { texto: x.oc || "—" }),
-    el("td", { texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
+    el("td", { clase: "izq", texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
     el("td", { texto: x.periodo || "—" }),
     el("td", { texto: x.factura || "—" }),
     el("td", {}, pastillaEstado(x.estado))));
   vaciar(lista,
     el("p", { clase: "texto-suave", texto: expedientes.length + (expedientes.length === 1 ? " expediente" : " expedientes") }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
+      el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t })))),
       el("tbody", {}, ...filas))));
 }
 
@@ -2694,7 +2724,10 @@ async function cargarAyuda() {
 // El servidor manda todas las filas; el filtrado y el orden se hacen acá. Excel recibe exactamente lo que se ve.
 // Las vistas (columnas, orden y filtros) se recuerdan en esta PC; también se pueden guardar con nombre.
 
-const TABLAS_DISPONIBLES = [["expedientes", "Expedientes"], ["oc", "Órdenes de compra"], ["renglones", "Renglones de OC"]];
+const TABLAS_DISPONIBLES = [["expedientes", "Expedientes"], ["oc", "Órdenes de compra"], ["renglones", "Renglones de OC"],
+  ["entregas", "Entregas"]];
+const COLUMNAS_A_LA_IZQUIERDA = new Set(["razon_social", "objeto", "descripcion", "proveedores", "nombre", "observaciones",
+  "motivo_pendiente", "motivo_anulacion", "remitos", "estados_expedientes"]);
 const TABLA_FILAS_POR_TANDA = 300;
 const tablaEstado = { nombre: "expedientes", datos: null, vista: null, mostrar: TABLA_FILAS_POR_TANDA };
 
@@ -2722,6 +2755,10 @@ function fechaCorta(iso) {
 
 function textoCelda(columna, valor) {
   if (valor === null || valor === undefined || valor === "") return "";
+  if (columna.clave === "tipo" && tablaEstado.nombre === "expedientes") {
+    return (TIPOS_EXPEDIENTE.find(([v]) => v === valor) || [null, valor])[1];
+  }
+  if (columna.clave === "tipo" && tablaEstado.nombre === "oc") return TIPOS_OC_TEXTO[valor] || valor;
   switch (columna.tipo) {
     case "moneda": return formatoPesos(valor);
     case "fecha": return fechaCorta(valor);
@@ -2864,7 +2901,10 @@ function pintarTablas() {
         vista.filtros = {}; vista.buscar = ""; recordarVista(); pintarTablas(); } }),
       el("button", { type: "button", clase: "secundario", texto: "Restablecer vista", onclick: () => {
         tablaEstado.vista = vistaPredeterminada(datos.columnas); recordarVista(); pintarTablas(); } }),
-      el("button", { type: "button", texto: "Exportar a Excel", onclick: exportarTablaExcel })));
+      el("button", { type: "button", texto: "Exportar a Excel", onclick: exportarTablaExcel }),
+      el("button", { type: "button", clase: "secundario", id: "tablas-amplia",
+        texto: document.body.classList.contains("vista-amplia") ? "Salir de la vista amplia" : "Ver más grande",
+        "aria-pressed": document.body.classList.contains("vista-amplia") ? "true" : "false", onclick: alternarVistaAmplia })));
 
   const casillasColumnas = datos.columnas.map((c) => {
     const id = "tablas-col-" + c.clave;
@@ -2930,7 +2970,9 @@ function filtroDeColumna(columna, filas) {
 function celdaTabla(columna, fila) {
   const texto = textoCelda(columna, fila[columna.clave]);
   const numerica = ["moneda", "numero", "cantidad"].includes(columna.tipo);
-  const td = el("td", { clase: numerica ? "numero" : null });
+  const clases = [numerica ? "numero" : "", COLUMNAS_A_LA_IZQUIERDA.has(columna.clave) ? "izq" : "",
+    ["fecha", "fecha_hora", "moneda"].includes(columna.tipo) ? "sin-corte" : ""].filter(Boolean).join(" ");
+  const td = el("td", { clase: clases || null });
   const nombre = tablaEstado.nombre;
   if (nombre === "expedientes" && columna.clave === "id") {
     td.append(el("button", { type: "button", clase: "secundario boton-celda", texto, "aria-label": "Abrir el expediente " + texto,
@@ -2941,6 +2983,8 @@ function celdaTabla(columna, fila) {
       onclick: () => irAOC(numero) }));
   } else if (nombre === "expedientes" && columna.clave === "estado" && fila.estado) {
     td.append(pastillaEstado(fila.estado));
+  } else if (nombre === "entregas" && columna.clave === "estado") {
+    td.append(el("span", { clase: "pastilla pastilla-" + (texto.startsWith("Abierta") ? "aviso" : "exito"), texto }));
   } else {
     td.textContent = texto;
   }
@@ -2974,7 +3018,7 @@ function pintarCuerpoTabla(conEncabezado) {
     const encabezados = visibles.map((c) => {
       const orden = vista.orden && vista.orden.clave === c.clave ? (vista.orden.asc ? "ascending" : "descending") : null;
       const flecha = orden === "ascending" ? " ▲" : orden === "descending" ? " ▼" : "";
-      return el("th", { scope: "col", "aria-sort": orden || "none" },
+      return el("th", { scope: "col", "aria-sort": orden || "none", clase: COLUMNAS_A_LA_IZQUIERDA.has(c.clave) ? "izq" : null },
         el("button", { type: "button", clase: "orden-columna", texto: c.titulo + flecha,
           "aria-label": "Ordenar por " + c.titulo + (orden === "ascending" ? " (de mayor a menor)" : " (de menor a mayor)"),
           onclick: () => {
@@ -3015,6 +3059,21 @@ function pintarCuerpoTabla(conEncabezado) {
         onclick: () => { tablaEstado.mostrar += TABLA_FILAS_POR_TANDA; pintarCuerpoTabla(); } }))
     : null);
 }
+
+/** Vista amplia: oculta el menú y el encabezado para que la tabla use toda la pantalla (Esc también sale). */
+function alternarVistaAmplia() {
+  const amplia = document.body.classList.toggle("vista-amplia");
+  const boton = document.getElementById("tablas-amplia");
+  if (boton) {
+    boton.textContent = amplia ? "Salir de la vista amplia" : "Ver más grande";
+    boton.setAttribute("aria-pressed", amplia ? "true" : "false");
+    boton.focus();
+  }
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("vista-amplia") && !document.querySelector("dialog[open]")) alternarVistaAmplia();
+});
 
 function guardarVistaConNombre() {
   const nombre = (prompt("Nombre para esta vista (columnas, orden y filtros):") || "").trim();

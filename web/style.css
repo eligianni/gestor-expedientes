@@ -132,15 +132,17 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
 .marco {
   display: flex;
   align-items: flex-start;
-  max-width: 1440px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .menu {
   position: sticky;
   top: 64px;
-  flex: 0 0 232px;
-  padding: 24px 16px;
+  flex: 0 0 210px;
+  padding: 20px 12px 20px 16px;
+  min-height: calc(100vh - 64px);
+  border-right: 1px solid var(--borde);
+  background: var(--superficie);
 }
 .menu ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .menu button {
@@ -162,12 +164,13 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
 main {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 32px 32px 64px;
+  padding: 24px 28px 56px;
 }
 
 @media (max-width: 900px) {
   .marco { flex-direction: column; }
-  .menu { position: static; flex-basis: auto; width: 100%; padding: 8px 16px; border-bottom: 1px solid var(--borde); background: var(--superficie); }
+  .menu { position: static; flex-basis: auto; width: 100%; min-height: 0; padding: 8px 16px; border-right: 0;
+    border-bottom: 1px solid var(--borde); background: var(--superficie); }
   .menu ul { flex-direction: row; flex-wrap: wrap; }
   .menu button { width: auto; min-height: 44px; }
   .encabezado { padding: 8px 16px; position: static; }
@@ -245,9 +248,16 @@ table {
   border-collapse: collapse;
   background: var(--superficie);
   margin-bottom: 16px;
-  font-size: 14px;
+  font-size: 13.5px;
 }
-th, td { padding: 10px 12px; border-bottom: 1px solid var(--borde); text-align: left; vertical-align: top; }
+/* Tablas: todo centrado salvo las columnas de texto largo (proveedor, objeto, descripción…), que llevan .izq */
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--borde); text-align: center; vertical-align: middle; }
+th.izq, td.izq { text-align: left; }
+td.numero { text-align: center; }
+.sin-corte { white-space: nowrap; }
+.etiquetas { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.etiquetas .pastilla, td .pastilla { font-size: 12px; padding: 1px 8px; }
+.pastilla-neutra { background: var(--neutro-fondo); color: var(--texto-suave); }
 th { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--texto-suave);
   background: var(--superficie-hundida); }
 tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
@@ -343,7 +353,7 @@ input[aria-invalid="true"] { border-color: var(--error); }
 /* Calendario: cada estado lleva color y letra; las marcas, borde o símbolo. */
 .calendario { width: auto; }
 .calendario .cal-mes { text-align: center; min-width: 48px; }
-.calendario .cal-oc { min-width: 220px; font-weight: 400; font-size: 14px; text-transform: none; letter-spacing: 0; color: var(--texto);
+.calendario .cal-oc { text-align: left; min-width: 220px; font-weight: 400; font-size: 14px; text-transform: none; letter-spacing: 0; color: var(--texto);
   background: var(--superficie); }
 .cal-celda { text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; border: 2px solid var(--superficie);
   border-radius: 8px; cursor: pointer; transition: background-color 120ms ease-out; }
@@ -418,7 +428,7 @@ summary:focus { outline: 3px solid var(--foco); outline-offset: 2px; }
 .revision-pdf h4 { font-size: 16px; }
 .tabla-revision td:first-child { width: 64px; text-align: center; }
 .tabla-revision input[type="checkbox"] { width: 20px; height: 20px; min-height: 20px; margin: 0; accent-color: var(--primario); box-shadow: none; }
-.tabla-revision th[scope="row"] { font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--texto);
+.tabla-revision th[scope="row"] { text-align: left; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--texto);
   background: var(--superficie); }
 .entrada-objeto { width: 100%; min-width: 280px; }
 .subrenglones { margin: 4px 0 0; font-weight: 400; font-size: 13px; }
@@ -431,7 +441,7 @@ summary:focus { outline: 3px solid var(--foco); outline-offset: 2px; }
 .tabla-datos td.numero, .tabla-datos tfoot td { font-variant-numeric: tabular-nums; }
 .tabla-datos th { white-space: nowrap; padding: 0; vertical-align: bottom; }
 .orden-columna { width: 100%; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; box-shadow: none;
-  justify-content: flex-start; color: var(--texto-suave); font-size: 12px; font-weight: 600; text-transform: uppercase;
+  justify-content: center; color: var(--texto-suave); font-size: 12px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.04em; white-space: nowrap; }
 .orden-columna:hover { background: var(--neutro-fondo); color: var(--texto); border: 0; }
 th[aria-sort="ascending"] .orden-columna, th[aria-sort="descending"] .orden-columna { color: var(--primario); }
@@ -474,3 +484,14 @@ button.enlace:hover { background: transparent; color: var(--primario-hover); bor
 .tabla-renglones-dialogo .entrada-chica { width: 92px; }
 .tabla-renglones-dialogo .entrada-plata { width: 118px; text-align: right; font-variant-numeric: tabular-nums; }
 .tabla-renglones-dialogo td:nth-child(3) { min-width: 180px; }
+
+/* Listas con muchas columnas: el proveedor y el objeto se cortan en dos renglones, no los datos cortos */
+.tabla-lista td.izq, .tabla-datos td.izq { min-width: 180px; }
+
+/* Vista amplia de Tablas: sin menú ni encabezado, la tabla usa toda la pantalla (Esc o el botón vuelven) */
+body.vista-amplia .encabezado, body.vista-amplia .menu, body.vista-amplia #pantalla-tablas > h1,
+body.vista-amplia #pantalla-tablas > p { display: none; }
+body.vista-amplia main { padding: 12px 16px 24px; }
+body.vista-amplia .tabla-datos { font-size: 13px; }
+body.vista-amplia .fila-filtros input, body.vista-amplia .fila-filtros select { min-width: 72px; }
+th.izq .orden-columna { justify-content: flex-start; text-align: left; }

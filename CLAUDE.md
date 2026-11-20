@@ -176,6 +176,10 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - La migración crea expedientes ya tramitados directo en su estado (CERRADO, ENVIADO, PENDIENTE, BORRADOR) con
   `periodo_manual = 1` e historial `MIGRACION`; reconoce lo ya migrado por factura + SAP (o OC + período si no hay
   factura). Las hojas "ENTREGA (n)" con paréntesis son copias y se ignoran.
+- Tablas: todo centrado salvo las columnas de texto largo (proveedor, objeto, descripción…), que llevan `.izq`
+  (`claseColumna` en `app.js` por el título; en Tablas, `COLUMNAS_A_LA_IZQUIERDA`). La lista de OC muestra las marcas
+  (centralizada, comodato, otro centro, manual, excluida) como etiquetas en «Observaciones», no en «Tipo». Tablas tiene
+  «Ver más grande» (`body.vista-amplia`, sin menú ni encabezado; Esc sale) y la tabla de Entregas (`tablas.tabla_entregas`).
 - Todo archivo nuevo de `web/` se sirve solo si está en `server.ESTATICOS` (lista blanca); nunca desde internet.
 - `httpd.shutdown()` se llama desde otro thread (`POST /api/apagar`), nunca desde el que atiende.
 - En la prueba de concurrencia las funciones de `multiprocessing` van a nivel de módulo (Windows usa `spawn`).
