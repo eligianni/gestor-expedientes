@@ -104,7 +104,7 @@ COLUMNAS_OC = [
     _col("centralizada", "Centralizada", "si_no", False), _col("ca", "CA"),
     _col("expediente_contratacion", "Expediente de contratación", visible=False), _col("gde_pdf_oc", "GDE del PDF", visible=False),
     _col("fecha_oc", "Fecha OC", "fecha", False), _col("vig_desde", "Vigencia desde", "fecha"),
-    _col("vig_hasta", "Vigencia hasta", "fecha"), _col("prorroga", "Prórroga hasta", "fecha", False),
+    _col("vig_hasta", "Vigencia hasta", "fecha"),
     _col("renglones", "Renglones", "numero"), _col("importe_centavos", "Importe total", "moneda"),
     _col("expedientes", "Expedientes", "numero"), _col("ultimo_periodo", "Último período", visible=False),
     _col("pdf_cargado", "PDF cargado", "fecha_hora"), _col("origen", "Origen", visible=False),
@@ -136,7 +136,7 @@ def tabla_oc(con, efector=None):
         dic["ultimo_periodo"] = dic.get("ultimo_periodo") or ""
         dic["pdf_cargado"] = cargas.get(fila["numero"])
         if fila["tipo"] == "BIEN":  # los bienes no tienen períodos
-            dic["vig_desde"] = dic["vig_hasta"] = dic["prorroga"] = None
+            dic["vig_desde"] = dic["vig_hasta"] = None
         filas.append(dic)
     return {"columnas": COLUMNAS_OC, "filas": filas}
 

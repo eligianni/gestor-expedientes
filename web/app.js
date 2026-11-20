@@ -618,7 +618,6 @@ const CAMPOS_OC_FORM = [
   ["leyenda_cv", "Leyenda del CV", "texto"],
   ["vig_desde", "Vigencia desde", "fecha"],
   ["vig_hasta", "Vigencia hasta", "fecha"],
-  ["prorroga", "Prórroga hasta", "fecha"],
   ["excluida", "Excluir esta OC (no aparece en las listas)", "casilla"],
   ["motivo_exclusion", "Motivo de la exclusión", "texto"],
 ];
@@ -2258,12 +2257,16 @@ async function listarPendientes() {
 
 // Parámetros compartidos editables: clave de la tabla config, ruta dentro del valor y tipo de dato.
 const CAMPOS_PARAMETROS = [
-  { id: "par-centros-hbi", etiqueta: "Centros SAP del HBI", clave: "efectores", ruta: ["HBI", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
-  { id: "par-centros-casph", etiqueta: "Centros SAP del CASPH", clave: "efectores", ruta: ["CASPH", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
-  { id: "par-oc-casph", etiqueta: "OC asignadas al CASPH aunque tengan otro centro", clave: "efectores", ruta: ["CASPH", "oc_asignadas"],
-    tipo: "lista", ayuda: "Por ejemplo, las centralizadas imputadas a Hurlingham (centro 0010 o 1900). Al importar van al CASPH y nunca al HBI. Números separados por coma." },
-  { id: "par-oc-hbi", etiqueta: "OC asignadas al HBI aunque tengan otro centro", clave: "efectores", ruta: ["HBI", "oc_asignadas"],
-    tipo: "lista", ayuda: "Al importar van al HBI y nunca al CASPH. Números separados por coma." },
+  { id: "par-gestor-hbi", etiqueta: "Centro gestor del HBI", clave: "efectores", ruta: ["HBI", "centros_gestores"], tipo: "lista",
+    defecto: ["4500"], ayuda: "Al importar el z_compras2 entra todo lo imputado a este centro gestor, aunque el renglón tenga otro centro." },
+  { id: "par-gestor-casph", etiqueta: "Centro gestor del CASPH", clave: "efectores", ruta: ["CASPH", "centros_gestores"], tipo: "lista",
+    defecto: ["4900"], ayuda: "Al importar el z_compras2 entra todo lo imputado a este centro gestor, aunque el renglón tenga otro centro." },
+  { id: "par-org-hbi", etiqueta: "Organización de compras propia del HBI", clave: "efectores", ruta: ["HBI", "org_compras"], tipo: "lista",
+    defecto: ["1900"], ayuda: "Las OC de otra organización de compras se marcan como centralizadas." },
+  { id: "par-org-casph", etiqueta: "Organización de compras propia del CASPH", clave: "efectores", ruta: ["CASPH", "org_compras"], tipo: "lista",
+    defecto: ["1300"], ayuda: "Las OC de otra organización de compras se marcan como centralizadas." },
+  { id: "par-centros-hbi", etiqueta: "Centros SAP del HBI (solo reportes sin la columna Centro gestor)", clave: "efectores", ruta: ["HBI", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
+  { id: "par-centros-casph", etiqueta: "Centros SAP del CASPH (solo reportes sin la columna Centro gestor)", clave: "efectores", ruta: ["CASPH", "centros"], tipo: "lista", ayuda: "Números separados por coma." },
   { id: "par-partidas", etiqueta: "Partidas excluidas", clave: "partidas_excluidas", ruta: [], tipo: "lista", ayuda: "Las OC con estas partidas no se importan." },
   { id: "par-excl-sap", etiqueta: "Proveedores excluidos (SAP)", clave: "exclusiones", ruta: ["sap"], tipo: "lista" },
   { id: "par-excl-oc", etiqueta: "OC excluidas", clave: "exclusiones", ruta: ["oc"], tipo: "lista" },
@@ -2292,7 +2295,7 @@ function escribirRuta(valor, ruta, nuevo) {
 }
 
 function valorParaCampo(campo, valor) {
-  if (campo.tipo === "lista") return (valor || []).join(", ");
+  if (campo.tipo === "lista") return (valor === undefined && campo.defecto ? campo.defecto : valor || []).join(", ");
   return valor === undefined || valor === null ? "" : String(valor);
 }
 

@@ -251,9 +251,13 @@ def _pedido_importacion(h, cuerpo):
         raise validacion("Elegí el archivo z_compras2 (.xlsx) a importar.")
     nombre, contenido = archivos["archivo"]
     parametros = db.leer_parametros(h.conexion())
-    centros = ((parametros.get("efectores") or {}).get(efector) or {}).get("centros") or []
-    if not centros:
-        raise ErrorHTTP(422, "negocio", "Configurá los centros SAP de %s antes de importar." % efector)
+    try:
+        encabezados, _ = xlsx.leer_tabla(io.BytesIO(contenido))
+    except xlsx.XlsxError:
+        encabezados = []  # el importador da el error del archivo
+    falta = importar.falta_configuracion(efector, parametros, encabezados)
+    if falta:
+        raise ErrorHTTP(422, "negocio", falta)
     return efector, nombre, contenido, parametros
 
 

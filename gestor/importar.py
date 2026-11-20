@@ -29,6 +29,7 @@ MAPA = {
     "importe": "importe",
     "org compras": "org_compras",
     "centro": "centro",
+    "centro gestor": "centro_gestor",
     "entrega final": "entrega_final",
     "factura final": "factura_final",
     "por entregar cantid": "sap_por_entregar",
@@ -118,23 +119,41 @@ def _columnas(encabezados):
     return presentes
 
 
-def oc_asignadas(parametros, efector):
-    """(OC asignadas a `efector`, OC asignadas a los otros efectores) según parametros["efectores"][...]["oc_asignadas"]."""
-    propias, otras = set(), set()
-    for nombre, datos in (parametros.get("efectores") or {}).items():
-        numeros = {util.sap_sin_ceros(str(o).strip()) for o in (datos or {}).get("oc_asignadas") or [] if str(o).strip()}
-        (propias if nombre == efector else otras).update(numeros)
-    return propias, otras - propias
+# Centro gestor de cada efector y organización de compras propia, si la tabla config todavía no los tiene.
+CENTROS_GESTORES_POR_DEFECTO = {"HBI": ["4500"], "CASPH": ["4900"]}
+ORG_COMPRAS_POR_DEFECTO = {"HBI": ["1900"], "CASPH": ["1300"]}
 
 
-def _validar_efector(efector, parametros):
+def _datos_efector(efector, parametros):
     efectores = parametros.get("efectores") or {}
     if efector not in efectores:
         raise ErrorImportacion("Elegí el efector (HBI o CASPH) antes de importar.")
-    centros = [str(c) for c in efectores[efector].get("centros") or []]
-    if not centros:
-        raise ErrorImportacion("Configurá los centros SAP de %s antes de importar." % efector)
-    return set(centros)
+    return efectores[efector] or {}
+
+
+def centros_gestores(efector, parametros):
+    datos = _datos_efector(efector, parametros)
+    valores = datos["centros_gestores"] if "centros_gestores" in datos else CENTROS_GESTORES_POR_DEFECTO.get(efector, [])
+    return {str(c).strip() for c in valores or [] if str(c).strip()}
+
+
+def usa_centro_gestor(encabezados):
+    return any(util.clave_encabezado(e or "") == "centro gestor" for e in encabezados)
+
+
+def falta_configuracion(efector, parametros, encabezados):
+    """Mensaje si falta configurar con qué se reconoce al efector en este reporte (centro gestor o centro), o None.
+
+    Los reportes por centro gestor (4500 HBI, 4900 CASPH) traen todo lo imputado al efector aunque el renglón tenga otro
+    centro (centralizadas con centro 0010, 1000, 1500…); los reportes viejos sin esa columna se filtran por centro.
+    """
+    if usa_centro_gestor(encabezados):
+        if not centros_gestores(efector, parametros):
+            return "Configurá el centro gestor de %s antes de importar." % efector
+        return None
+    if not [c for c in _datos_efector(efector, parametros).get("centros") or [] if str(c).strip()]:
+        return "Configurá los centros SAP de %s antes de importar." % efector
+    return None
 
 
 def _limpiar_fila(fila, columnas):
@@ -281,6 +300,10 @@ def _es_servicio(codigo):
 def inferir_oc(oc, renglones, parametros):
     """tipo, comodato y centralizada de la OC a partir de sus renglones y de org_compras."""
     propias = {str(o) for o in parametros.get("org_compras_propias") or []}
+    efector = oc.get("efector")
+    if efector:
+        datos = (parametros.get("efectores") or {}).get(efector) or {}
+        propias |= {str(o) for o in datos.get("org_compras", ORG_COMPRAS_POR_DEFECTO.get(efector, [])) or []}
     comodato = any("COMODATO" in (r.get("descripcion") or "").upper() for r in renglones)
     if comodato:
         tipo = "PROVISION"
@@ -321,11 +344,17 @@ def _aplicar_inferencias(ocs, renglones, parametros):
 
 def _leer(origen, efector, parametros):
     """Lee y limpia el reporte. Devuelve (informe sin comparar con la base, OC por número, renglones por (oc, pos))."""
-    centros = _validar_efector(efector, parametros)
+    _datos_efector(efector, parametros)
     encabezados, filas = xlsx.leer_tabla(origen)
     columnas = _columnas(encabezados)
-
-    asignadas, asignadas_a_otros = oc_asignadas(parametros, efector)
+    falta = falta_configuracion(efector, parametros, encabezados)
+    if falta:
+        raise ErrorImportacion(falta)
+    if "centro_gestor" in columnas:
+        campo_filtro, valores_filtro = "centro_gestor", centros_gestores(efector, parametros)
+    else:
+        campo_filtro = "centro"
+        valores_filtro = {str(c) for c in _datos_efector(efector, parametros).get("centros") or []}
     excluidas = {str(p) for p in parametros.get("partidas_excluidas") or []}
     exclusiones = parametros.get("exclusiones") or {}
     sap_excluidos = {util.sap_sin_ceros(str(s)) for s in exclusiones.get("sap") or []}
@@ -357,12 +386,10 @@ def _leer(origen, efector, parametros):
         if "partida" in columnas and _texto(fila.get(columnas["partida"])) in excluidas:
             informe["descartes"]["partida"] += 1
             continue
-        oc_txt = util.sap_sin_ceros(_texto(fila.get(columnas["oc"])))
-        # Las OC asignadas a un efector van a ese efector aunque tengan otro centro (centralizadas imputadas a
-        # Hurlingham con centro 0010 o 1900) y nunca al otro.
-        if oc_txt in asignadas_a_otros or (_texto(fila.get(columnas["centro"])) not in centros and oc_txt not in asignadas):
+        if _texto(fila.get(columnas[campo_filtro])) not in valores_filtro:
             informe["descartes"]["centro"] += 1
             continue
+        oc_txt = util.sap_sin_ceros(_texto(fila.get(columnas["oc"])))
         sap_txt = util.sap_sin_ceros(_texto(fila.get(columnas["sap"])))
         if sap_txt in sap_excluidos or oc_txt in oc_excluidas:
             informe["descartes"]["exclusion_manual"] += 1

@@ -154,9 +154,11 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - La exportación de Tablas se envía con un `<form>` POST (no `fetch`) para que el navegador descargue el archivo.
 - Copias de seguridad: una al arrancar (rotan, `backups_a_conservar`) y una por día en `<carpeta_backups>/diarios`
   (`db.backup_diario`, hilo en `app.py` cada 30 min, `backups_diarios_a_conservar`). Restaurar usa solo las de arranque.
-- Importar z_compras2: entra una fila si su centro es del efector (`efectores.<X>.centros`) o si la OC está en
-  `efectores.<X>.oc_asignadas`; una OC asignada a otro efector nunca entra (centralizadas de Hurlingham con centro 0010
-  o 1900). El día de inicio del período sale del día de `vig_desde` (29 a 31 → 1), salvo que se haya editado a mano.
+- Importar z_compras2: si el reporte trae la columna «Centro Gestor», entra todo lo imputado al centro gestor del efector
+  (`efectores.<X>.centros_gestores`, por defecto 4500 HBI y 4900 CASPH) aunque el renglón tenga otro centro; sin esa
+  columna se filtra por `centros`. Centralizada = organización de compras distinta de la propia
+  (`efectores.<X>.org_compras`, por defecto 1900 HBI y 1300 CASPH). El día de inicio del período sale del día de
+  `vig_desde` (29 a 31 → 1), salvo que se haya editado a mano. La prórroga no se carga en la ficha: sale como otra OC.
 - PDF de la OC: artículo («a la» si dice adquisición/provisión, «al» si dice servicio; manda el primero), día de inicio y
   N° GDE (también de los campos de formulario del PDF) vienen tildados solos; el objeto se corta antes de «con destino».
   En los bienes no se muestran ni se toman vigencia, prórroga ni día de inicio.
