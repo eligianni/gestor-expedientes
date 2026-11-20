@@ -568,6 +568,29 @@ def comparar_oc_pdf(con, numero, leido):
             "ultimo_pdf": ultimo_pdf_oc(con, oc["numero"])}
 
 
+def crear_oc_desde_pdf(con, datos, archivo="", leido=None):
+    """Alta de una OC con los datos del PDF confirmados por la usuaria (ventana «Nueva OC»).
+
+    Es una OC cargada a mano (origen MANUAL) con todos sus datos como manuales —también cantidad, unidad, precio y
+    desglose de los renglones—, así la importación del z_compras2 no los pisa; y queda registrada la carga del PDF.
+    """
+    ficha = crear_oc_manual(con, datos)
+    numero = ficha["oc"]["numero"]
+    with db.transaccion(con):
+        for fila in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (numero,)).fetchall():
+            fila = dict(fila)
+            presentes = [c for c in CAMPOS_RENGLON_PDF if fila.get(c) not in (None, "")]
+            manuales = _con_manuales(fila, presentes)
+            if manuales != json.loads(fila.get("campos_manuales") or "[]"):
+                db.actualizar_con_version(con, "renglon", {"oc": numero, "pos": fila["pos"]}, fila["version"],
+                                          {"campos_manuales": manuales})
+        db.registrar_evento(con, "IMPORTACION", "oc", {"numero": numero}, None, {
+            "fuente": FUENTE_PDF, "archivo": _texto(archivo, "archivo"), "alta": True,
+            "leido": leido if isinstance(leido, dict) else {},
+        })
+    return ficha_oc(con, numero)
+
+
 def _validar_campo_renglon_pdf(campo, valor):
     if campo in ("codigo", "descripcion"):
         return _texto(valor, ETIQUETAS_PDF[campo].lower())

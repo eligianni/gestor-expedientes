@@ -44,7 +44,8 @@ Pendiente, y los remitos de 2026 sin entrega quedan en Borrador. La tabla «No s
 una OC que no está: importar antes el z_compras2). Se puede repetir: lo ya migrado no se duplica.
 
 1. **Importar** el reporte de OC (Excel de SAP) en Importar. Las OC nuevas aparecen en Órdenes de compra.
-2. **PDF de la OC** (una vez por OC, antes de validar): en la ficha de la OC, o en el paso 1 del expediente, subir el PDF
+2. **PDF de la OC** (una vez por OC, antes de validar). Una OC nueva: **Órdenes de compra → Nueva OC**, elegir el PDF,
+   revisar los datos en la ventana y **Crear OC**. Una OC que ya está: en su ficha, o en el paso 1 del expediente, subir el PDF
    digital de la OC (el firmado en GDE) y tocar **Leer y comparar**. El programa toma de ahí el objeto de la contratación,
    el N° GDE del PDF, la CA, la vigencia y, por renglón, la cantidad, la unidad, el precio y los subrenglones (por ejemplo
    1 UP = 3 MES × $ 1.224.990,00), que el reporte de SAP suele traer mal. Muestra lo que cambia y solo se aplica lo

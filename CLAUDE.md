@@ -166,6 +166,10 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`efectores.<X>.centros` o, si está vacío, 1900 HBI / 1300 CASPH) ni el de Nivel Central (0010, que se marca como
   «Centralizada»). Se marca en la ficha, el paso 2, la lista de OC y
   Tablas (`negocio.marcar_otro_centro`); no cambia controles ni calendario.
+- «Nueva OC» (Órdenes de compra): `POST /api/oc/pdf` lee el PDF sin guardar (si la OC ya existe, se abre su ficha y se
+  compara); la ventana confirma los datos y `POST /api/oc/desde-pdf` → `negocio.crear_oc_desde_pdf` (origen MANUAL, todo
+  lo del PDF como manual, evento `pdf_oc`). «Sin PDF (escaneada)» abre el alta a mano. El artículo va chiquito a la
+  izquierda del objeto (`campoObjeto` en `app.js`).
 - PDF de la OC: artículo («a la» si dice adquisición/provisión, «al» si dice servicio; manda el primero), día de inicio y
   N° GDE (también de los campos de formulario del PDF) vienen tildados solos; el objeto se corta antes de «con destino».
   En los bienes no se muestran ni se toman vigencia, prórroga ni día de inicio.

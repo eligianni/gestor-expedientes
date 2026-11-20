@@ -137,3 +137,59 @@ class PruebaOcPdfApi(ayudas.CasoConServidor):
         datos_prueba.importar_hbi_2026(self.con)
         renglon = negocio.ficha_oc(self.con, "4500600299")["renglones"][0]
         self.assertEqual((renglon["desglose_cantidad"], renglon["sap_por_entregar"], renglon["exceso_sap"]), ("6", "6", 0))
+
+
+class PruebaNuevaOcDesdePdf(ayudas.CasoConServidor):
+    """«Nueva OC»: se lee el PDF, se confirman los datos y se crea la OC con lo confirmado."""
+
+    def setUp(self):
+        super().setUp()
+        self.con = db.conectar(self.entorno.ruta_base)
+        self.addCleanup(self.con.close)
+        self.carpeta = tempfile.TemporaryDirectory()
+        self.addCleanup(self.carpeta.cleanup)
+
+    def _subir(self, carpeta):
+        ruta = Path(self.carpeta.name) / "oc.pdf"
+        ruta.write_bytes(pdf_prueba.pdf_desde_texto(texto_oc(carpeta), fuente="cid", envolver=True))
+        return self.servidor.subir("/api/oc/pdf", ruta)
+
+    def test_lee_crea_y_la_importacion_no_pisa(self):
+        resp = self._subir("EX-2026-99349179_MACATEX")
+        self.assertEqual(resp.estado, 200, resp.texto())
+        datos = resp.json()["datos"]
+        leido = datos["leido"]
+        self.assertFalse(datos["existe"])
+        self.assertEqual((leido["numero"], leido["efector"], leido["tipo"], leido["centralizada"]), ("4500594643", "HBI", "BIEN", 0))
+        renglones = [{"pos": r["pos"], "codigo": r["codigo"], "descripcion": r["descripcion"], "cantidad": r["cantidad"],
+                      "unidad": r["unidad"], "precio_centavos": r["precio_centavos"], "importe_centavos": r["importe_centavos"]}
+                     for r in leido["renglones"]]
+        oc = {"numero": leido["numero"], "efector": "HBI", "sap": leido["sap"], "razon_social": leido["razon_social"],
+              "fecha_oc": leido["fecha_oc"], "tipo": leido["tipo"], "ca": leido["ca"],
+              "expediente_contratacion": leido["expediente_contratacion"], "gde_pdf_oc": leido["gde_pdf_oc"],
+              "objeto": "adquisición de telas e hilos", "objeto_articulo": leido["objeto_articulo"], "centralizada": 0,
+              "renglones": renglones}
+        creada = self.servidor.post("/api/oc/desde-pdf", {"oc": oc, "archivo": "oc.pdf", "leido": {"numero": leido["numero"]}})
+        self.assertEqual(creada.estado, 200, creada.texto())
+        ficha = creada.json()["datos"]
+        self.assertEqual((ficha["oc"]["origen"], ficha["oc"]["objeto_articulo"]), ("MANUAL", "a la"))
+        self.assertEqual(ficha["pdf_oc"]["archivo"], "oc.pdf")
+        self.assertEqual(len(ficha["renglones"]), 6)
+        self.assertIn("unidad", ficha["renglones"][0]["campos_manuales"])
+        # El z_compras2 trae la misma OC: no pisa lo confirmado desde el PDF.
+        datos_prueba.importar_hbi_2026(self.con)
+        ficha = negocio.ficha_oc(self.con, "4500594643")
+        self.assertEqual({r["unidad"] for r in ficha["renglones"]}, {"U"})
+        self.assertEqual(ficha["oc"]["objeto"], "adquisición de telas e hilos")
+        # Leerlo de nuevo avisa que ya existe.
+        self.assertTrue(self._subir("EX-2026-99349179_MACATEX").json()["datos"]["existe"])
+
+    def test_servicio_y_efector(self):
+        leido = self._subir("EX-2026-89654857_EFIA").json()["datos"]["leido"]
+        self.assertEqual((leido["tipo"], leido["efector"], leido["dia_inicio_periodo"]), ("SERVICIO", "HBI", 1))
+
+    def test_texto_que_no_es_oc(self):
+        ruta = Path(self.carpeta.name) / "x.pdf"
+        ruta.write_bytes(pdf_prueba.pdf_desde_texto("FACTURA B 0003-00001234"))
+        resp = self.servidor.subir("/api/oc/pdf", ruta)
+        self.assertEqual(resp.estado, 422)

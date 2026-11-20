@@ -135,6 +135,30 @@ def dia_inicio_periodo(vig_desde):
     return dia if dia <= 28 else 1
 
 
+def tipo_sugerido(renglones):
+    """PROVISION si algún renglón habla de comodato, SERVICIO si todos los códigos son de servicio (1xxxxxx o vacío)
+    —como al importar el z_compras2—, si no BIEN."""
+    textos = " ".join([r.get("descripcion") or "" for r in renglones]
+                      + [s.get("descripcion") or "" for r in renglones for s in r.get("subrenglones") or []])
+    if "COMODATO" in textos.upper():
+        return "PROVISION"
+    codigos = [r.get("codigo") or next((s.get("codigo") for s in r.get("subrenglones") or [] if s.get("codigo")), "")
+               for r in renglones]
+    if renglones and all(not c or re.fullmatch(r"1\d{6}", c) for c in codigos):
+        return "SERVICIO"
+    return "BIEN"
+
+
+def efector_sugerido(uoc):
+    """HBI o CASPH según la UOC del PDF; None si no se sabe (por ejemplo, «Nivel Central»)."""
+    texto = util.normalizar_texto(uoc or "")
+    if "hurlingham" in texto:
+        return "CASPH"
+    if "bicentenario" in texto or "ituzaingo" in texto:
+        return "HBI"
+    return None
+
+
 def _objeto_completo(lineas):
     """Párrafo que sigue a «Objeto de (la) Contratación:» (en la misma línea o en las siguientes)."""
     patron = re.compile(r"objeto\s+de\s+(?:la\s+)?contrataci[oó]n\s*:\s*(.*)$", re.IGNORECASE)
@@ -302,6 +326,8 @@ def leer_oc(texto):
         "numero": numero,
         "fecha_oc": _fecha(_buscar(r"Fecha\s*:\s*(\d{2}/\d{2}/\d{4})", texto)),
         "uoc": uoc,
+        "efector": efector_sugerido(uoc),
+        "tipo": tipo_sugerido(renglones),
         # «UOC: Nivel central» = OC centralizada (la compra la hizo Nivel Central).
         "centralizada": (1 if "nivel central" in util.normalizar_texto(uoc) else 0) if uoc else None,
         "vig_desde": vig_desde,

@@ -50,6 +50,7 @@
   --sombra-control: 0 1px 1px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(26, 31, 54, 0.02);
   --sombra-boton: 0 1px 1px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   --sombra-dialogo: 0 8px 24px rgba(26, 31, 54, 0.14);
+  --fondo-velo: rgba(26, 31, 54, 0.45);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -445,3 +446,31 @@ th[aria-sort="ascending"] .orden-columna, th[aria-sort="descending"] .orden-colu
 /* Renglones de otro centro: se marcan con palabra (no solo color) */
 .marca-otro-centro { margin-left: 4px; vertical-align: 1px; }
 .fila-otro-centro td { background: var(--superficie-hundida); }
+
+/* Objeto con su artículo chiquito a la izquierda («al» servicio de…) */
+.objeto-con-articulo { display: flex; gap: 8px; align-items: stretch; }
+.objeto-con-articulo .entrada-objeto { flex: 1 1 auto; min-width: 0; }
+.selector-articulo { flex: 0 0 auto; width: 76px; padding: 4px 6px; font-size: 13px; color: var(--texto-suave); }
+
+/* Botón con aspecto de enlace (acción secundaria) */
+button.enlace { background: transparent; border-color: transparent; box-shadow: none; color: var(--primario); font-weight: 500;
+  text-decoration: underline; text-underline-offset: 2px; padding: 8px 4px; }
+button.enlace:hover { background: transparent; color: var(--primario-hover); border-color: transparent; }
+
+/* Ventana «Nueva OC» */
+.dialogo { width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 24px 28px; border: 0;
+  border-radius: var(--radio-panel); box-shadow: var(--sombra-dialogo); color: var(--texto); background: var(--superficie); }
+.dialogo::backdrop { background: var(--fondo-velo); }
+.dialogo .campo { max-width: none; }
+.dialogo-encabezado h2 { margin: 0 0 4px; }
+.dialogo-encabezado p { margin: 0; }
+.grilla-dialogo { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 16px; align-items: start; }
+.grilla-dialogo .campo-casilla { min-height: 44px; margin-top: 26px; }
+.dialogo-acciones { position: sticky; bottom: -24px; margin: 0 -28px -24px; padding: 16px 28px; background: var(--superficie);
+  border-top: 1px solid var(--borde); }
+.tabla-renglones-dialogo td { padding: 4px; vertical-align: middle; }
+.tabla-renglones-dialogo input { width: 100%; min-height: 36px; padding: 4px 8px; font-size: 14px; }
+.tabla-renglones-dialogo .entrada-mini { width: 64px; }
+.tabla-renglones-dialogo .entrada-chica { width: 92px; }
+.tabla-renglones-dialogo .entrada-plata { width: 118px; text-align: right; font-variant-numeric: tabular-nums; }
+.tabla-renglones-dialogo td:nth-child(3) { min-width: 180px; }
