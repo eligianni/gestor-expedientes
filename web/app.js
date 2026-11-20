@@ -540,10 +540,11 @@ function contenedorOC() {
       el("div", { clase: "acciones" },
         el("button", { type: "submit", texto: "Buscar" }),
         el("button", { type: "button", id: "oc-nueva", "aria-label": "Nueva OC desde su PDF",
-          onclick: () => document.getElementById("oc-nueva-archivo").click() }, iconoPdf(), "Nueva OC"),
+          title: "Elegí uno o varios PDF de OC", onclick: () => document.getElementById("oc-nueva-archivo").click() }, iconoPdf(), "Nueva OC"),
         el("button", { type: "button", clase: "enlace", texto: "Sin PDF (escaneada): cargar a mano", onclick: mostrarAltaOC })),
-      el("input", { type: "file", id: "oc-nueva-archivo", accept: "application/pdf,.pdf", hidden: true,
-        "aria-label": "PDF de la nueva OC", onchange: (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) leerNuevaOC(f); } }));
+      el("input", { type: "file", id: "oc-nueva-archivo", accept: "application/pdf,.pdf", multiple: true, hidden: true,
+        "aria-label": "PDF de las OC nuevas (podés elegir varios)",
+        onchange: (e) => { const archivos = Array.from(e.target.files); e.target.value = ""; if (archivos.length) procesarPdfsOC(archivos); } }));
     raiz = el("div", { id: "oc-raiz" }, filtros, el("div", { id: "oc-detalle" }), el("div", { id: "oc-lista" }));
     seccion.append(raiz);
   }
@@ -790,8 +791,9 @@ async function leerPdfOC(numero, archivo, texto, destino, alTerminar) {
   else { mostrarAviso("Elegí el PDF de la OC o pegá su texto.", "error"); return; }
   cargando(destino);
   const comparacion = await api("POST", "/api/oc/" + encodeURIComponent(numero) + "/pdf", datos);
-  if (!comparacion) { vaciar(destino); return; }
-  pintarRevisionPdf(destino, comparacion, alTerminar);
+  vaciar(destino);
+  if (!comparacion) return;
+  abrirColaPdf([{ tipo: "comparar", archivo: comparacion.archivo || "texto pegado", comparacion }], alTerminar);
 }
 
 function casillaTomar(id, etiqueta, marcada) {
@@ -800,7 +802,7 @@ function casillaTomar(id, etiqueta, marcada) {
   return control;
 }
 
-function pintarRevisionPdf(destino, comparacion, alTerminar) {
+function pintarRevisionPdf(destino, comparacion, alTerminar, opciones = {}) {
   const { oc, leido } = comparacion;
   const partes = [el("h4", { id: "pdf-revision-titulo", tabindex: "-1", texto: "Lo que dice el PDF de la OC " + oc.numero })];
   const resumen = [leido.razon_social && leido.razon_social + (leido.sap ? " (SAP " + leido.sap + ")" : ""),
@@ -881,9 +883,11 @@ function pintarRevisionPdf(destino, comparacion, alTerminar) {
       el("thead", {}, el("tr", {}, ...["Tomar", "Renglón", "Dato", "En el gestor", "En el PDF"].map((t) => el("th", { scope: "col", texto: t })))),
       el("tbody", {}, ...filasRenglones))));
 
-  partes.push(el("div", { clase: "acciones" },
-    el("button", { type: "button", texto: "Aplicar lo marcado", onclick: () => aplicarPdfOC(destino, comparacion, alTerminar) }),
-    el("button", { type: "button", clase: "secundario", texto: "Descartar", onclick: () => vaciar(destino) })));
+  if (!opciones.sinBotones) {
+    partes.push(el("div", { clase: "acciones" },
+      el("button", { type: "button", texto: "Aplicar lo marcado", onclick: () => aplicarPdfOC(destino, comparacion, alTerminar) }),
+      el("button", { type: "button", clase: "secundario", texto: "Descartar", onclick: () => vaciar(destino) })));
+  }
   vaciar(destino, el("div", { clase: "revision-pdf" }, ...partes));
   document.getElementById("pdf-revision-titulo").focus();
 }
@@ -901,7 +905,7 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
     const editor = document.getElementById("pdf-oc-" + c.campo + "-valor");
     cambiosOc[c.campo] = editor ? editor.value.trim() : c.pdf;
   }
-  if ("objeto" in cambiosOc && !cambiosOc.objeto) { mostrarAviso("El objeto no puede quedar vacío.", "error"); return; }
+  if ("objeto" in cambiosOc && !cambiosOc.objeto) { mostrarAviso("El objeto no puede quedar vacío.", "error"); errorAlaVentana(); return false; }
   const renglones = [];
   for (const r of comparacion.renglones) {
     if (!r.existe) {
@@ -918,9 +922,10 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
   estado.recargar = () => vaciar(destino);
   const ficha = await api("POST", "/api/oc/" + encodeURIComponent(comparacion.oc.numero) + "/pdf/aplicar", {
     version: comparacion.oc.version, archivo: comparacion.archivo || "", leido: comparacion.leido, oc: cambiosOc, renglones });
-  if (!ficha) return;
+  if (!ficha) { errorAlaVentana(); return false; }
   const cantidad = Object.keys(cambiosOc).length + renglones.length;
   await alTerminar(ficha);
+  if (colaPdf.dialogo) return true;
   mostrarAviso(cantidad
     ? "Datos del PDF aplicados a la OC " + ficha.oc.numero + "."
     : "Quedó registrado que la OC " + ficha.oc.numero + " coincide con su PDF.", "exito");
@@ -1185,39 +1190,179 @@ async function crearOC(evento) {
 
 // --- Nueva OC desde su PDF: se lee el PDF y se confirman los datos en una ventana ------------------------------
 
-async function leerNuevaOC(archivo) {
+// --- Revisión de PDF de OC en una ventana: una o varias, «Confirmar datos (2/5)» ---------------------------------
+// Cada PDF es una OC nueva (se confirman sus datos y se crea) o una que ya está (se compara y se aplica lo marcado).
+
+const colaPdf = { items: [], i: 0, dialogo: null, alTerminar: null };
+
+/** Lee los PDF elegidos en «Nueva OC» y abre la ventana para revisarlos uno por uno. */
+async function procesarPdfsOC(archivos) {
   limpiarAvisos();
-  const datos = new FormData();
-  datos.append("archivo", archivo, archivo.name);
-  const boton = document.getElementById("oc-nueva");
-  boton.disabled = true;
-  const respuesta = await api("POST", "/api/oc/pdf", datos);
-  boton.disabled = false;
-  if (!respuesta) return;
-  const { leido } = respuesta;
-  if (respuesta.existe) {
-    // Ya está cargada (por ejemplo, del z_compras2): se abre su ficha y se compara con el PDF.
-    mostrarAviso("La OC " + leido.numero + " ya está en el gestor: abajo ves qué cambia con el PDF.", "aviso");
-    await abrirFichaOC(leido.numero);
-    const entradaPdf = document.getElementById("pdf-" + leido.numero + "-archivo");
-    if (entradaPdf && window.DataTransfer) {
-      const lista = new DataTransfer();
-      lista.items.add(archivo);
-      entradaPdf.files = lista.files;
-      entradaPdf.form.requestSubmit();
+  const items = archivos.map((f) => ({ tipo: "leyendo", archivo: f.name, file: f }));
+  abrirColaPdf(items, null);
+  for (let n = 0; n < items.length; n++) {
+    const item = items[n];
+    if (colaPdf.dialogo) pintarLeyendo(n + 1, items.length, item.archivo);
+    const datos = new FormData();
+    datos.append("archivo", item.file, item.file.name);
+    const respuesta = await api("POST", "/api/oc/pdf", datos);
+    if (!respuesta) { Object.assign(item, { tipo: "error", error: ultimoError() }); continue; }
+    if (!respuesta.existe) { Object.assign(item, { tipo: "nueva", leido: respuesta.leido }); continue; }
+    const otra = new FormData();
+    otra.append("archivo", item.file, item.file.name);
+    const comparacion = await api("POST", "/api/oc/" + encodeURIComponent(respuesta.leido.numero) + "/pdf", otra);
+    if (comparacion) Object.assign(item, { tipo: "comparar", comparacion });
+    else Object.assign(item, { tipo: "error", error: ultimoError() });
+  }
+  limpiarAvisos();
+  if (colaPdf.dialogo) mostrarItemCola();
+}
+
+function ultimoError() {
+  const aviso = document.querySelector("#avisos .mensaje-error p");
+  const texto = aviso ? aviso.textContent : "No se pudo leer el PDF.";
+  limpiarAvisos();
+  return texto;
+}
+
+/** Copia el último error de la página a la ventana abierta (los avisos de atrás quedan tapados). */
+function errorAlaVentana() {
+  if (!colaPdf.dialogo) return;
+  avisoEnDialogo(colaPdf.dialogo, ultimoError());
+}
+
+function abrirColaPdf(items, alTerminar) {
+  if (colaPdf.dialogo) colaPdf.dialogo.close();
+  const dialogo = el("dialog", { id: "dialogo-pdf-oc", clase: "dialogo", "aria-labelledby": "cola-titulo" });
+  Object.assign(colaPdf, { items, i: 0, dialogo, alTerminar });
+  dialogo.addEventListener("close", () => {
+    dialogo.remove();
+    if (colaPdf.dialogo === dialogo) colaPdf.dialogo = null;
+    const hubo = items.some((x) => x.resultado === "creada" || x.resultado === "actualizada");
+    if (hubo && !alTerminar && document.getElementById("oc-lista")) {
+      const creadas = items.filter((x) => x.resultado === "creada");
+      if (items.length === 1 && creadas.length === 1) abrirFichaOC(creadas[0].leido.numero);
+      else if (ocEstado.ficha) abrirFichaOC(ocEstado.ficha.oc.numero); else listarOC();
     }
+  });
+  document.body.append(dialogo);
+  dialogo.showModal();
+  if (items.some((x) => x.tipo === "leyendo")) pintarLeyendo(1, items.length, items[0].archivo);
+  else mostrarItemCola();
+}
+
+function encabezadoCola(titulo, detalle) {
+  const total = colaPdf.items.length;
+  return el("div", { clase: "dialogo-encabezado" },
+    el("h2", { id: "cola-titulo", tabindex: "-1", texto: titulo }),
+    detalle ? el("p", { clase: "texto-suave", texto: detalle }) : null,
+    total > 1 ? el("div", { clase: "barra-progreso", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total),
+      "aria-valuenow": String(Math.min(colaPdf.i, total)) },
+      el("span", { style: "width:" + Math.round(100 * Math.min(colaPdf.i, total) / total) + "%" })) : null);
+}
+
+function pintarLeyendo(n, total, archivo) {
+  vaciar(colaPdf.dialogo, encabezadoCola("Leyendo los PDF (" + n + "/" + total + ")…", archivo), el("p", { texto: "Cargando…" }));
+}
+
+function siguienteDeCola(resultado) {
+  const item = colaPdf.items[colaPdf.i];
+  item.resultado = resultado;
+  colaPdf.i += 1;
+  if (colaPdf.items.length === 1 && colaPdf.dialogo) {
+    colaPdf.dialogo.close();
+    const numero = (item.leido && item.leido.numero) || (item.comparacion && item.comparacion.oc.numero) || "";
+    if (resultado === "creada") mostrarAviso("Se creó la OC " + numero + " con los datos confirmados.", "exito");
+    if (resultado === "actualizada") mostrarAviso("Se aplicó lo marcado del PDF a la OC " + numero + ".", "exito");
     return;
   }
-  abrirDialogoNuevaOC(leido, respuesta.archivo);
+  mostrarItemCola();
+}
+
+function mostrarItemCola() {
+  const dialogo = colaPdf.dialogo;
+  if (!dialogo) return;
+  const { items, i } = colaPdf;
+  if (i >= items.length) { pintarResumenCola(); return; }
+  const item = items[i];
+  const paso = items.length > 1 ? " (" + (i + 1) + "/" + items.length + ")" : "";
+  const saltear = el("button", { type: "button", clase: "secundario", texto: items.length > 1 ? "Saltear" : "Cancelar",
+    onclick: () => (items.length > 1 ? siguienteDeCola("salteada") : dialogo.close()) });
+  const cancelarResto = items.length > 1 && i < items.length - 1
+    ? el("button", { type: "button", clase: "enlace", texto: "Cancelar las que faltan", onclick: () => {
+      for (let k = i; k < items.length; k++) items[k].resultado = items[k].resultado || "salteada";
+      colaPdf.i = items.length; mostrarItemCola(); } })
+    : null;
+  if (item.tipo === "error") {
+    vaciar(dialogo, encabezadoCola("No se pudo leer el PDF" + paso, item.archivo),
+      el("div", { clase: "mensaje mensaje-error", role: "alert" }, el("p", { texto: item.error })),
+      el("div", { clase: "acciones dialogo-acciones" },
+        el("button", { type: "button", texto: items.length > 1 ? "Seguir" : "Cerrar",
+          onclick: () => (items.length > 1 ? siguienteDeCola("error") : dialogo.close()) }), cancelarResto));
+    document.getElementById("cola-titulo").focus();
+    return;
+  }
+  if (item.tipo === "nueva") {
+    const leido = item.leido;
+    const crear = el("button", { type: "button", texto: items.length > 1 && i < items.length - 1 ? "Crear OC y seguir" : "Crear OC",
+      onclick: async () => {
+        crear.disabled = true;
+        const ficha = await crearNuevaOC(dialogo, leido, item.archivo);
+        crear.disabled = false;
+        if (ficha) siguienteDeCola("creada");
+      } });
+    vaciar(dialogo, encabezadoCola("Confirmar datos" + paso + " — OC nueva " + (leido.numero || ""),
+      item.archivo + ": revisá lo que se leyó del PDF y corregí lo que haga falta."),
+      formularioNuevaOC(leido),
+      el("div", { clase: "acciones dialogo-acciones" }, crear, saltear, cancelarResto));
+    const objeto = document.getElementById("noc-objeto");
+    if (objeto) objeto.focus();
+    return;
+  }
+  // OC que ya está en el gestor: comparación con el PDF.
+  const comparacion = item.comparacion;
+  const cuerpo = el("div", {});
+  const aplicar = el("button", { type: "button", texto: items.length > 1 && i < items.length - 1 ? "Aplicar y seguir" : "Aplicar lo marcado",
+    onclick: async () => {
+      aplicar.disabled = true;
+      const ok = await aplicarPdfOC(cuerpo, comparacion, async (ficha) => {
+        if (colaPdf.alTerminar) await colaPdf.alTerminar(ficha);
+      });
+      aplicar.disabled = false;
+      if (ok) siguienteDeCola("actualizada");
+    } });
+  vaciar(dialogo, encabezadoCola("Confirmar datos" + paso + " — OC " + comparacion.oc.numero + " (ya está en el gestor)",
+    item.archivo + ": tildá lo que querés tomar del PDF."), cuerpo,
+    el("div", { clase: "acciones dialogo-acciones" }, aplicar, saltear, cancelarResto));
+  pintarRevisionPdf(cuerpo, comparacion, null, { sinBotones: true });
+}
+
+function pintarResumenCola() {
+  const dialogo = colaPdf.dialogo;
+  const textos = { creada: "Creada", actualizada: "Actualizada", salteada: "Salteada", error: "No se pudo leer" };
+  const tonos = { creada: "exito", actualizada: "info", salteada: "neutra", error: "error" };
+  const cuenta = (r) => colaPdf.items.filter((x) => x.resultado === r).length;
+  const filas = colaPdf.items.map((x) => el("tr", {},
+    el("td", { clase: "izq", texto: x.archivo }),
+    el("td", { texto: (x.leido && x.leido.numero) || (x.comparacion && x.comparacion.oc.numero) || "—" }),
+    el("td", {}, el("span", { clase: "pastilla pastilla-" + (tonos[x.resultado] || "neutra"), texto: textos[x.resultado] || "Salteada" }))));
+  vaciar(dialogo, encabezadoCola("Listo",
+      [cuenta("creada") + " creadas", cuenta("actualizada") + " actualizadas", cuenta("salteada") + " salteadas",
+        cuenta("error") ? cuenta("error") + " sin leer" : ""].filter(Boolean).join(" · ")),
+    el("div", { clase: "tabla-desplazable" }, el("table", {},
+      el("thead", {}, el("tr", {}, el("th", { scope: "col", clase: "izq", texto: "Archivo" }), el("th", { scope: "col", texto: "OC" }),
+        el("th", { scope: "col", texto: "Resultado" }))),
+      el("tbody", {}, ...filas))),
+    el("div", { clase: "acciones dialogo-acciones" }, el("button", { type: "button", texto: "Cerrar", onclick: () => dialogo.close() })));
+  document.getElementById("cola-titulo").focus();
 }
 
 function textoCantidad(valor) {
   return valor === null || valor === undefined ? "" : String(valor).replace(".", ",");
 }
 
-function abrirDialogoNuevaOC(leido, archivo) {
-  const anterior = document.getElementById("dialogo-nueva-oc");
-  if (anterior) anterior.remove();
+/** Formulario de la OC nueva con lo leído del PDF (va dentro de la ventana de revisión). */
+function formularioNuevaOC(leido) {
   const efectorPorDefecto = leido.efector || (estado.efector === "CASPH" ? "CASPH" : "HBI");
   const tipo = selector(leido.tipo || "SERVICIO", [["SERVICIO", "Servicio"], ["BIEN", "Bien"], ["PROVISION", "Provisión"]]);
   const campo = (id, etiqueta, control, ayuda) => campoFormulario("noc-" + id, etiqueta, control, ayuda);
@@ -1227,7 +1372,6 @@ function abrirDialogoNuevaOC(leido, archivo) {
     campo("dia", "Día de inicio del período", entrada(String(leido.dia_inicio_periodo || 1), { type: "number", min: "1", max: "28" }),
       "Sale del día en que arranca la vigencia (1 = mes calendario)."));
   const mostrarPeriodo = () => { periodo.hidden = tipo.value === "BIEN"; };
-  tipo.addEventListener("change", mostrarPeriodo);
   const centralizada = casilla("noc-centralizada", "Es centralizada (UOC: Nivel central)", leido.centralizada === 1);
 
   const filas = (leido.renglones || []).map((r) => {
@@ -1254,11 +1398,7 @@ function abrirDialogoNuevaOC(leido, archivo) {
     ? el("details", {}, el("summary", { texto: "Texto completo del objeto en el PDF" }), el("p", { clase: "texto-suave", texto: leido.objeto_completo }))
     : null;
 
-  const formulario = el("form", { method: "dialog", clase: "formulario", novalidate: true },
-    el("div", { clase: "dialogo-encabezado" },
-      el("h2", { id: "noc-titulo", texto: "Nueva OC " + (leido.numero || "") }),
-      el("p", { clase: "texto-suave", texto: "Datos leídos del PDF" + (archivo ? " (" + archivo + ")" : "")
-        + ". Revisalos y corregí lo que haga falta antes de crearla." })),
+  const formulario = el("form", { clase: "formulario", novalidate: true, onsubmit: (e) => e.preventDefault() },
     avisos,
     el("div", { clase: "grilla-dialogo" },
       campo("numero", "N° de OC", entrada(leido.numero || "", { inputmode: "numeric" })),
@@ -1282,17 +1422,13 @@ function abrirDialogoNuevaOC(leido, archivo) {
       el("thead", {}, el("tr", {}, ...["Rgl.", "Código", "Descripción", "Cantidad", "Unidad", "Precio $", "Importe $",
         "Desglose: cant.", "Unidad", "Precio $"].map((t) => el("th", { scope: "col", texto: t })))),
       el("tbody", {}, ...filas))),
-    el("div", { clase: "acciones dialogo-acciones" },
-      el("button", { type: "button", id: "noc-crear", texto: "Crear OC", onclick: () => crearNuevaOC(dialogo, leido, archivo) }),
-      el("button", { type: "button", clase: "secundario", texto: "Cancelar", onclick: () => dialogo.close() })));
-  const dialogo = el("dialog", { id: "dialogo-nueva-oc", clase: "dialogo", "aria-labelledby": "noc-titulo" }, formulario);
-  dialogo.addEventListener("close", () => dialogo.remove());
-  document.body.append(dialogo);
-  mostrarPeriodo();
-  dialogo.showModal();
-  document.getElementById("noc-objeto").focus();
+  );
+  formulario.addEventListener("change", (e) => { if (e.target === tipo) mostrarPeriodo(); });
+  setTimeout(mostrarPeriodo, 0);
+  return formulario;
 }
 
+/** Crea la OC con lo confirmado en la ventana; devuelve la ficha o null (el error queda en la ventana). */
 async function crearNuevaOC(dialogo, leido, archivo) {
   const valor = (id) => document.getElementById("noc-" + id).value.trim();
   const renglones = [];
@@ -1301,14 +1437,14 @@ async function crearNuevaOC(dialogo, leido, archivo) {
     const pos = Number(fila.dataset.pos);
     const precio = pesosACentavos(v("precio"));
     const importe = pesosACentavos(v("importe"));
-    if (precio === null || Number.isNaN(precio)) { avisoEnDialogo(dialogo, "Revisá el precio del renglón " + pos + "."); return; }
-    if (Number.isNaN(importe)) { avisoEnDialogo(dialogo, "Revisá el importe del renglón " + pos + "."); return; }
+    if (precio === null || Number.isNaN(precio)) { avisoEnDialogo(dialogo, "Revisá el precio del renglón " + pos + "."); return null; }
+    if (Number.isNaN(importe)) { avisoEnDialogo(dialogo, "Revisá el importe del renglón " + pos + "."); return null; }
     const renglon = { pos, codigo: v("codigo"), descripcion: v("descripcion"), cantidad: v("cantidad") || "1", unidad: v("unidad"),
       precio_centavos: precio };
     if (importe !== null) renglon.importe_centavos = importe;
     if (v("desglose_cantidad")) {
       const precioDesglose = pesosACentavos(v("desglose_precio"));
-      if (precioDesglose === null || Number.isNaN(precioDesglose)) { avisoEnDialogo(dialogo, "Revisá el precio del desglose del renglón " + pos + "."); return; }
+      if (precioDesglose === null || Number.isNaN(precioDesglose)) { avisoEnDialogo(dialogo, "Revisá el precio del desglose del renglón " + pos + "."); return null; }
       Object.assign(renglon, { desglose_cantidad: v("desglose_cantidad"), desglose_unidad: v("desglose_unidad") || "MES",
         desglose_precio_centavos: precioDesglose });
     }
@@ -1325,22 +1461,12 @@ async function crearNuevaOC(dialogo, leido, archivo) {
     Object.assign(datos, { vig_desde: valor("desde") || null, vig_hasta: valor("hasta") || null,
       dia_inicio_periodo: Number(valor("dia") || "1") });
   }
-  if (!datos.objeto) { avisoEnDialogo(dialogo, "Falta el objeto de la contratación."); return; }
+  if (!datos.objeto) { avisoEnDialogo(dialogo, "Falta el objeto de la contratación."); return null; }
   const cabecera = Object.fromEntries(Object.entries(leido).filter(([k]) => k !== "renglones" && k !== "avisos"));
-  document.getElementById("noc-crear").disabled = true;
   const ficha = await api("POST", "/api/oc/desde-pdf", { oc: datos, archivo: archivo || "", leido: cabecera });
-  if (!ficha) {
-    const boton = document.getElementById("noc-crear");
-    if (boton) boton.disabled = false;
-    const aviso = document.querySelector("#avisos .mensaje-error p");
-    if (aviso) avisoEnDialogo(dialogo, aviso.textContent);
-    return;
-  }
-  dialogo.close();
-  ocEstado.ficha = ficha;
-  pintarFichaOC(ficha);
-  listarOC();
-  mostrarAviso("OC " + ficha.oc.numero + " creada desde su PDF.", "exito");
+  if (!ficha) { errorAlaVentana(); return null; }
+  limpiarAvisos();
+  return ficha;
 }
 
 /** Mensaje de error dentro de la ventana (los avisos de la página quedan tapados por el fondo del diálogo). */

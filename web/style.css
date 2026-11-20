@@ -51,6 +51,8 @@
   --sombra-boton: 0 1px 1px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   --sombra-dialogo: 0 8px 24px rgba(26, 31, 54, 0.14);
   --fondo-velo: rgba(26, 31, 54, 0.45);
+  /* Un solo margen para toda la app: encabezado, menú y contenido. */
+  --margen: 34px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -106,7 +108,7 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
   justify-content: space-between;
   gap: 12px;
   min-height: 64px;
-  padding: 8px 32px;
+  padding: 8px var(--margen);
   background: var(--encabezado-fondo);
   backdrop-filter: saturate(180%) blur(8px);
   border-bottom: 1px solid var(--borde);
@@ -139,7 +141,7 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
   position: sticky;
   top: 64px;
   flex: 0 0 210px;
-  padding: 20px 12px 20px 16px;
+  padding: calc(var(--margen) - 12px) 12px var(--margen) calc(var(--margen) - 12px);
   min-height: calc(100vh - 64px);
   border-right: 1px solid var(--borde);
   background: var(--superficie);
@@ -164,7 +166,7 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
 main {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 24px 28px 56px;
+  padding: var(--margen) var(--margen) 56px;
 }
 
 @media (max-width: 900px) {
@@ -510,3 +512,9 @@ th.izq .orden-columna { justify-content: flex-start; text-align: left; }
 .datos-oc dt { color: var(--texto-suave); font-weight: 500; }
 .datos-oc dd { margin: 0; overflow-wrap: anywhere; }
 .dialogo-mediano { width: min(860px, calc(100vw - 32px)); }
+
+/* Ventana de revisión de PDF de OC: barra de avance «Confirmar datos (2/5)» */
+.barra-progreso { height: 6px; margin-top: 12px; border-radius: 999px; background: var(--neutro-fondo); overflow: hidden; }
+.barra-progreso span { display: block; height: 100%; background: var(--primario); transition: width 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .barra-progreso span { transition: none; } }
+#dialogo-pdf-oc .dialogo-encabezado { margin-bottom: 16px; }
