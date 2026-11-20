@@ -7,7 +7,7 @@ from tests import ayudas
 from tests.xlsx_prueba import xlsx_con_hojas
 
 ASCENSORES = "4500563620"     # centro 1900, org 1900, vigencia desde 09/09/2025
-CENTRALIZADA = "4500565075"   # centro 1000, org 0110: con el filtro por centro se perdía
+CENTRALIZADA = "4500565075"   # centro 1000, org 0110: con el filtro por centro se perdía (es de «otro centro»)
 DE_OTRO_GESTOR = "4500563687"
 SERVICIO_MES = "4500600299"   # EFIA, vigencia desde 01/10/2026
 
@@ -49,8 +49,9 @@ class PruebaImportarCentroGestor(ayudas.CasoConEntorno):
     def test_hbi_entra_todo_lo_de_su_centro_gestor(self):
         self._importar("HBI")
         self.assertIsNotNone(self._oc(ASCENSORES))
-        centralizada = self._oc(CENTRALIZADA)
-        self.assertEqual((centralizada["efector"], centralizada["centralizada"]), ("HBI", 1))
+        otro_centro = self._oc(CENTRALIZADA)
+        # Centro 1000 con otra organización de compras: entra (es del centro gestor) pero no es centralizada.
+        self.assertEqual((otro_centro["efector"], otro_centro["centralizada"]), ("HBI", 0))
         self.assertEqual(self._oc(ASCENSORES)["centralizada"], 0)
         self.assertIsNone(self._oc(DE_OTRO_GESTOR))
         self.assertIsNone(self._oc("4500999001"))
@@ -60,14 +61,15 @@ class PruebaImportarCentroGestor(ayudas.CasoConEntorno):
         informe = self._importar("CASPH")
         self.assertEqual(informe["oc_distintas"], 1)
         oc = self._oc("4500999001")
-        self.assertEqual((oc["efector"], oc["centralizada"]), ("CASPH", 0))
+        # Centro 0010 = Nivel Central: centralizada aunque la organización de compras sea la propia.
+        self.assertEqual((oc["efector"], oc["centralizada"]), ("CASPH", 1))
 
     def test_base_vieja_sin_el_parametro_usa_los_centros_gestores_de_siempre(self):
         for datos in self.parametros["efectores"].values():
             datos.pop("centros_gestores", None)
             datos.pop("org_compras", None)
         self._importar("CASPH")
-        self.assertEqual(self._oc("4500999001")["centralizada"], 0)
+        self.assertEqual(self._oc("4500999001")["centralizada"], 1)
         self.assertIsNone(importar.falta_configuracion("CASPH", self.parametros, ["N° O/C", "Centro Gestor"]))
 
     def test_reporte_sin_centro_gestor_sigue_filtrando_por_centro(self):
@@ -114,7 +116,7 @@ class PruebaRenglonesDeOtroCentro(ayudas.CasoConEntorno):
         self.assertEqual((propio["centro"], propio["otro_centro"]), ("1900", 0))
         # CASPH: el propio es 1300 aunque no tenga centros cargados; el renglón de centro 0010 queda marcado.
         hur = negocio.ficha_oc(self.con, "4500999001")["renglones"][0]
-        self.assertEqual((hur["centro"], hur["otro_centro"]), ("0010", 1))
+        self.assertEqual((hur["centro"], hur["central"], hur["otro_centro"]), ("0010", 1, 0))
         lista = {o["numero"]: o for o in negocio.listar_oc(self.con)}
         self.assertEqual(lista[CENTRALIZADA]["renglones_otro_centro"], lista[CENTRALIZADA]["renglones"])
         self.assertEqual(lista[ASCENSORES]["renglones_otro_centro"], 0)
@@ -122,4 +124,5 @@ class PruebaRenglonesDeOtroCentro(ayudas.CasoConEntorno):
         self.assertEqual((filas[(CENTRALIZADA, 1)]["centro"], filas[(CENTRALIZADA, 1)]["otro_centro"]), ("1000", 1))
 
     def test_renglon_cargado_a_mano_no_se_marca(self):
-        self.assertEqual(negocio.marcar_otro_centro([{"crudo": {}}], {"1900"}), [{"crudo": {}, "centro": "", "otro_centro": 0}])
+        self.assertEqual(negocio.marcar_otro_centro([{"crudo": {}}], {"1900"}),
+                         [{"crudo": {}, "centro": "", "central": 0, "otro_centro": 0}])

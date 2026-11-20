@@ -297,9 +297,13 @@ def leer_oc(texto):
             util.formato_pesos(suma), util.formato_pesos(total)))
 
     vig_desde = _fecha(_buscar(r"Desde\s*:\s*(\d{2}/\d{2}/\d{4})", texto))
+    uoc = _espacios(_buscar(r"UOC\s*:[ \t]*([^\n]*?)(?:[ \t]{2,}|$)", texto, re.MULTILINE))
     return {
         "numero": numero,
         "fecha_oc": _fecha(_buscar(r"Fecha\s*:\s*(\d{2}/\d{2}/\d{4})", texto)),
+        "uoc": uoc,
+        # «UOC: Nivel central» = OC centralizada (la compra la hizo Nivel Central).
+        "centralizada": (1 if "nivel central" in util.normalizar_texto(uoc) else 0) if uoc else None,
         "vig_desde": vig_desde,
         "dia_inicio_periodo": dia_inicio_periodo(vig_desde),
         "vig_hasta": _fecha(_buscar(r"Hasta\s*:\s*(\d{2}/\d{2}/\d{4})", texto)),

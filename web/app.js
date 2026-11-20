@@ -649,6 +649,10 @@ function valorCampoOC(campo, tipo) {
 
 /** Pastilla para un renglón de otro centro: se recibe, pero casi nunca lleva factura del efector. */
 function marcaOtroCentro(r) {
+  if (r.central) {
+    return el("span", { clase: "pastilla pastilla-violeta marca-otro-centro", texto: "Centralizada · centro " + r.centro,
+      title: "Renglón de Nivel Central (centro " + r.centro + ")." });
+  }
   if (!r.otro_centro) return null;
   return el("span", { clase: "pastilla pastilla-aviso marca-otro-centro", texto: "Otro centro " + r.centro,
     title: "Renglón del centro " + r.centro + ": a veces se recibe sin factura del efector." });
@@ -676,7 +680,7 @@ function pintarFichaOC(ficha) {
 
   const filasRenglones = renglones.map((r) => el("tr", { clase: r.otro_centro ? "fila-otro-centro" : null },
     el("td", { clase: "numero", texto: r.pos }),
-    el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro ? " " : null, marcaOtroCentro(r)),
+    el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
     el("td", { clase: "numero", texto: r.cantidad + (r.unidad ? " " + r.unidad : "") }),
     el("td", { clase: "numero", texto: formatoPesos(r.precio_centavos) }),
     el("td", { clase: "numero", texto: formatoPesos(r.importe_centavos) }),
@@ -722,6 +726,7 @@ const CAMPOS_MONEDA_PDF = new Set(["precio_centavos", "importe_centavos", "desgl
 
 function valorPdf(campo, valor) {
   if (valor === null || valor === undefined || valor === "") return "—";
+  if (campo === "centralizada") return valor ? "Sí" : "No";
   if (CAMPOS_MONEDA_PDF.has(campo)) return "$ " + formatoPesos(valor);
   if (campo === "cantidad" || campo === "desglose_cantidad") return String(valor).replace(".", ",");
   return String(valor);
@@ -1320,7 +1325,7 @@ function pintarPaso2() {
         const idBase = "rem-" + i + "-" + r.pos;
         return el("tr", {},
           el("td", { clase: "numero", texto: r.pos }),
-          el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro ? " " : null, marcaOtroCentro(r)),
+          el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
           el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
             "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + remito.numero })),
           el("td", {}, entrada(item.codigo || "", { id: idBase + "-codigo", clase: "entrada-corta mono", placeholder: r.codigo || "",

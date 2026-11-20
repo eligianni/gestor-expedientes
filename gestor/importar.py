@@ -297,13 +297,37 @@ def _es_servicio(codigo):
     return codigo == "" or RE_CODIGO_SERVICIO.fullmatch(codigo) is not None
 
 
+CENTROS_CENTRALES_POR_DEFECTO = ["0010"]  # centro SAP de Nivel Central: sus OC son las centralizadas
+
+
+def centros_centrales(parametros):
+    return {str(c).strip() for c in parametros.get("centros_centrales", CENTROS_CENTRALES_POR_DEFECTO) or []}
+
+
+def centro_de_fila(renglon):
+    """Centro SAP de la fila del reporte que trajo el renglón ("" si no se sabe)."""
+    for encabezado, valor in (renglon.get("crudo") or {}).items():
+        if util.clave_encabezado(encabezado) == "centro":
+            return _texto(valor)
+    return ""
+
+
 def inferir_oc(oc, renglones, parametros):
-    """tipo, comodato y centralizada de la OC a partir de sus renglones y de org_compras."""
-    propias = {str(o) for o in parametros.get("org_compras_propias") or []}
-    efector = oc.get("efector")
-    if efector:
-        datos = (parametros.get("efectores") or {}).get(efector) or {}
-        propias |= {str(o) for o in datos.get("org_compras", ORG_COMPRAS_POR_DEFECTO.get(efector, [])) or []}
+    """tipo, comodato y centralizada de la OC a partir de sus renglones.
+
+    Centralizada: si el reporte trae el centro de los renglones, la OC es centralizada cuando alguno es del centro de
+    Nivel Central (0010); si no se sabe el centro, se usa la organización de compras (distinta de la propia).
+    """
+    centros = {centro_de_fila(r) for r in renglones} - {""}
+    if centros:
+        centralizada = 1 if centros & centros_centrales(parametros) else 0
+    else:
+        propias = {str(o) for o in parametros.get("org_compras_propias") or []}
+        efector = oc.get("efector")
+        if efector:
+            datos = (parametros.get("efectores") or {}).get(efector) or {}
+            propias |= {str(o) for o in datos.get("org_compras", ORG_COMPRAS_POR_DEFECTO.get(efector, [])) or []}
+        centralizada = 0 if (oc.get("org_compras") or "") in propias else 1
     comodato = any("COMODATO" in (r.get("descripcion") or "").upper() for r in renglones)
     if comodato:
         tipo = "PROVISION"
@@ -314,7 +338,7 @@ def inferir_oc(oc, renglones, parametros):
     return {
         "tipo": tipo,
         "comodato": 1 if comodato else 0,
-        "centralizada": 0 if (oc.get("org_compras") or "") in propias else 1,
+        "centralizada": centralizada,
     }
 
 

@@ -172,7 +172,8 @@ def tabla_renglones(con, efector=None):
         dic["razon_social"] = dic.get("razon_social") or ""
         dic["del_pdf"] = 1 if (fila["oc"], fila["pos"]) in del_pdf else 0
         dic["centro"] = negocio.centro_de_renglon({"crudo": fila["crudo"]})
-        dic["otro_centro"] = 1 if dic["centro"] and dic["centro"] not in negocio.centros_propios(parametros, fila["efector"]) else 0
+        dic["otro_centro"] = 1 if (dic["centro"] and dic["centro"] not in negocio.CENTROS_CENTRALES
+                                   and dic["centro"] not in negocio.centros_propios(parametros, fila["efector"])) else 0
         filas.append(dic)
     return {"columnas": COLUMNAS_RENGLONES, "filas": filas}
 
