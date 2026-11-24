@@ -1658,16 +1658,21 @@ def datos_cv(con, id_expediente):
     oc = _leer_oc(con, ctx["oc"])
     renglones = {int(r["pos"]): dict(r) for r in con.execute("SELECT * FROM renglon WHERE oc = ?", (oc["numero"],))}
     cantidades = cantidades_del_expediente(exp)
+    # «Fecha de Entrega»: en un servicio, el último día del período validado (octubre → 31/10; del 9/10 al 8/11 → 8/11);
+    # en bienes y provisiones, la fecha de firma del remito si la tiene y, si no, la del remito.
+    fin_periodo = (util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_hasta"]))
+                   if oc["tipo"] == "SERVICIO" and ctx.get("periodo_hasta") else None)
     fechas = {}
     for remito in exp["datos"]["remitos"]:
-        if remito.get("es_equipo_comodato") or not remito.get("fecha"):
+        fecha_remito = remito.get("fecha_firma") or remito.get("fecha")
+        if remito.get("es_equipo_comodato") or not (fecha_remito or fin_periodo):
             continue
         for item in remito.get("items") or []:
             try:
                 pos = int(item.get("pos"))
             except (TypeError, ValueError):
                 continue
-            fecha = util.ddmmaaaa(util.fecha_desde_texto(remito["fecha"]))
+            fecha = fin_periodo or util.ddmmaaaa(util.fecha_desde_texto(fecha_remito))
             if fecha not in fechas.setdefault(pos, []):
                 fechas[pos].append(fecha)
     previos = _consumido_antes(con, exp)

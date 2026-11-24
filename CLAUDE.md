@@ -199,7 +199,8 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   Un SII sin datos no se controla. En el SII va el mes en que termina el período validado
   (`controles.periodo_sii_esperado`). El N° de factura se guarda como figura (punto de venta de 4 o 5 dígitos); el SII
   lo muestra con 4 y se comparan por valor (`util.misma_factura`).
-- Certificado de validación: lleva todos los renglones (0 si no hubo entrega), cantidad de la OC sin unidad, objeto con
+- Certificado de validación: «Fecha de Entrega» = fin del período en servicios (octubre → 31/10; 9/10 al 8/11 → 8/11);
+  en bienes, la fecha de firma del remito si la tiene, si no la del remito. Lleva todos los renglones (0 si no hubo entrega), cantidad de la OC sin unidad, objeto con
   mayúscula inicial y la celda de la fecha ensanchada (`docx_gen._ensanchar_fecha`, sin tocar la plantilla). No necesita factura ni SII (`textos.referencia_cv`, solo razón y período). Botón en el paso 2
   y en el 5 (`botonCertificado`): primero `GET .../cv/verificar` (422 con lo que falta) y después baja `cv.docx`.
 - Subrenglones (1-10, 1-20…): sin columna propia, en `renglon.crudo["_subrenglones"]` (`negocio.subrenglones_de`); se
@@ -208,6 +209,8 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`importar._con_subrenglones_guardados`). En el CV va una fila por subrenglón y lo entregado se asigna en orden según
   lo consumido antes (`negocio._consumido_antes`). Consumo: `agotado` cuando el saldo llega a 0. La ficha no muestra
   «Consumo previo».
+- Los expedientes no se borran: «Anular expediente» (arriba del asistente, `abrirDialogoAnular`) pide un motivo y llama a
+  `POST /api/expedientes/<id>/anular`; queda ANULADO y deja de contar para consumo y controles.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente
   (`negocio.guardar_consumo_manual`, `PUT /api/expedientes/<id>/consumo-manual`); `cantidades_del_expediente` lo usa solo
   si los remitos no tienen cantidades. La ficha de la OC muestra el consumo como tabla (renglón × período).

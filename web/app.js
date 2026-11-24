@@ -1841,6 +1841,42 @@ async function listarExpedientes() {
 
 // --- Expedientes: asistente ------------------------------------------------
 
+/** Anular (no se borra nada): queda en estado Anulado con su motivo y deja de contar para consumo y duplicados. */
+function abrirDialogoAnular() {
+  const exp = expEstado.exp;
+  if (!exp) return;
+  const anterior = document.getElementById("dialogo-anular");
+  if (anterior) anterior.remove();
+  const motivo = el("textarea", { id: "anular-motivo", rows: "3" });
+  const confirmar = el("button", { type: "button", clase: "boton-peligro-lleno", texto: "Anular expediente " + exp.id });
+  const dialogo = el("dialog", { id: "dialogo-anular", clase: "dialogo dialogo-mediano", "aria-labelledby": "anular-titulo" },
+    el("div", { clase: "dialogo-encabezado" },
+      el("h2", { id: "anular-titulo", texto: "Anular el expediente " + exp.id }),
+      el("p", { clase: "texto-suave", texto: "No se borra: queda en estado «Anulado» con el motivo, deja de contar para el consumo "
+        + "de la OC y para los controles de factura repetida, y se puede consultar igual." })),
+    el("div", { clase: "campo campo-ancho" },
+      el("label", { for: "anular-motivo", texto: "Motivo (obligatorio)" }), motivo,
+      el("p", { clase: "texto-suave", texto: "Por ejemplo: «Duplicado del expediente 118»." })),
+    el("div", { clase: "acciones dialogo-acciones" }, confirmar,
+      el("button", { type: "button", clase: "secundario", texto: "Cancelar", onclick: () => dialogo.close() })));
+  confirmar.addEventListener("click", async () => {
+    const texto = motivo.value.trim();
+    if (!texto) { avisoEnDialogo(dialogo, "Escribí el motivo de la anulación."); motivo.focus(); return; }
+    confirmar.disabled = true;
+    estado.recargar = () => { dialogo.close(); abrirExpediente(exp.id, expEstado.paso); };
+    const anulado = await api("POST", "/api/expedientes/" + exp.id + "/anular", { version: exp.version, motivo: texto });
+    confirmar.disabled = false;
+    if (!anulado) { avisoEnDialogo(dialogo, ultimoError()); return; }
+    dialogo.close();
+    mostrarLista();
+    mostrarAviso("Expediente " + exp.id + " anulado: " + texto, "exito");
+  });
+  dialogo.addEventListener("close", () => dialogo.remove());
+  document.body.append(dialogo);
+  dialogo.showModal();
+  motivo.focus();
+}
+
 function mostrarAsistente() {
   document.getElementById("expedientes-lista-bloque").hidden = true;
   document.getElementById("asistente").hidden = false;
@@ -1851,11 +1887,13 @@ function pintarEncabezadoAsistente() {
   const titulo = document.getElementById("asistente-titulo");
   const resumen = document.getElementById("asistente-resumen");
   if (!exp) {
+    document.getElementById("asistente-anular").hidden = true;
     titulo.textContent = "Nuevo expediente";
     resumen.textContent = "Elegí el tipo y la OC para empezar.";
     return;
   }
   titulo.textContent = "Expediente " + exp.id + " — " + (exp.razon_social || "sin proveedor");
+  document.getElementById("asistente-anular").hidden = exp.estado === "ANULADO";
   resumen.textContent = [
     exp.oc ? "OC " + exp.oc : "sin OC",
     "período " + (exp.periodo || "sin definir") + (exp.periodo_manual ? " (manual)" : ""),
@@ -3015,6 +3053,7 @@ function iniciarExpedientes() {
   document.getElementById("expedientes-filtros").addEventListener("submit", (e) => { e.preventDefault(); listarExpedientes(); });
   document.getElementById("expediente-nuevo").addEventListener("click", nuevoExpediente);
   document.getElementById("asistente-volver").addEventListener("click", () => { limpiarAvisos(); mostrarLista(); });
+  document.getElementById("asistente-anular").addEventListener("click", abrirDialogoAnular);
   for (const boton of document.querySelectorAll(".pasos button[data-paso]")) {
     boton.addEventListener("click", () => { limpiarAvisos(); mostrarPaso(Number(boton.dataset.paso)); });
   }
