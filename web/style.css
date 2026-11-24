@@ -581,3 +581,11 @@ tr.fila-clic:hover td { background: var(--primario-suave); }
 .pegar-sii { flex: 1 1 100%; }
 #dialogo-revision .resultado { margin-bottom: 8px; }
 .tabla-comprobantes th[scope="row"] { text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--texto); background: var(--superficie); }
+
+/* Paso 2: remitos ya cargados, editables */
+.grilla-remito { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 16px; align-items: end; margin-bottom: 12px; }
+.grilla-remito .campo { max-width: none; }
+.grilla-remito .campo-casilla { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.grilla-remito .casilla-tabla { width: 22px; height: 22px; min-height: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--primario); }
+.remito-incompleto { box-shadow: 0 0 0 1px var(--aviso), var(--sombra-panel); }
+.remito-incompleto legend { color: var(--aviso); }
