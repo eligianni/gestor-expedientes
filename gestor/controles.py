@@ -457,6 +457,8 @@ def control_renglon_por_agotarse(ctx):
     usados = _cantidades(ctx)
     return [
         Resultado("renglon_por_agotarse", "aviso", "oc",
+                  ("El renglón %s se agotó: lleva consumido el %d %%." % (f["pos"], f["pct_consumido"]))
+                  if f.get("agotado") else
                   "El renglón %s lleva consumido el %d %% (saldo %s)." % (f["pos"], f["pct_consumido"], f["saldo"]),
                   str(f["pos"]))
         for f in ctx.get("consumo") or []

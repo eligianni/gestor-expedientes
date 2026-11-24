@@ -732,11 +732,23 @@ function pintarFichaOC(ficha) {
     el("td", { texto: r.desglose_cantidad ? r.desglose_cantidad + " " + r.desglose_unidad + " × $ " + formatoPesos(r.desglose_precio_centavos)
       : (r.revisar_desglose ? "Revisar desglose" : "—") }),
     el("td", { clase: "numero", texto: r.sap_entregado + " / " + r.sap_por_entregar + (r.exceso_sap ? " (exceso)" : "") }),
-    el("td", { clase: "numero", texto: r.consumo_previo }),
     el("td", {}, el("button", { type: "button", clase: "secundario", texto: "Editar",
       "aria-label": "Editar el renglón " + r.pos, onclick: () => editarRenglon(r) }))));
+  // Cada renglón con subrenglones (1-10, 1-20…) los muestra debajo: son los que van en el certificado.
+  const filasConSub = [];
+  renglones.forEach((r, k) => {
+    filasConSub.push(filasRenglones[k]);
+    for (const sub of r.subrenglones || []) {
+      filasConSub.push(el("tr", { clase: "fila-subrenglon" },
+        el("td", { clase: "numero sin-corte", texto: r.pos + "-" + sub.pos }),
+        el("td", { clase: "izq", texto: sub.descripcion || "" }),
+        el("td", { clase: "numero", texto: textoCantidad(sub.cantidad) + (sub.unidad ? " " + sub.unidad : "") }),
+        el("td", { clase: "numero", texto: sub.precio_centavos ? formatoPesos(sub.precio_centavos) : "" }),
+        el("td", {}), el("td", {}), el("td", {}), el("td", {})));
+    }
+  });
   const encabezadosRenglones = ["Pos.", "Descripción", "Cantidad", "Precio $", "Importe $", "Desglose",
-    "Entregado / por entregar (SAP)", "Consumo previo", ""];
+    "Entregado / por entregar (SAP)", ""];
 
   const nuevoExp = el("button", { type: "button", texto: "Nuevo expediente", disabled: faltan.length > 0,
     title: faltan.length ? "Primero cargá " + faltan.join(" y ") + "." : "Crear un expediente de pago para esta OC",
@@ -768,7 +780,7 @@ function pintarFichaOC(ficha) {
     el("h3", { texto: "Renglones" }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
       el("thead", {}, el("tr", {}, ...encabezadosRenglones.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t })))),
-      el("tbody", {}, ...filasRenglones))),
+      el("tbody", {}, ...filasConSub))),
     el("div", { id: "oc-renglon-edicion" }),
   ];
   if (oc.origen === "MANUAL") {
@@ -850,7 +862,7 @@ async function pintarConsumoOC(numero, destino) {
   const cuerpo = filas.map((f) => {
     const r = porPos[f.pos] || {};
     const total = Number(r.validado || 0);
-    return el("tr", { clase: f.por_agotarse ? "fila-por-agotarse" : null },
+    return el("tr", { clase: f.agotado ? "fila-agotada" : (f.por_agotarse ? "fila-por-agotarse" : null) },
       el("td", { clase: "numero", texto: f.pos }),
       el("td", { clase: "izq", texto: f.descripcion }),
       el("td", { clase: "numero sin-corte", texto: textoCantidad(f.cantidad_oc) + (f.unidad ? " " + f.unidad : "") }),
@@ -860,8 +872,8 @@ async function pintarConsumoOC(numero, destino) {
       }),
       el("td", { clase: "numero", texto: textoCantidad(String(Math.round(total * 10000) / 10000)) }),
       el("td", { clase: "numero", texto: textoCantidad(f.saldo) }),
-      el("td", { clase: "numero" }, el("span", { clase: "pastilla pastilla-" + (f.por_agotarse ? "aviso" : "neutra"),
-        texto: (r.pct_consumido ?? 0) + " %" + (f.por_agotarse ? " · por agotarse" : "") })));
+      el("td", { clase: "numero" }, el("span", { clase: "pastilla pastilla-" + (f.agotado ? "error" : (f.por_agotarse ? "aviso" : "neutra")),
+        texto: (r.pct_consumido ?? 0) + " %" + (f.agotado ? " · agotado" : (f.por_agotarse ? " · por agotarse" : "")) })));
   });
   vaciar(destino, el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-consumo" },
     el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", clase: t === "Descripción" ? "izq" : null, texto: t })))),
@@ -1097,6 +1109,11 @@ function pintarRevisionPdf(destino, comparacion, alTerminar, opciones = {}) {
   document.getElementById("pdf-revision-titulo").focus();
 }
 
+function subrenglonPdf(s) {
+  return { pos: s.pos, cantidad: String(s.cantidad), unidad: s.unidad || "", descripcion: s.descripcion || "",
+    precio_centavos: s.precio_centavos ?? null };
+}
+
 async function aplicarPdfOC(destino, comparacion, alTerminar) {
   limpiarAvisos();
   const marcado = (id) => { const c = document.getElementById(id); return !!(c && c.checked); };
@@ -1125,8 +1142,12 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
     if (Object.keys(cambios).length) renglones.push({ pos: r.pos, version: r.version, cambios });
   }
   estado.recargar = () => vaciar(destino);
+  // Los subrenglones del PDF (1-10, 1-20…) se guardan siempre: son los que van en el certificado.
+  const subrenglones = Object.fromEntries(comparacion.renglones.filter((r) => (r.subrenglones || []).length)
+    .map((r) => [r.pos, r.subrenglones.map(subrenglonPdf)]));
   const ficha = await api("POST", "/api/oc/" + encodeURIComponent(comparacion.oc.numero) + "/pdf/aplicar", {
-    version: comparacion.oc.version, archivo: comparacion.archivo || "", leido: comparacion.leido, oc: cambiosOc, renglones });
+    version: comparacion.oc.version, archivo: comparacion.archivo || "", leido: comparacion.leido, oc: cambiosOc, renglones,
+    subrenglones });
   if (!ficha) { errorAlaVentana(); return false; }
   const cantidad = Object.keys(cambiosOc).length + renglones.length;
   await alTerminar(ficha);
@@ -1287,8 +1308,8 @@ function editarRenglon(renglon) {
     campoFormulario("rg-desglose-cantidad", "Desglose: cantidad (por ejemplo 9 meses)", entrada(r.desglose_cantidad, { inputmode: "decimal" })),
     campoFormulario("rg-desglose-unidad", "Desglose: unidad", entrada(r.desglose_unidad || (nuevo ? "" : ""))),
     campoFormulario("rg-desglose-precio", "Desglose: precio por unidad $", entrada(formatoPesos(r.desglose_precio_centavos), { inputmode: "decimal" })),
-    campoFormulario("rg-consumo", "Consumo previo al gestor", entrada(r.consumo_previo ?? "0", { inputmode: "decimal" })),
     casilla("rg-correctivo", "Es un renglón de mantenimiento correctivo", r.es_correctivo));
+  if (!nuevo) campos.push(editorSubrenglones(r));
   const formulario = el("form", { clase: "panel formulario", novalidate: true,
     onsubmit: (e) => { e.preventDefault(); guardarRenglon(renglon); } },
     el("h3", { id: "rg-titulo", tabindex: "-1", texto: nuevo ? "Nuevo renglón" : "Renglón " + r.pos + ": " + r.descripcion }),
@@ -1298,6 +1319,44 @@ function editarRenglon(renglon) {
       el("button", { type: "button", clase: "secundario", texto: "Cancelar", onclick: () => vaciar(contenedor) })));
   vaciar(contenedor, formulario);
   document.getElementById("rg-titulo").focus();
+}
+
+/** Subrenglones del renglón (1-10, 1-20…): descripción, cantidad y unidad, como van en el certificado. */
+function editorSubrenglones(r) {
+  const cuerpo = el("tbody", { id: "rg-subrenglones" });
+  const fila = (s) => el("tr", {},
+    el("td", {}, entrada(s.pos ?? "", { "data-campo": "pos", inputmode: "numeric", clase: "entrada-mini", "aria-label": "Subrenglón" })),
+    el("td", {}, entrada(s.descripcion || "", { "data-campo": "descripcion", "aria-label": "Descripción del subrenglón" })),
+    el("td", {}, entrada(textoCantidad(s.cantidad), { "data-campo": "cantidad", inputmode: "decimal", clase: "entrada-chica",
+      "aria-label": "Cantidad del subrenglón" })),
+    el("td", {}, entrada(s.unidad || "", { "data-campo": "unidad", clase: "entrada-mini", "aria-label": "Unidad del subrenglón" })),
+    el("td", {}, el("button", { type: "button", clase: "secundario", texto: "Quitar", onclick: (e) => e.target.closest("tr").remove() })));
+  for (const s of r.subrenglones || []) cuerpo.append(fila(s));
+  for (const [k, s] of (r.subrenglones || []).entries()) cuerpo.children[k].dataset.precio = s.precio_centavos ?? "";
+  return el("fieldset", { clase: "campo campo-ancho editor-subrenglones" },
+    el("legend", { texto: "Subrenglones (van así en el certificado de validación)" }),
+    el("p", { clase: "texto-suave", texto: "Lo entregado se asigna en orden: primero se completa el primero y después el siguiente." }),
+    el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-renglones-dialogo" },
+      el("thead", {}, el("tr", {}, ...["Sub.", "Descripción", "Cantidad", "Unidad", ""].map((t) => el("th", { scope: "col", texto: t })))),
+      cuerpo)),
+    el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario", texto: "+ Subrenglón",
+      onclick: () => { const n = cuerpo.children.length; cuerpo.append(fila({ pos: (n + 1) * 10, unidad: r.desglose_unidad || "" })); } })));
+}
+
+/** Subrenglones del editor, o null si hay un dato mal (ya avisado). */
+function subrenglonesDelEditor() {
+  const filas = document.querySelectorAll("#rg-subrenglones tr");
+  const lista = [];
+  for (const f of filas) {
+    const v = (c) => f.querySelector('[data-campo="' + c + '"]').value.trim();
+    if (!v("pos") && !v("cantidad") && !v("descripcion")) continue;
+    if (!/^\d+$/.test(v("pos"))) { mostrarAviso("El número de subrenglón debe ser un número (por ejemplo 10).", "error"); return null; }
+    if (!/^\d+([.,]\d+)?$/.test(v("cantidad"))) { mostrarAviso("Revisá la cantidad del subrenglón " + v("pos") + ".", "error"); return null; }
+    const precio = f.dataset.precio;
+    lista.push({ pos: Number(v("pos")), cantidad: v("cantidad").replace(",", "."), unidad: v("unidad").toUpperCase(),
+      descripcion: v("descripcion"), precio_centavos: precio === undefined || precio === "" ? null : Number(precio) });
+  }
+  return lista.sort((a, b) => a.pos - b.pos);
 }
 
 async function guardarRenglon(renglon) {
@@ -1310,7 +1369,6 @@ async function guardarRenglon(renglon) {
     desglose_cantidad: valor("rg-desglose-cantidad") || null,
     desglose_unidad: valor("rg-desglose-unidad") || null,
     desglose_precio_centavos: precioDesglose,
-    consumo_previo: valor("rg-consumo") || "0",
     es_correctivo: document.getElementById("rg-correctivo").checked ? 1 : 0,
   };
   estado.recargar = () => abrirFichaOC(oc.numero);
@@ -1327,9 +1385,20 @@ async function guardarRenglon(renglon) {
     for (const [campo, nuevoValor] of Object.entries(datos)) {
       if ((renglon[campo] ?? null) !== nuevoValor) cambios[campo] = nuevoValor;
     }
-    if (!Object.keys(cambios).length) { mostrarAviso("No hay cambios para guardar.", "aviso"); return; }
-    ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero) + "/renglones/" + renglon.pos,
-      { version: renglon.version, cambios });
+    const subrenglones = subrenglonesDelEditor();
+    if (subrenglones === null) return;
+    const cambioSub = JSON.stringify(subrenglones) !== JSON.stringify((renglon.subrenglones || []).map(subrenglonPdf));
+    if (!Object.keys(cambios).length && !cambioSub) { mostrarAviso("No hay cambios para guardar.", "aviso"); return; }
+    let version = renglon.version;
+    if (Object.keys(cambios).length) {
+      ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero) + "/renglones/" + renglon.pos, { version, cambios });
+      if (!ficha) return;
+      version = ficha.renglones.find((x) => x.pos === renglon.pos).version;
+    }
+    if (cambioSub) {
+      ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero) + "/renglones/" + renglon.pos + "/subrenglones",
+        { version, subrenglones });
+    }
   }
   if (!ficha) return;
   ocEstado.ficha = ficha;
@@ -1674,7 +1743,9 @@ async function crearNuevaOC(dialogo, leido, archivo) {
   }
   if (!datos.objeto) { avisoEnDialogo(dialogo, "Falta el objeto de la contratación."); return null; }
   const cabecera = Object.fromEntries(Object.entries(leido).filter(([k]) => k !== "renglones" && k !== "avisos"));
-  const ficha = await api("POST", "/api/oc/desde-pdf", { oc: datos, archivo: archivo || "", leido: cabecera });
+  const subrenglones = Object.fromEntries((leido.renglones || []).filter((r) => (r.subrenglones || []).length)
+    .map((r) => [r.pos, r.subrenglones.map(subrenglonPdf)]));
+  const ficha = await api("POST", "/api/oc/desde-pdf", { oc: datos, archivo: archivo || "", leido: cabecera, subrenglones });
   if (!ficha) { errorAlaVentana(); return null; }
   limpiarAvisos();
   return ficha;

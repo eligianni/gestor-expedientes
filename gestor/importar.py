@@ -66,6 +66,18 @@ CAMPOS_CAMBIO_RENGLON = ("precio_centavos", "cantidad")
 CAMPOS_CAMBIO_OC = ("vig_desde", "vig_hasta")
 
 
+def _con_subrenglones_guardados(actual, renglon):
+    """El crudo nuevo (fila del z_compras2) conserva los subrenglones tomados del PDF de la OC."""
+    try:
+        anterior = json.loads(actual.get("crudo") or "{}")
+    except (TypeError, ValueError):
+        return renglon
+    guardados = anterior.get("_subrenglones") if isinstance(anterior, dict) else None
+    if not guardados or not isinstance(renglon.get("crudo"), dict):
+        return renglon
+    return dict(renglon, crudo=dict(renglon["crudo"], _subrenglones=guardados))
+
+
 class ErrorImportacion(Exception):
     """El reporte no se puede importar (columna faltante, efector inválido, etc.)."""
 
@@ -527,6 +539,7 @@ def _planificar(con, ocs, renglones, informe):
             informe["altas"] += 1
             operaciones.append(("alta", "renglon", dict(renglon)))
             continue
+        renglon = _con_subrenglones_guardados(actual, renglon)
         cambios = _diferencias(actual, renglon, CAMPOS_RENGLON)
         _por_entregar_con_manuales(actual, renglon, cambios)
         if not cambios:
