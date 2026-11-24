@@ -298,13 +298,27 @@ def control_sii_coincide(ctx):
     return resultados
 
 
+def periodo_sii_esperado(expediente):
+    """Mes que va en el SII: el del fin del período validado (en un período específico, el del «hasta»)."""
+    hasta = expediente.get("periodo_hasta")
+    return hasta[:7] if hasta else expediente.get("periodo")
+
+
 def control_sii_periodo(ctx):
     sii = _sii(ctx)
-    periodo = ctx["expediente"].get("periodo")
-    if not sii or not periodo or sii.get("periodo") == periodo:
+    expediente = ctx["expediente"]
+    esperado = periodo_sii_esperado(expediente)
+    if not sii or not esperado or sii.get("periodo") == esperado:
         return []
+    if esperado == expediente.get("periodo"):
+        detalle = esperado
+    else:
+        detalle = "%s, el mes en que termina el %s al %s" % (
+            esperado, util.ddmmaaaa(util.fecha_desde_texto(expediente["periodo_desde"])),
+            util.ddmmaaaa(util.fecha_desde_texto(expediente["periodo_hasta"])))
     return [Resultado("sii_periodo", "error", "sii",
-                      "El período cargado en el SII (%s) no es el período validado (%s)." % (sii.get("periodo") or "sin período", periodo))]
+                      "El período cargado en el SII (%s) no es el del período validado (%s)."
+                      % (sii.get("periodo") or "sin período", detalle))]
 
 
 def control_sii_destino(ctx):

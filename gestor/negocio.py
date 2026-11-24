@@ -1522,6 +1522,11 @@ def _texto_periodo_cv(ctx):
                          util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_hasta"])))
 
 
+def _con_mayuscula(texto):
+    """El objeto en el CV es una oración: primera letra en mayúscula (el resto queda como está)."""
+    return texto[:1].upper() + texto[1:]
+
+
 def _nombre_docx(referencia):
     return textos.nombre_archivo(referencia)[:-len(".pdf")] + ".docx"
 
@@ -1560,13 +1565,11 @@ def datos_cv(con, id_expediente):
         entregada = cantidades.get(pos, Decimal(0))
         if entregada != cantidad_oc:
             completa = False
-        if entregada == 0:
-            continue
-        unidad = (renglon.get("desglose_unidad") if con_desglose else renglon.get("unidad")) or ""
+        # Van todos los renglones de la OC, también los que no tuvieron entregas (cantidad 0); sin la unidad.
         filas.append({
             "renglon": str(pos),
             "descripcion": renglon.get("descripcion") or "",
-            "cantidad_oc": _cantidad_texto(cantidad_oc) + (" " + unidad if unidad else ""),
+            "cantidad_oc": _cantidad_texto(cantidad_oc),
             "cantidad_entregada": _cantidad_texto(entregada),
             "fecha_entrega": ", ".join(fechas.get(pos, [])),
         })
@@ -1592,7 +1595,7 @@ def datos_cv(con, id_expediente):
         "rubro": "Servicios" if oc["tipo"] == "SERVICIO" else "Bienes",
         "entrega": entrega,
         "periodo_texto": _texto_periodo_cv(ctx),
-        "objeto": ctx["objeto"].strip(),
+        "objeto": _con_mayuscula(ctx["objeto"].strip()),
         "renglones": filas,
         "observacion": ctx["leyenda_cv"] if ctx["tipo_expediente"] == "CENTRALIZADA" else "",
         "remitos": ctx["remitos"],
@@ -1881,7 +1884,7 @@ def revisar_comprobantes(con, id_expediente, factura=None, sii=None, cuit_emisor
     destino = parametros.get("destinatario_factura") or {}
     sii_esperado = parametros.get("sii") or {}
     esperado = {
-        "oc": (ctx.get("oc") or {}).get("numero"), "periodo": ctx["expediente"].get("periodo"),
+        "oc": (ctx.get("oc") or {}).get("numero"), "periodo": controles.periodo_sii_esperado(ctx["expediente"]),
         "sap": ctx["expediente"].get("sap"), "cuit": proveedor.get("cuit"), "razon_social": proveedor.get("razon_social"),
         "destinatario": destino.get("nombre", "INSSJP"), "domicilio": destino.get("domicilio", "PERU 169"),
         "area": sii_esperado.get("area"), "tipo_servicio": sii_esperado.get("tipo_servicio"), "concepto": sii_esperado.get("concepto"),

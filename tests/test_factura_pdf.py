@@ -27,8 +27,9 @@ class PruebaLeerFactura(ayudas.CasoConEntorno):
         self.assertEqual(f["faltantes"], ["vencimiento del CAE"])
 
     def test_biofab_formato_arca(self):
+        # El punto de venta va como figura en la factura (5 dígitos); el SII lo muestra con 4, pero es la misma.
         f = self._leer("EX-2026-94963848_BIOFAB")
-        self.assertEqual((f["numero"], f["fecha"], f["centavos"]), ("0002B00003908", "2026-09-11", 2109500000))
+        self.assertEqual((f["numero"], f["fecha"], f["centavos"]), ("00002B00003908", "2026-09-11", 2109500000))
         self.assertEqual((f["cae"], f["vto_cae"], f["cuit_emisor"]), ("86372594419176", "2026-09-21", "30711726604"))
         self.assertEqual(f["faltantes"], [])
 

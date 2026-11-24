@@ -74,12 +74,24 @@ class PruebaDocx(ayudas.CasoConServidor):
         texto = _texto(resp.cuerpo)
         for esperado in ("GRUPO EFIA S.R.L.", "4500555861", "77170", "195-2025", "Servicios", "Mensual",
                          "01/10/2025 a 30/09/2026",
-                         "Objeto de Contratación: servicio de control integral de plagas",
+                         "Objeto de Contratación: Servicio de control integral de plagas",
                          "Se valida con remito 00001-00029461 correspondiente al período agosto 2026."):
             self.assertIn(esperado, texto)
         self.assertNotIn("_____", texto)
         self.assertEqual(_filas_de_renglones(resp.cuerpo),
-                         [["1", "SERV INTEGRAL CONTROL DE PLAGAS", "9 MES", "1", "31/08/2026"]])
+                         [["1", "SERV INTEGRAL CONTROL DE PLAGAS", "9", "1", "31/08/2026"]])
+        # La fecha («24 de Septiembre del 2026») entra en un renglón: la celda se ensancha hacia la izquierda.
+        documento = zipfile.ZipFile(io.BytesIO(resp.cuerpo)).read("word/document.xml").decode("utf-8")
+        self.assertIn('<w:gridCol w:w="3098" />', documento.replace('"/>', '" />'))
+
+    def test_cv_lleva_todos_los_renglones(self):
+        # Los renglones sin entregas en el período también van, con cantidad entregada 0.
+        exp = self._efia()
+        negocio.agregar_renglon(self._con(), datos_prueba.OC_EFIA_MANUAL["numero"], {
+            "descripcion": "SERV CONTROL DE PLAGAS ADICIONAL", "cantidad": "3", "unidad": "UN", "precio_centavos": 100000})
+        filas = _filas_de_renglones(self.servidor.get("/api/expedientes/%d/cv.docx" % exp["id"]).cuerpo)
+        self.assertEqual(filas, [["1", "SERV INTEGRAL CONTROL DE PLAGAS", "9", "1", "31/08/2026"],
+                                 ["2", "SERV CONTROL DE PLAGAS ADICIONAL", "3", "0", ""]])
 
     def test_cv_conserva_partes_no_tocadas(self):
         exp = self._efia()

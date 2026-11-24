@@ -60,7 +60,8 @@ def _numero(texto):
         m = re.search(r"(?<![\w-])(\d{4,5})\s*-\s*(\d{8})(?![\w-])", texto)
     if m is None:
         return None
-    return int(m.group(1)), int(m.group(2))
+    # Tal como figura en la factura (el punto de venta puede tener 4 o 5 dígitos); el número, siempre 8.
+    return m.group(1).zfill(4), m.group(2).zfill(8)
 
 
 def _letra(texto):
@@ -146,9 +147,9 @@ def leer_factura(texto, destinatario="INSSJP", domicilio="PERU 169"):
     if numero is None:
         numero_texto = None
     elif letra:
-        numero_texto = "%04d%s%08d" % (numero[0], letra, numero[1])
+        numero_texto = numero[0] + letra + numero[1]
     else:
-        numero_texto = "%04d-%08d" % numero
+        numero_texto = numero[0] + "-" + numero[1]
         avisos.append("No figura la letra de la factura (A, B o C): verificala en el PDF.")
     desde, hasta = _periodo(texto)
     oc = re.search(r"(?<!\d)(45\d{8})(?!\d)", texto)
