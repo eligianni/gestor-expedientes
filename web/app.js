@@ -1993,12 +1993,10 @@ function pintarPaso2() {
         el("td", { clase: "numero", texto: r.pos }),
         el("td", { clase: "izq" }, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
         el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
-          "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + (i + 1) })),
-        el("td", {}, entrada(item.codigo || "", { id: idBase + "-codigo", clase: "entrada-corta mono", placeholder: r.codigo || "",
-          "aria-label": "Código del renglón " + r.pos + " como figura en el remito " + (i + 1) })));
+          "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + (i + 1) })));
     });
     cantidades.append(el("div", { clase: "tabla-desplazable" }, el("table", {},
-        el("thead", {}, el("tr", {}, ...["Pos.", "Renglón de la OC", "Cantidad", "Código en el remito (vacío = igual)"]
+        el("thead", {}, el("tr", {}, ...["Pos.", "Renglón de la OC", "Cantidad"]
           .map((t) => el("th", { scope: "col", clase: t === "Renglón de la OC" ? "izq" : null, texto: t })))),
         el("tbody", {}, ...filas))),
       casilla("rem-" + i + "-aclara", "Aclara el período (no se informa fuera de período)", remito.aclara_periodo));
@@ -2093,11 +2091,12 @@ function remitosDelFormulario() {
     const valor = (sufijo) => document.getElementById("rem-" + i + "-" + sufijo).value.trim();
     const comodato = document.getElementById("rem-" + i + "-comodato").checked;
     const items = [];
+    // El código del remito ya no se carga; si había uno guardado, se conserva.
+    const anteriores = new Map((remito.items || []).map((it) => [Number(it.pos), it.codigo || ""]));
     if (!comodato) {
       for (const r of renglones) {
         const cantidad = valor(r.pos + "-cantidad").replace(",", ".");
-        const codigo = valor(r.pos + "-codigo");
-        if (cantidad) items.push({ pos: r.pos, cantidad, codigo });
+        if (cantidad) items.push({ pos: r.pos, cantidad, codigo: anteriores.get(Number(r.pos)) || "" });
       }
     }
     return Object.assign({}, remito, {
