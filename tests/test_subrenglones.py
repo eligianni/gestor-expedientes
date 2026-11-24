@@ -89,3 +89,39 @@ class PruebaSubrenglones(ayudas.CasoConServidor):
         self.assertTrue(fila["agotado"])
         self.assertEqual(fila["pct_consumido"], 100)
         self.assertTrue(exp["id"])
+
+
+class PruebaFechaDeEntregaCv(ayudas.CasoConServidor):
+    """«Fecha de Entrega» del CV: en servicios, el fin del período; en bienes, la fecha de firma si la hay (si no, la del remito)."""
+
+    def setUp(self):
+        super().setUp()
+        self.con = db.conectar(self.entorno.ruta_base)
+        self.addCleanup(self.con.close)
+
+    def _oc(self, numero, tipo, dia=1):
+        oc = dict(OC, numero=numero, tipo=tipo, dia_inicio_periodo=dia, renglones=[dict(OC["renglones"][1], pos=1)])
+        if tipo == "BIEN":
+            oc.pop("vig_desde"), oc.pop("vig_hasta"), oc.pop("dia_inicio_periodo")
+        negocio.crear_oc_desde_pdf(self.con, oc, "oc.pdf", {"numero": numero})
+
+    def _fecha_cv(self, numero, periodo, fecha, firma=None):
+        exp = negocio.crear_expediente(self.con, {"tipo": "COMUN", "oc": numero})
+        remitos = [{"numero": "0001-00000001", "fecha": fecha, "fecha_firma": firma, "es_equipo_comodato": False,
+                    "aclara_periodo": False, "items": [{"pos": 1, "cantidad": "1", "codigo": ""}]}]
+        exp = negocio.actualizar_expediente(self.con, exp["id"], exp["version"], {"periodo": periodo, "datos": {"remitos": remitos}})
+        return negocio.datos_cv(self.con, exp["id"])["datos"]["renglones"][0]["fecha_entrega"]
+
+    def test_servicio_mes_calendario_va_el_fin_del_mes(self):
+        self._oc("4500000001", "SERVICIO")
+        self.assertEqual(self._fecha_cv("4500000001", "2026-10", "2026-10-15", "2026-11-03"), "31/10/2026")
+
+    def test_servicio_periodo_especifico_va_el_ultimo_dia(self):
+        self._oc("4500000002", "SERVICIO", dia=9)
+        self.assertEqual(self._fecha_cv("4500000002", "2026-11", "2026-10-20"), "08/11/2026")  # 9/10 al 8/11
+
+    def test_bien_con_firma_va_la_firma(self):
+        self._oc("4500000003", "BIEN")
+        self.assertEqual(self._fecha_cv("4500000003", "2026-10", "2026-10-15", "2026-10-19"), "19/10/2026")
+        self._oc("4500000004", "BIEN")
+        self.assertEqual(self._fecha_cv("4500000004", "2026-10", "2026-10-15"), "15/10/2026")
