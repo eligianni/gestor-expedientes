@@ -51,6 +51,8 @@
   --sombra-boton: 0 1px 1px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   --sombra-dialogo: 0 8px 24px rgba(26, 31, 54, 0.14);
   --fondo-velo: rgba(26, 31, 54, 0.45);
+  /* Un solo margen para toda la app: encabezado, menú y contenido. */
+  --margen: 34px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -106,7 +108,7 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
   justify-content: space-between;
   gap: 12px;
   min-height: 64px;
-  padding: 8px 32px;
+  padding: 8px var(--margen);
   background: var(--encabezado-fondo);
   backdrop-filter: saturate(180%) blur(8px);
   border-bottom: 1px solid var(--borde);
@@ -139,7 +141,7 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
   position: sticky;
   top: 64px;
   flex: 0 0 210px;
-  padding: 20px 12px 20px 16px;
+  padding: calc(var(--margen) - 12px) 12px var(--margen) calc(var(--margen) - 12px);
   min-height: calc(100vh - 64px);
   border-right: 1px solid var(--borde);
   background: var(--superficie);
@@ -164,7 +166,7 @@ input:focus, select:focus, textarea:focus { outline: 3px solid var(--foco); outl
 main {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 24px 28px 56px;
+  padding: var(--margen) var(--margen) 56px;
 }
 
 @media (max-width: 900px) {
@@ -502,11 +504,46 @@ th.izq .orden-columna { justify-content: flex-start; text-align: left; }
 .boton-lapiz:hover { color: var(--primario); background: var(--primario-suave); border-color: var(--primario-borde); }
 
 /* Datos de la OC en lectura (ficha) */
-.resumen-oc { margin: 16px 0 20px; padding: 16px 20px; border-radius: var(--radio-panel); box-shadow: 0 0 0 1px var(--borde);
-  background: var(--superficie-hundida); }
-.resumen-oc-titulo { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
-.resumen-oc-titulo h3 { margin: 0; }
-.datos-oc { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; margin: 0; font-size: 14px; }
-.datos-oc dt { color: var(--texto-suave); font-weight: 500; }
+.datos-oc { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 20px 0 8px; }
+.datos-oc .dato { margin: 0; padding: 12px 16px; border-radius: var(--radio-panel); background: var(--superficie-hundida);
+  box-shadow: 0 0 0 1px var(--borde); }
+.datos-oc .dato-ancho { grid-column: 1 / -1; }
+.datos-oc dt { margin-bottom: 2px; color: var(--texto-suave); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .datos-oc dd { margin: 0; overflow-wrap: anywhere; }
+.datos-oc .dato-ancho dd { font-size: 16px; font-weight: 500; }
+.datos-oc .dato-mono dd { font-family: Consolas, monospace; font-size: 13px; }
 .dialogo-mediano { width: min(860px, calc(100vw - 32px)); }
+
+/* Ventana de revisión de PDF de OC: barra de avance «Confirmar datos (2/5)» */
+.barra-progreso { height: 6px; margin-top: 12px; border-radius: 999px; background: var(--neutro-fondo); overflow: hidden; }
+.barra-progreso span { display: block; height: 100%; background: var(--primario); transition: width 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .barra-progreso span { transition: none; } }
+#dialogo-pdf-oc .dialogo-encabezado { margin-bottom: 16px; }
+
+/* Ficha de la OC: título destacado, acciones a la derecha */
+.cabecera-oc { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px 24px;
+  margin: 20px 0 4px; padding-bottom: 20px; border-bottom: 1px solid var(--borde); }
+.cabecera-oc-texto { min-width: 0; }
+.sobretitulo { margin: 0 0 4px; color: var(--texto-suave); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.titulo-oc { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.02em; color: var(--primario); font-variant-numeric: tabular-nums; }
+.subtitulo-oc { margin: 4px 0 8px; font-size: 17px; font-weight: 500; }
+.etiquetas-izq { justify-content: flex-start; }
+.cabecera-oc-acciones button svg { margin-right: 6px; vertical-align: -2px; }
+
+/* «Acciones pendientes»: falta el PDF de la OC o el concepto corto */
+.pastilla-pendiente { background: var(--aviso-fondo); color: var(--naranja); font-weight: 600; }
+.pastilla-pendiente::before { opacity: 1; }
+.mensaje-pendiente { border-color: var(--aviso-fondo); border-left-color: var(--naranja); background: var(--aviso-fondo); margin-top: 16px; }
+.mensaje-pendiente p { color: var(--aviso); font-weight: 500; }
+
+/* Notas al pie (letra chica) */
+.nota-pie { margin: 8px 0 0; color: var(--texto-suave); font-size: 13px; }
+.dialogo-pie { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.dialogo-pie .nota-pie { margin: 0; }
+#dialogo-editar-oc .seccion-pdf-oc { margin: 16px 0 20px; }
+
+/* Consumo de la OC */
+.tabla-consumo td.izq { min-width: 240px; }
+.tabla-consumo td.celda-vacia { color: var(--texto-suave); }
+.tabla-consumo tr.fila-por-agotarse td:first-child { box-shadow: inset 4px 0 0 var(--aviso); }
+.th-detalle { display: block; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--texto-suave); }

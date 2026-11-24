@@ -590,6 +590,11 @@ def expediente_gde(h, m, cuerpo):
     return 200, _ok(negocio.guardar_gde(h.conexion(), m.group("id"), datos.get("version"), datos.get("gde")))
 
 
+def expediente_consumo_manual(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.guardar_consumo_manual(h.conexion(), m.group("id"), datos.get("version"), datos.get("cantidades")))
+
+
 def comprobantes_analizar(h, m, cuerpo):
     texto = leer_json(h, cuerpo).get("texto")
     if not isinstance(texto, str) or not texto.strip():
@@ -662,6 +667,7 @@ RUTAS = [
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/estado"), expediente_estado),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/reanudar"), expediente_reanudar),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
+    ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/consumo-manual"), expediente_consumo_manual),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/centralizada"), expediente_centralizada),
     ("GET", re.compile(r"/api/centralizadas"), centralizadas),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/correctivo"), expediente_correctivo),

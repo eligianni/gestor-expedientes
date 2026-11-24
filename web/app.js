@@ -540,10 +540,11 @@ function contenedorOC() {
       el("div", { clase: "acciones" },
         el("button", { type: "submit", texto: "Buscar" }),
         el("button", { type: "button", id: "oc-nueva", "aria-label": "Nueva OC desde su PDF",
-          onclick: () => document.getElementById("oc-nueva-archivo").click() }, iconoPdf(), "Nueva OC"),
+          title: "Elegí uno o varios PDF de OC", onclick: () => document.getElementById("oc-nueva-archivo").click() }, iconoPdf(), "Nueva OC"),
         el("button", { type: "button", clase: "enlace", texto: "Sin PDF (escaneada): cargar a mano", onclick: mostrarAltaOC })),
-      el("input", { type: "file", id: "oc-nueva-archivo", accept: "application/pdf,.pdf", hidden: true,
-        "aria-label": "PDF de la nueva OC", onchange: (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) leerNuevaOC(f); } }));
+      el("input", { type: "file", id: "oc-nueva-archivo", accept: "application/pdf,.pdf", multiple: true, hidden: true,
+        "aria-label": "PDF de las OC nuevas (podés elegir varios)",
+        onchange: (e) => { const archivos = Array.from(e.target.files); e.target.value = ""; if (archivos.length) procesarPdfsOC(archivos); } }));
     raiz = el("div", { id: "oc-raiz" }, filtros, el("div", { id: "oc-detalle" }), el("div", { id: "oc-lista" }));
     seccion.append(raiz);
   }
@@ -562,6 +563,7 @@ function cargarOC() {
 async function listarOC() {
   contenedorOC();
   const lista = document.getElementById("oc-lista");
+  lista.hidden = Boolean(ocEstado.ficha);  // con la ficha abierta, la lista queda oculta
   cargando(lista);
   const parametros = new URLSearchParams();
   if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
@@ -609,10 +611,17 @@ function vigenciaCorta(oc) {
   return corta(oc.vig_desde) + " – " + (oc.vig_hasta ? corta(oc.vig_hasta) : "sin fin");
 }
 
+/** Lo obligatorio que le falta a la OC para crear expedientes (PDF y concepto corto). */
+function faltantesOC(oc) {
+  return [!oc.pdf_cargado && "el PDF de la OC", !(oc.concepto_corto || "").trim() && "el concepto corto (Texto SAP)"].filter(Boolean);
+}
+
 /** Etiquetas de color (con su palabra) para lo que hay que tener en cuenta de la OC. */
 function observacionesOC(oc) {
   const etiquetas = [];
   const etiqueta = (texto, tono, titulo) => etiquetas.push(el("span", { clase: "pastilla pastilla-" + tono, texto, title: titulo || null }));
+  const faltan = faltantesOC(oc);
+  if (faltan.length && !oc.excluida) etiqueta("Acciones pendientes", "pendiente", "Falta cargar " + faltan.join(" y "));
   if (oc.centralizada) etiqueta("Centralizada", "violeta", "Compra de Nivel Central");
   if (oc.comodato) etiqueta("Comodato", "info", "Tiene equipo en comodato");
   if (oc.renglones_otro_centro) {
@@ -639,6 +648,7 @@ async function abrirFichaOC(numero) {
 
 function cerrarFichaOC() {
   ocEstado.ficha = null;
+  document.getElementById("oc-lista").hidden = false;
   vaciar(document.getElementById("oc-detalle"));
   listarOC();
 }
@@ -697,7 +707,8 @@ function marcaOtroCentro(r) {
 
 function pintarFichaOC(ficha) {
   const { oc, proveedor, renglones, expedientes } = ficha;
-  const formulario = resumenDatosOC(oc);
+  const ocCompleta = Object.assign({}, oc, { pdf_cargado: Boolean(ficha.pdf_oc), renglones_otro_centro: 0 });
+  const faltan = faltantesOC(ocCompleta);
 
   const filasRenglones = renglones.map((r) => el("tr", { clase: r.otro_centro ? "fila-otro-centro" : null },
     el("td", { clase: "numero", texto: r.pos }),
@@ -714,29 +725,173 @@ function pintarFichaOC(ficha) {
   const encabezadosRenglones = ["Pos.", "Descripción", "Cantidad", "Precio $", "Importe $", "Desglose",
     "Entregado / por entregar (SAP)", "Consumo previo", ""];
 
+  const nuevoExp = el("button", { type: "button", texto: "Nuevo expediente", disabled: faltan.length > 0,
+    title: faltan.length ? "Primero cargá " + faltan.join(" y ") + "." : "Crear un expediente de pago para esta OC",
+    onclick: () => nuevoExpedienteDesdeOC(oc) });
+  const etiquetas = observacionesOC(ocCompleta);
+  const cabecera = el("div", { clase: "cabecera-oc" },
+    el("div", { clase: "cabecera-oc-texto" },
+      el("p", { clase: "sobretitulo", texto: "Orden de compra · " + oc.efector + " · " + (TIPOS_OC_TEXTO[oc.tipo] || oc.tipo) }),
+      el("h2", { id: "oc-ficha-titulo", clase: "titulo-oc", tabindex: "-1", texto: "OC " + oc.numero }),
+      el("p", { clase: "subtitulo-oc", texto: (proveedor ? proveedor.razon_social : "Proveedor sin cargar") + " · SAP " + oc.sap }),
+      typeof etiquetas === "string" ? null : el("div", { clase: "etiquetas etiquetas-izq" }, ...etiquetas.childNodes)),
+    el("div", { clase: "acciones cabecera-oc-acciones" },
+      nuevoExp,
+      el("button", { type: "button", clase: "secundario", onclick: () => abrirDialogoEditarOC(oc.numero) },
+        iconoLapiz(), "Editar datos y PDF")));
+  const pendiente = faltan.length
+    ? el("div", { clase: "mensaje mensaje-pendiente" },
+      el("p", { texto: "Para crear expedientes falta cargar " + faltan.join(" y ") + "." }),
+      el("button", { type: "button", texto: "Completar ahora", onclick: () => abrirDialogoEditarOC(oc.numero) }))
+    : null;
+
+  const consumo = el("div", { id: "oc-consumo" });
+  const editables = expedientes.filter((x) => x.estado !== "ANULADO" && !x.consumo_remitos);
   const partes = [
     el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario", texto: "Volver a la lista", onclick: cerrarFichaOC })),
-    el("h2", { id: "oc-ficha-titulo", tabindex: "-1", texto: "OC " + oc.numero + " — " + (proveedor ? proveedor.razon_social : "") }),
-    el("p", { texto: "Efector " + oc.efector + " · SAP " + oc.sap + " · " + (oc.origen === "MANUAL" ? "cargada a mano" : "importada de SAP")
-      + (oc.fecha_oc ? " · fecha OC " + oc.fecha_oc : "") + (oc.cerrada_sap ? " · cerrada en SAP" : "") }),
-    seccionPdfOC(ficha, (nueva) => { ocEstado.ficha = nueva; pintarFichaOC(nueva); }),
-    formulario,
+    cabecera,
+    pendiente,
+    resumenDatosOC(oc, ficha.pdf_oc),
     el("h3", { texto: "Renglones" }),
     el("div", { clase: "tabla-desplazable" }, el("table", {},
       el("thead", {}, el("tr", {}, ...encabezadosRenglones.map((t) => el("th", { scope: "col", clase: claseColumna(t), texto: t })))),
       el("tbody", {}, ...filasRenglones))),
     el("div", { id: "oc-renglon-edicion" }),
-    el("h3", { texto: "Consumo de la OC" }),
-    botonesExporte("consumo-oc", { oc: oc.numero }, "del consumo de la OC " + oc.numero),
   ];
   if (oc.origen === "MANUAL") {
-    partes.push(el("button", { type: "button", clase: "secundario", texto: "Agregar renglón", onclick: () => editarRenglon(null) }));
+    partes.push(el("div", { clase: "acciones" },
+      el("button", { type: "button", clase: "secundario", texto: "Agregar renglón", onclick: () => editarRenglon(null) })));
   }
-  partes.push(el("h3", { texto: "Expedientes de esta OC" }));
+  partes.push(
+    el("h3", { texto: "Consumo de la OC" }),
+    el("div", { clase: "acciones" },
+      el("button", { type: "button", clase: "secundario", texto: "Cargar consumo a mano", disabled: !editables.length,
+        title: editables.length ? "Para los meses facturados que no tienen remitos cargados"
+          : "Todos los expedientes ya tienen el consumo de sus remitos",
+        onclick: () => abrirDialogoConsumoManual(ficha) }),
+      botonesExporte("consumo-oc", { oc: oc.numero }, "del consumo de la OC " + oc.numero)),
+    consumo,
+    el("h3", { texto: "Expedientes de esta OC" }));
+  const origenConsumo = (x) => (x.consumo_remitos ? "De los remitos"
+    : (Object.keys(x.consumo_manual || {}).length ? "Cargado a mano" : "Sin consumo"));
   partes.push(expedientes.length
-    ? tabla(["N°", "Tipo", "Período", "Estado", "Factura"], expedientes.map((x) => [x.id, x.tipo, x.periodo || "", x.estado, x.factura]))
+    ? tabla(["N°", "Tipo", "Período", "Estado", "Factura", "Importe $", "Consumo"], expedientes.map((x) => [
+      x.id, x.tipo, x.periodo || "", ESTADOS_TEXTO[x.estado] || x.estado, x.factura,
+      x.importe_centavos === null || x.importe_centavos === undefined ? "—" : formatoPesos(x.importe_centavos), origenConsumo(x)]))
     : el("p", { clase: "texto-suave", texto: "Todavía no hay expedientes para esta OC." }));
   vaciar(document.getElementById("oc-detalle"), el("div", { clase: "panel" }, ...partes));
+  document.getElementById("oc-lista").hidden = true;
+  pintarConsumoOC(oc.numero, consumo);
+}
+
+/** "2026-09" → "09/2026"; las columnas especiales tienen su nombre. */
+function textoPeriodo(periodo) {
+  if (periodo === "unica") return "Consumido";
+  if (/^\d{4}-\d{2}$/.test(periodo)) return periodo.slice(5, 7) + "/" + periodo.slice(0, 4);
+  return periodo === "sin_periodo" ? "Sin período" : periodo;
+}
+
+/** Tabla de consumo: renglón × período, con total, saldo y % consumido. */
+async function pintarConsumoOC(numero, destino) {
+  cargando(destino);
+  const consumo = await api("GET", "/api/oc/" + encodeURIComponent(numero) + "/consumo");
+  if (!consumo) { vaciar(destino); return; }
+  const { periodos, filas } = consumo.grilla;
+  const porPos = Object.fromEntries(consumo.renglones.map((r) => [r.pos, r]));
+  if (!filas.length) { vaciar(destino, el("p", { clase: "texto-suave", texto: "La OC no tiene renglones." })); return; }
+  const encabezados = ["Rgl.", "Descripción", "Cantidad OC", "Consumo previo", ...periodos.map(textoPeriodo), "Total consumido", "Saldo", "%"];
+  const cuerpo = filas.map((f) => {
+    const r = porPos[f.pos] || {};
+    const total = Number(r.consumo_previo || 0) + Number(r.validado || 0);
+    return el("tr", { clase: f.por_agotarse ? "fila-por-agotarse" : null },
+      el("td", { clase: "numero", texto: f.pos }),
+      el("td", { clase: "izq", texto: f.descripcion }),
+      el("td", { clase: "numero sin-corte", texto: textoCantidad(f.cantidad_oc) + (f.unidad ? " " + f.unidad : "") }),
+      el("td", { clase: "numero", texto: textoCantidad(r.consumo_previo) }),
+      ...periodos.map((p) => {
+        const valor = f.celdas[p];
+        return el("td", { clase: "numero" + (valor && valor !== "0" ? "" : " celda-vacia"), texto: valor && valor !== "0" ? textoCantidad(valor) : "·" });
+      }),
+      el("td", { clase: "numero", texto: textoCantidad(String(Math.round(total * 10000) / 10000)) }),
+      el("td", { clase: "numero", texto: textoCantidad(f.saldo) }),
+      el("td", { clase: "numero" }, el("span", { clase: "pastilla pastilla-" + (f.por_agotarse ? "aviso" : "neutra"),
+        texto: (r.pct_consumido ?? 0) + " %" + (f.por_agotarse ? " · por agotarse" : "") })));
+  });
+  vaciar(destino, el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-consumo" },
+    el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", clase: t === "Descripción" ? "izq" : null, texto: t })))),
+    el("tbody", {}, ...cuerpo))),
+  el("p", { clase: "nota-pie", texto: "Cada mes suma lo de los remitos de sus expedientes, o lo cargado a mano si el mes no tiene remitos. «·» = sin consumo." }));
+}
+
+/** Consumo de los meses ya facturados que no tienen remitos cargados (p. ej. los migrados del seguimiento). */
+function abrirDialogoConsumoManual(ficha) {
+  const { oc, renglones } = ficha;
+  const editables = ficha.expedientes.filter((x) => x.estado !== "ANULADO" && !x.consumo_remitos);
+  const anterior = document.getElementById("dialogo-consumo-oc");
+  if (anterior) anterior.remove();
+  const filas = editables.map((x) => el("tr", { "data-exp": String(x.id) },
+    el("td", { clase: "sin-corte", texto: x.periodo ? textoPeriodo(x.periodo) : "Sin período" }),
+    el("td", { texto: String(x.id) }),
+    el("td", { clase: "sin-corte", texto: x.factura || "—" }),
+    ...renglones.map((r) => el("td", {}, entrada(textoCantidad((x.consumo_manual || {})[String(r.pos)]), {
+      inputmode: "decimal", clase: "entrada-chica", "data-pos": String(r.pos),
+      "aria-label": "Consumo del renglón " + r.pos + " en el expediente " + x.id + (x.periodo ? " (" + x.periodo + ")" : "") })))));
+  const guardar = el("button", { type: "button", texto: "Guardar consumo" });
+  const dialogo = el("dialog", { id: "dialogo-consumo-oc", clase: "dialogo", "aria-labelledby": "consumo-manual-titulo" },
+    el("div", { clase: "dialogo-encabezado" },
+      el("h2", { id: "consumo-manual-titulo", texto: "Cargar consumo a mano — OC " + oc.numero }),
+      el("p", { clase: "texto-suave", texto: "Para los meses que ya tienen factura pero no remitos cargados. Lo que pongas cuenta como "
+        + "consumido en ese período; vacío = sin consumo. Si después se cargan los remitos, manda lo de los remitos." })),
+    el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-renglones-dialogo" },
+      el("thead", {}, el("tr", {},
+        el("th", { scope: "col", texto: "Período" }), el("th", { scope: "col", texto: "Exp." }), el("th", { scope: "col", texto: "Factura" }),
+        ...renglones.map((r) => el("th", { scope: "col", title: r.descripcion },
+          "Rgl. " + r.pos, el("span", { clase: "th-detalle", texto: (r.desglose_cantidad ? r.desglose_unidad : r.unidad) || "" }))))),
+      el("tbody", {}, ...filas))),
+    el("div", { clase: "acciones dialogo-acciones" }, guardar,
+      el("button", { type: "button", clase: "secundario", texto: "Cerrar", onclick: () => dialogo.close() })));
+  guardar.addEventListener("click", async () => {
+    guardar.disabled = true;
+    let guardados = 0;
+    for (const fila of dialogo.querySelectorAll("tbody tr")) {
+      const x = editables.find((e) => String(e.id) === fila.dataset.exp);
+      const cantidades = {};
+      let cambio = false;
+      for (const input of fila.querySelectorAll("input")) {
+        const valor = input.value.trim();
+        if (valor) cantidades[input.dataset.pos] = valor;
+        if (valor !== textoCantidad((x.consumo_manual || {})[input.dataset.pos])) cambio = true;
+      }
+      if (!cambio) continue;
+      const exp = await api("PUT", "/api/expedientes/" + x.id + "/consumo-manual", { version: x.version, cantidades });
+      if (!exp) {
+        avisoEnDialogo(dialogo, "Expediente " + x.id + ": " + ultimoError());
+        guardar.disabled = false;
+        return;
+      }
+      const nueva = (exp.datos && exp.datos.consumo_manual) || {};
+      Object.assign(x, { version: exp.version, consumo_manual: nueva });
+      guardados += 1;
+    }
+    dialogo.close();
+    mostrarAviso(guardados ? "Consumo guardado en " + guardados + (guardados === 1 ? " expediente." : " expedientes.") : "No había cambios para guardar.",
+      guardados ? "exito" : "aviso");
+  });
+  dialogo.addEventListener("close", () => { dialogo.remove(); abrirFichaOC(oc.numero); });
+  document.body.append(dialogo);
+  dialogo.showModal();
+  const primero = dialogo.querySelector("tbody input");
+  if (primero) primero.focus();
+}
+
+/** Crea el expediente de la OC (si tiene su PDF y el concepto corto) y abre el asistente. */
+async function nuevoExpedienteDesdeOC(oc) {
+  limpiarAvisos();
+  const exp = await api("POST", "/api/expedientes", { tipo: oc.centralizada ? "CENTRALIZADA" : "COMUN", oc: oc.numero });
+  if (!exp) return;
+  Object.assign(expEstado, { exp, ficha: null, paso: 2, sugerido: null, fuera: [], sii: null });
+  mostrarPantalla("pantalla-expedientes");
+  mostrarAviso("Expediente " + exp.id + " creado para la OC " + oc.numero + ". Seguí con los remitos.", "exito");
 }
 
 // --- PDF de la OC ------------------------------------------------------------
@@ -759,7 +914,7 @@ function textoCargaPdf(pdf) {
 }
 
 /** Panel para subir el PDF de la OC; `alTerminar(ficha)` se llama después de aplicar los cambios. */
-function seccionPdfOC(ficha, alTerminar) {
+function seccionPdfOC(ficha, alTerminar, opciones = {}) {
   const { oc, pdf_oc: pdf } = ficha;
   const prefijo = "pdf-" + oc.numero;
   const archivo = el("input", { type: "file", accept: "application/pdf,.pdf" });
@@ -779,19 +934,25 @@ function seccionPdfOC(ficha, alTerminar) {
       "Todavía no se cargó el PDF de esta OC. Subilo antes de validar: de ahí salen el objeto de la contratación, "
       + "las cantidades y los subrenglones." }));
   return el("section", { clase: "panel seccion-pdf-oc", "aria-labelledby": prefijo + "-titulo" },
-    el("h3", { id: prefijo + "-titulo", texto: "PDF de la OC" }), estadoPdf, formulario, revision);
+    el("h3", { id: prefijo + "-titulo", texto: "PDF de la OC" + (opciones.obligatorio ? " *" : "") }), estadoPdf, formulario, revision);
 }
 
 async function leerPdfOC(numero, archivo, texto, destino, alTerminar) {
   limpiarAvisos();
+  const ventana = destino.closest("dialog");
   const datos = new FormData();
   if (archivo.files[0]) datos.append("archivo", archivo.files[0], archivo.files[0].name);
   else if (texto.value.trim()) datos.append("texto", texto.value);
-  else { mostrarAviso("Elegí el PDF de la OC o pegá su texto.", "error"); return; }
+  else {
+    if (ventana) avisoEnDialogo(ventana, "Elegí el PDF de la OC o pegá su texto.");
+    else mostrarAviso("Elegí el PDF de la OC o pegá su texto.", "error");
+    return;
+  }
   cargando(destino);
   const comparacion = await api("POST", "/api/oc/" + encodeURIComponent(numero) + "/pdf", datos);
-  if (!comparacion) { vaciar(destino); return; }
-  pintarRevisionPdf(destino, comparacion, alTerminar);
+  vaciar(destino);
+  if (!comparacion) { if (ventana) avisoEnDialogo(ventana, ultimoError()); return; }
+  abrirColaPdf([{ tipo: "comparar", archivo: comparacion.archivo || "texto pegado", comparacion }], alTerminar);
 }
 
 function casillaTomar(id, etiqueta, marcada) {
@@ -800,7 +961,7 @@ function casillaTomar(id, etiqueta, marcada) {
   return control;
 }
 
-function pintarRevisionPdf(destino, comparacion, alTerminar) {
+function pintarRevisionPdf(destino, comparacion, alTerminar, opciones = {}) {
   const { oc, leido } = comparacion;
   const partes = [el("h4", { id: "pdf-revision-titulo", tabindex: "-1", texto: "Lo que dice el PDF de la OC " + oc.numero })];
   const resumen = [leido.razon_social && leido.razon_social + (leido.sap ? " (SAP " + leido.sap + ")" : ""),
@@ -881,9 +1042,11 @@ function pintarRevisionPdf(destino, comparacion, alTerminar) {
       el("thead", {}, el("tr", {}, ...["Tomar", "Renglón", "Dato", "En el gestor", "En el PDF"].map((t) => el("th", { scope: "col", texto: t })))),
       el("tbody", {}, ...filasRenglones))));
 
-  partes.push(el("div", { clase: "acciones" },
-    el("button", { type: "button", texto: "Aplicar lo marcado", onclick: () => aplicarPdfOC(destino, comparacion, alTerminar) }),
-    el("button", { type: "button", clase: "secundario", texto: "Descartar", onclick: () => vaciar(destino) })));
+  if (!opciones.sinBotones) {
+    partes.push(el("div", { clase: "acciones" },
+      el("button", { type: "button", texto: "Aplicar lo marcado", onclick: () => aplicarPdfOC(destino, comparacion, alTerminar) }),
+      el("button", { type: "button", clase: "secundario", texto: "Descartar", onclick: () => vaciar(destino) })));
+  }
   vaciar(destino, el("div", { clase: "revision-pdf" }, ...partes));
   document.getElementById("pdf-revision-titulo").focus();
 }
@@ -901,7 +1064,7 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
     const editor = document.getElementById("pdf-oc-" + c.campo + "-valor");
     cambiosOc[c.campo] = editor ? editor.value.trim() : c.pdf;
   }
-  if ("objeto" in cambiosOc && !cambiosOc.objeto) { mostrarAviso("El objeto no puede quedar vacío.", "error"); return; }
+  if ("objeto" in cambiosOc && !cambiosOc.objeto) { mostrarAviso("El objeto no puede quedar vacío.", "error"); errorAlaVentana(); return false; }
   const renglones = [];
   for (const r of comparacion.renglones) {
     if (!r.existe) {
@@ -918,16 +1081,17 @@ async function aplicarPdfOC(destino, comparacion, alTerminar) {
   estado.recargar = () => vaciar(destino);
   const ficha = await api("POST", "/api/oc/" + encodeURIComponent(comparacion.oc.numero) + "/pdf/aplicar", {
     version: comparacion.oc.version, archivo: comparacion.archivo || "", leido: comparacion.leido, oc: cambiosOc, renglones });
-  if (!ficha) return;
+  if (!ficha) { errorAlaVentana(); return false; }
   const cantidad = Object.keys(cambiosOc).length + renglones.length;
   await alTerminar(ficha);
+  if (colaPdf.dialogo) return true;
   mostrarAviso(cantidad
     ? "Datos del PDF aplicados a la OC " + ficha.oc.numero + "."
     : "Quedó registrado que la OC " + ficha.oc.numero + " coincide con su PDF.", "exito");
 }
 
-/** Botón chiquito con un lápiz (44 px de alto igual, por accesibilidad). */
-function botonLapiz(etiqueta, alHacerClic) {
+/** Ícono de lápiz (SVG, decorativo). */
+function iconoLapiz() {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   for (const [k, v] of [["viewBox", "0 0 24 24"], ["width", "16"], ["height", "16"], ["aria-hidden", "true"], ["focusable", "false"]]) svg.setAttribute(k, v);
@@ -936,32 +1100,33 @@ function botonLapiz(etiqueta, alHacerClic) {
   trazo.setAttribute("fill", "none"); trazo.setAttribute("stroke", "currentColor"); trazo.setAttribute("stroke-width", "1.8");
   trazo.setAttribute("stroke-linejoin", "round"); trazo.setAttribute("stroke-linecap", "round");
   svg.append(trazo);
-  return el("button", { type: "button", clase: "secundario boton-lapiz", "aria-label": etiqueta, title: etiqueta, onclick: alHacerClic }, svg);
+  return svg;
 }
 
-/** Datos de la OC en modo lectura, con el lápiz para editarlos en una ventana. */
-function resumenDatosOC(oc) {
-  const fila = (etiqueta, valor) => [el("dt", { texto: etiqueta }), el("dd", { texto: valor === null || valor === undefined || valor === "" ? "—" : String(valor) })];
+/** Botón chiquito con un lápiz (44 px de alto igual, por accesibilidad). */
+function botonLapiz(etiqueta, alHacerClic) {
+  return el("button", { type: "button", clase: "secundario boton-lapiz", "aria-label": etiqueta, title: etiqueta, onclick: alHacerClic }, iconoLapiz());
+}
+
+/** Datos de la OC en modo lectura (lo demás —GDE del PDF, concepto corto, día de inicio— se ve al editar). */
+function resumenDatosOC(oc, pdf) {
   const fecha = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : "");
-  const datos = [
-    ...fila("Objeto", oc.objeto ? oc.objeto_articulo + " " + oc.objeto : ""),
-    ...fila("Tipo", TIPOS_OC_TEXTO[oc.tipo] || oc.tipo),
-    ...fila("Concepto corto (Texto SAP)", oc.concepto_corto),
-    ...fila("CA", oc.ca),
-    ...fila("Expediente de contratación", oc.expediente_contratacion),
-    ...fila("N° GDE del PDF de la OC", oc.gde_pdf_oc),
-  ];
+  const dato = (etiqueta, valor, clase) => el("div", { clase: "dato" + (clase ? " " + clase : "") },
+    el("dt", { texto: etiqueta }), el("dd", { texto: valor === null || valor === undefined || valor === "" ? "—" : String(valor) }));
+  const datos = [dato("Objeto", oc.objeto ? oc.objeto_articulo + " " + oc.objeto : "", "dato-ancho")];
   if (oc.tipo !== "BIEN") {
-    datos.push(...fila("Vigencia", (oc.vig_desde ? fecha(oc.vig_desde) : "") + (oc.vig_hasta ? " al " + fecha(oc.vig_hasta) : " (sin fin)")),
-      ...fila("Día de inicio del período", oc.dia_inicio_periodo === 1 ? "1 (mes calendario)" : oc.dia_inicio_periodo));
+    datos.push(dato("Vigencia", oc.vig_desde || oc.vig_hasta
+      ? (oc.vig_desde ? fecha(oc.vig_desde) : "") + (oc.vig_hasta ? " al " + fecha(oc.vig_hasta) : " (sin fin)") : ""));
   }
-  if (oc.centralizada) datos.push(...fila("Leyenda del CV", oc.leyenda_cv));
-  if (oc.excluida) datos.push(...fila("Excluida", oc.motivo_exclusion || "sí"));
-  return el("section", { clase: "resumen-oc", "aria-labelledby": "oc-datos-titulo" },
-    el("div", { clase: "resumen-oc-titulo" }, el("h3", { id: "oc-datos-titulo", texto: "Datos de la OC" }),
-      botonLapiz("Editar los datos de la OC " + oc.numero, () => abrirDialogoEditarOC(oc.numero)),
-      el("div", { clase: "etiquetas" }, observacionesOC(Object.assign({}, oc, { renglones_otro_centro: 0 })))),
-    el("dl", { clase: "datos-oc" }, ...datos));
+  datos.push(
+    dato("Fecha de la OC", fecha(oc.fecha_oc)),
+    dato("CA", oc.ca),
+    dato("Expediente de contratación", oc.expediente_contratacion, "dato-mono"),
+    dato("PDF de la OC", pdf ? "Cargado el " + formatoFechaHora(pdf.fecha) : "Falta cargarlo"),
+    dato("Origen", oc.origen === "MANUAL" ? "Cargada a mano / desde su PDF" : "Importada de SAP" + (oc.cerrada_sap ? " (cerrada en SAP)" : "")));
+  if (oc.centralizada) datos.push(dato("Leyenda del CV", oc.leyenda_cv, "dato-ancho"));
+  if (oc.excluida) datos.push(dato("Excluida", oc.motivo_exclusion || "sí", "dato-ancho"));
+  return el("dl", { clase: "datos-oc", "aria-label": "Datos de la OC " + oc.numero }, ...datos);
 }
 
 async function abrirDialogoEditarOC(numero) {
@@ -972,7 +1137,8 @@ async function abrirDialogoEditarOC(numero) {
   if (anterior) anterior.remove();
   let oc = ficha.oc;
   const manuales = new Set(oc.campos_manuales || []);
-  const etiquetaDe = (campo, etiqueta) => etiqueta + (manuales.has(campo) ? " (editado a mano)" : "");
+  const OBLIGATORIOS = new Set(["concepto_corto"]);
+  const etiquetaDe = (campo, etiqueta) => etiqueta + (OBLIGATORIOS.has(campo) ? " *" : "") + (manuales.has(campo) ? " (editado a mano)" : "");
   const bloque = (campo) => {
     const [, etiqueta, tipo] = CAMPOS_OC_FORM.find(([c]) => c === campo);
     const control = controlCampoOC(campo, tipo, oc[campo]);
@@ -983,29 +1149,33 @@ async function abrirDialogoEditarOC(numero) {
   const leyenda = bloque("leyenda_cv");
   const exclusion = el("div", { clase: "grilla-dialogo" }, bloque("excluida"), bloque("motivo_exclusion"));
   const estadoGuardado = el("div", { id: "editar-oc-estado", "aria-live": "polite" });
+  const encabezado = el("div", { clase: "dialogo-encabezado" },
+    el("h2", { id: "editar-oc-titulo", texto: "Editar OC " + oc.numero + (ficha.proveedor ? " — " + ficha.proveedor.razon_social : "") }),
+    el("p", { clase: "texto-suave", texto: "Lo que cambies queda marcado como cargado a mano: la importación del z_compras2 no lo pisa." }));
+  const seccionPdf = seccionPdfOC(ficha, () => { dialogo.close(); abrirDialogoEditarOC(numero); }, { obligatorio: true });
   const formulario = el("form", { method: "dialog", clase: "formulario", novalidate: true,
     onsubmit: (e) => { e.preventDefault(); guardarDialogoOC(dialogo, () => oc, (nueva) => { oc = nueva; }); } },
-    el("div", { clase: "dialogo-encabezado" },
-      el("h2", { id: "editar-oc-titulo", texto: "Editar OC " + oc.numero + (ficha.proveedor ? " — " + ficha.proveedor.razon_social : "") }),
-      el("p", { clase: "texto-suave", texto: "Lo que cambies queda marcado como cargado a mano: la importación del z_compras2 no lo pisa." })),
-    estadoGuardado,
     campoObjeto("oc-campo-objeto_articulo", "oc-campo-objeto", oc.objeto_articulo, oc.objeto, etiquetaDe("objeto", "Objeto (como va en la autorización)")),
     el("div", { clase: "grilla-dialogo" }, bloque("tipo"), bloque("concepto_corto"), bloque("comodato"), bloque("centralizada")),
     periodo,
     el("div", { clase: "grilla-dialogo" }, bloque("ca"), bloque("expediente_contratacion"), bloque("gde_pdf_oc")),
     leyenda,
     exclusion,
-    el("div", { clase: "acciones dialogo-acciones" },
-      el("button", { type: "submit", texto: "Guardar cambios" }),
-      el("button", { type: "button", clase: "secundario", texto: "Cerrar", onclick: () => dialogo.close() })));
-  const dialogo = el("dialog", { id: "dialogo-editar-oc", clase: "dialogo dialogo-mediano", "aria-labelledby": "editar-oc-titulo" }, formulario);
+    el("div", { clase: "dialogo-acciones dialogo-pie" },
+      el("div", { clase: "acciones" },
+        el("button", { type: "submit", texto: "Guardar cambios" }),
+        el("button", { type: "button", clase: "secundario", texto: "Cerrar", onclick: () => dialogo.close() })),
+      el("p", { clase: "nota-pie", texto: "Los campos señalados con (*) son obligatorios para crear expedientes de la OC. "
+        + "Podés cerrar sin completarlos: la OC queda con «Acciones pendientes»." })));
+  const dialogo = el("dialog", { id: "dialogo-editar-oc", clase: "dialogo dialogo-mediano", "aria-labelledby": "editar-oc-titulo" },
+    encabezado, estadoGuardado, seccionPdf, formulario);
   const actualizarVisibles = () => {
     periodo.hidden = document.getElementById("oc-campo-tipo").value === "BIEN";
     leyenda.hidden = !document.getElementById("oc-campo-centralizada").checked;
   };
   dialogo.addEventListener("change", (e) => {
     if (["oc-campo-tipo", "oc-campo-centralizada"].includes(e.target.id)) actualizarVisibles();
-    if (e.target.closest("form")) vaciar(estadoGuardado);
+    if (formulario.contains(e.target)) vaciar(estadoGuardado);
   });
   dialogo.addEventListener("close", () => {
     dialogo.remove();
@@ -1185,39 +1355,179 @@ async function crearOC(evento) {
 
 // --- Nueva OC desde su PDF: se lee el PDF y se confirman los datos en una ventana ------------------------------
 
-async function leerNuevaOC(archivo) {
+// --- Revisión de PDF de OC en una ventana: una o varias, «Confirmar datos (2/5)» ---------------------------------
+// Cada PDF es una OC nueva (se confirman sus datos y se crea) o una que ya está (se compara y se aplica lo marcado).
+
+const colaPdf = { items: [], i: 0, dialogo: null, alTerminar: null };
+
+/** Lee los PDF elegidos en «Nueva OC» y abre la ventana para revisarlos uno por uno. */
+async function procesarPdfsOC(archivos) {
   limpiarAvisos();
-  const datos = new FormData();
-  datos.append("archivo", archivo, archivo.name);
-  const boton = document.getElementById("oc-nueva");
-  boton.disabled = true;
-  const respuesta = await api("POST", "/api/oc/pdf", datos);
-  boton.disabled = false;
-  if (!respuesta) return;
-  const { leido } = respuesta;
-  if (respuesta.existe) {
-    // Ya está cargada (por ejemplo, del z_compras2): se abre su ficha y se compara con el PDF.
-    mostrarAviso("La OC " + leido.numero + " ya está en el gestor: abajo ves qué cambia con el PDF.", "aviso");
-    await abrirFichaOC(leido.numero);
-    const entradaPdf = document.getElementById("pdf-" + leido.numero + "-archivo");
-    if (entradaPdf && window.DataTransfer) {
-      const lista = new DataTransfer();
-      lista.items.add(archivo);
-      entradaPdf.files = lista.files;
-      entradaPdf.form.requestSubmit();
+  const items = archivos.map((f) => ({ tipo: "leyendo", archivo: f.name, file: f }));
+  abrirColaPdf(items, null);
+  for (let n = 0; n < items.length; n++) {
+    const item = items[n];
+    if (colaPdf.dialogo) pintarLeyendo(n + 1, items.length, item.archivo);
+    const datos = new FormData();
+    datos.append("archivo", item.file, item.file.name);
+    const respuesta = await api("POST", "/api/oc/pdf", datos);
+    if (!respuesta) { Object.assign(item, { tipo: "error", error: ultimoError() }); continue; }
+    if (!respuesta.existe) { Object.assign(item, { tipo: "nueva", leido: respuesta.leido }); continue; }
+    const otra = new FormData();
+    otra.append("archivo", item.file, item.file.name);
+    const comparacion = await api("POST", "/api/oc/" + encodeURIComponent(respuesta.leido.numero) + "/pdf", otra);
+    if (comparacion) Object.assign(item, { tipo: "comparar", comparacion });
+    else Object.assign(item, { tipo: "error", error: ultimoError() });
+  }
+  limpiarAvisos();
+  if (colaPdf.dialogo) mostrarItemCola();
+}
+
+function ultimoError() {
+  const aviso = document.querySelector("#avisos .mensaje-error p");
+  const texto = aviso ? aviso.textContent : "No se pudo leer el PDF.";
+  limpiarAvisos();
+  return texto;
+}
+
+/** Copia el último error de la página a la ventana abierta (los avisos de atrás quedan tapados). */
+function errorAlaVentana() {
+  if (!colaPdf.dialogo) return;
+  avisoEnDialogo(colaPdf.dialogo, ultimoError());
+}
+
+function abrirColaPdf(items, alTerminar) {
+  if (colaPdf.dialogo) colaPdf.dialogo.close();
+  const dialogo = el("dialog", { id: "dialogo-pdf-oc", clase: "dialogo", "aria-labelledby": "cola-titulo" });
+  Object.assign(colaPdf, { items, i: 0, dialogo, alTerminar });
+  dialogo.addEventListener("close", () => {
+    dialogo.remove();
+    if (colaPdf.dialogo === dialogo) colaPdf.dialogo = null;
+    const hubo = items.some((x) => x.resultado === "creada" || x.resultado === "actualizada");
+    if (hubo && !alTerminar && document.getElementById("oc-lista")) {
+      const creadas = items.filter((x) => x.resultado === "creada");
+      if (items.length === 1 && creadas.length === 1) abrirFichaOC(creadas[0].leido.numero);
+      else if (ocEstado.ficha) abrirFichaOC(ocEstado.ficha.oc.numero); else listarOC();
     }
+  });
+  document.body.append(dialogo);
+  dialogo.showModal();
+  if (items.some((x) => x.tipo === "leyendo")) pintarLeyendo(1, items.length, items[0].archivo);
+  else mostrarItemCola();
+}
+
+function encabezadoCola(titulo, detalle) {
+  const total = colaPdf.items.length;
+  return el("div", { clase: "dialogo-encabezado" },
+    el("h2", { id: "cola-titulo", tabindex: "-1", texto: titulo }),
+    detalle ? el("p", { clase: "texto-suave", texto: detalle }) : null,
+    total > 1 ? el("div", { clase: "barra-progreso", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total),
+      "aria-valuenow": String(Math.min(colaPdf.i, total)) },
+      el("span", { style: "width:" + Math.round(100 * Math.min(colaPdf.i, total) / total) + "%" })) : null);
+}
+
+function pintarLeyendo(n, total, archivo) {
+  vaciar(colaPdf.dialogo, encabezadoCola("Leyendo los PDF (" + n + "/" + total + ")…", archivo), el("p", { texto: "Cargando…" }));
+}
+
+function siguienteDeCola(resultado) {
+  const item = colaPdf.items[colaPdf.i];
+  item.resultado = resultado;
+  colaPdf.i += 1;
+  if (colaPdf.items.length === 1 && colaPdf.dialogo) {
+    colaPdf.dialogo.close();
+    const numero = (item.leido && item.leido.numero) || (item.comparacion && item.comparacion.oc.numero) || "";
+    if (resultado === "creada") mostrarAviso("Se creó la OC " + numero + " con los datos confirmados.", "exito");
+    if (resultado === "actualizada") mostrarAviso("Se aplicó lo marcado del PDF a la OC " + numero + ".", "exito");
     return;
   }
-  abrirDialogoNuevaOC(leido, respuesta.archivo);
+  mostrarItemCola();
+}
+
+function mostrarItemCola() {
+  const dialogo = colaPdf.dialogo;
+  if (!dialogo) return;
+  const { items, i } = colaPdf;
+  if (i >= items.length) { pintarResumenCola(); return; }
+  const item = items[i];
+  const paso = items.length > 1 ? " (" + (i + 1) + "/" + items.length + ")" : "";
+  const saltear = el("button", { type: "button", clase: "secundario", texto: items.length > 1 ? "Saltear" : "Cancelar",
+    onclick: () => (items.length > 1 ? siguienteDeCola("salteada") : dialogo.close()) });
+  const cancelarResto = items.length > 1 && i < items.length - 1
+    ? el("button", { type: "button", clase: "enlace", texto: "Cancelar las que faltan", onclick: () => {
+      for (let k = i; k < items.length; k++) items[k].resultado = items[k].resultado || "salteada";
+      colaPdf.i = items.length; mostrarItemCola(); } })
+    : null;
+  if (item.tipo === "error") {
+    vaciar(dialogo, encabezadoCola("No se pudo leer el PDF" + paso, item.archivo),
+      el("div", { clase: "mensaje mensaje-error", role: "alert" }, el("p", { texto: item.error })),
+      el("div", { clase: "acciones dialogo-acciones" },
+        el("button", { type: "button", texto: items.length > 1 ? "Seguir" : "Cerrar",
+          onclick: () => (items.length > 1 ? siguienteDeCola("error") : dialogo.close()) }), cancelarResto));
+    document.getElementById("cola-titulo").focus();
+    return;
+  }
+  if (item.tipo === "nueva") {
+    const leido = item.leido;
+    const crear = el("button", { type: "button", texto: items.length > 1 && i < items.length - 1 ? "Crear OC y seguir" : "Crear OC",
+      onclick: async () => {
+        crear.disabled = true;
+        const ficha = await crearNuevaOC(dialogo, leido, item.archivo);
+        crear.disabled = false;
+        if (ficha) siguienteDeCola("creada");
+      } });
+    vaciar(dialogo, encabezadoCola("Confirmar datos" + paso + " — OC nueva " + (leido.numero || ""),
+      item.archivo + ": revisá lo que se leyó del PDF y corregí lo que haga falta."),
+      formularioNuevaOC(leido),
+      el("div", { clase: "acciones dialogo-acciones" }, crear, saltear, cancelarResto));
+    const objeto = document.getElementById("noc-objeto");
+    if (objeto) objeto.focus();
+    return;
+  }
+  // OC que ya está en el gestor: comparación con el PDF.
+  const comparacion = item.comparacion;
+  const cuerpo = el("div", {});
+  const aplicar = el("button", { type: "button", texto: items.length > 1 && i < items.length - 1 ? "Aplicar y seguir" : "Aplicar lo marcado",
+    onclick: async () => {
+      aplicar.disabled = true;
+      const ok = await aplicarPdfOC(cuerpo, comparacion, async (ficha) => {
+        if (colaPdf.alTerminar) await colaPdf.alTerminar(ficha);
+      });
+      aplicar.disabled = false;
+      if (ok) siguienteDeCola("actualizada");
+    } });
+  vaciar(dialogo, encabezadoCola("Confirmar datos" + paso + " — OC " + comparacion.oc.numero + " (ya está en el gestor)",
+    item.archivo + ": tildá lo que querés tomar del PDF."), cuerpo,
+    el("div", { clase: "acciones dialogo-acciones" }, aplicar, saltear, cancelarResto));
+  pintarRevisionPdf(cuerpo, comparacion, null, { sinBotones: true });
+}
+
+function pintarResumenCola() {
+  const dialogo = colaPdf.dialogo;
+  const textos = { creada: "Creada", actualizada: "Actualizada", salteada: "Salteada", error: "No se pudo leer" };
+  const tonos = { creada: "exito", actualizada: "info", salteada: "neutra", error: "error" };
+  const cuenta = (r) => colaPdf.items.filter((x) => x.resultado === r).length;
+  const filas = colaPdf.items.map((x) => el("tr", {},
+    el("td", { clase: "izq", texto: x.archivo }),
+    el("td", { texto: (x.leido && x.leido.numero) || (x.comparacion && x.comparacion.oc.numero) || "—" }),
+    el("td", {}, el("span", { clase: "pastilla pastilla-" + (tonos[x.resultado] || "neutra"), texto: textos[x.resultado] || "Salteada" }))));
+  vaciar(dialogo, encabezadoCola("Listo",
+      [cuenta("creada") + " creadas", cuenta("actualizada") + " actualizadas", cuenta("salteada") + " salteadas",
+        cuenta("error") ? cuenta("error") + " sin leer" : ""].filter(Boolean).join(" · ")),
+    el("div", { clase: "tabla-desplazable" }, el("table", {},
+      el("thead", {}, el("tr", {}, el("th", { scope: "col", clase: "izq", texto: "Archivo" }), el("th", { scope: "col", texto: "OC" }),
+        el("th", { scope: "col", texto: "Resultado" }))),
+      el("tbody", {}, ...filas))),
+    el("div", { clase: "acciones dialogo-acciones" }, el("button", { type: "button", texto: "Cerrar", onclick: () => dialogo.close() })));
+  document.getElementById("cola-titulo").focus();
 }
 
 function textoCantidad(valor) {
   return valor === null || valor === undefined ? "" : String(valor).replace(".", ",");
 }
 
-function abrirDialogoNuevaOC(leido, archivo) {
-  const anterior = document.getElementById("dialogo-nueva-oc");
-  if (anterior) anterior.remove();
+/** Formulario de la OC nueva con lo leído del PDF (va dentro de la ventana de revisión). */
+function formularioNuevaOC(leido) {
   const efectorPorDefecto = leido.efector || (estado.efector === "CASPH" ? "CASPH" : "HBI");
   const tipo = selector(leido.tipo || "SERVICIO", [["SERVICIO", "Servicio"], ["BIEN", "Bien"], ["PROVISION", "Provisión"]]);
   const campo = (id, etiqueta, control, ayuda) => campoFormulario("noc-" + id, etiqueta, control, ayuda);
@@ -1227,7 +1537,6 @@ function abrirDialogoNuevaOC(leido, archivo) {
     campo("dia", "Día de inicio del período", entrada(String(leido.dia_inicio_periodo || 1), { type: "number", min: "1", max: "28" }),
       "Sale del día en que arranca la vigencia (1 = mes calendario)."));
   const mostrarPeriodo = () => { periodo.hidden = tipo.value === "BIEN"; };
-  tipo.addEventListener("change", mostrarPeriodo);
   const centralizada = casilla("noc-centralizada", "Es centralizada (UOC: Nivel central)", leido.centralizada === 1);
 
   const filas = (leido.renglones || []).map((r) => {
@@ -1254,11 +1563,7 @@ function abrirDialogoNuevaOC(leido, archivo) {
     ? el("details", {}, el("summary", { texto: "Texto completo del objeto en el PDF" }), el("p", { clase: "texto-suave", texto: leido.objeto_completo }))
     : null;
 
-  const formulario = el("form", { method: "dialog", clase: "formulario", novalidate: true },
-    el("div", { clase: "dialogo-encabezado" },
-      el("h2", { id: "noc-titulo", texto: "Nueva OC " + (leido.numero || "") }),
-      el("p", { clase: "texto-suave", texto: "Datos leídos del PDF" + (archivo ? " (" + archivo + ")" : "")
-        + ". Revisalos y corregí lo que haga falta antes de crearla." })),
+  const formulario = el("form", { clase: "formulario", novalidate: true, onsubmit: (e) => e.preventDefault() },
     avisos,
     el("div", { clase: "grilla-dialogo" },
       campo("numero", "N° de OC", entrada(leido.numero || "", { inputmode: "numeric" })),
@@ -1282,17 +1587,13 @@ function abrirDialogoNuevaOC(leido, archivo) {
       el("thead", {}, el("tr", {}, ...["Rgl.", "Código", "Descripción", "Cantidad", "Unidad", "Precio $", "Importe $",
         "Desglose: cant.", "Unidad", "Precio $"].map((t) => el("th", { scope: "col", texto: t })))),
       el("tbody", {}, ...filas))),
-    el("div", { clase: "acciones dialogo-acciones" },
-      el("button", { type: "button", id: "noc-crear", texto: "Crear OC", onclick: () => crearNuevaOC(dialogo, leido, archivo) }),
-      el("button", { type: "button", clase: "secundario", texto: "Cancelar", onclick: () => dialogo.close() })));
-  const dialogo = el("dialog", { id: "dialogo-nueva-oc", clase: "dialogo", "aria-labelledby": "noc-titulo" }, formulario);
-  dialogo.addEventListener("close", () => dialogo.remove());
-  document.body.append(dialogo);
-  mostrarPeriodo();
-  dialogo.showModal();
-  document.getElementById("noc-objeto").focus();
+  );
+  formulario.addEventListener("change", (e) => { if (e.target === tipo) mostrarPeriodo(); });
+  setTimeout(mostrarPeriodo, 0);
+  return formulario;
 }
 
+/** Crea la OC con lo confirmado en la ventana; devuelve la ficha o null (el error queda en la ventana). */
 async function crearNuevaOC(dialogo, leido, archivo) {
   const valor = (id) => document.getElementById("noc-" + id).value.trim();
   const renglones = [];
@@ -1301,14 +1602,14 @@ async function crearNuevaOC(dialogo, leido, archivo) {
     const pos = Number(fila.dataset.pos);
     const precio = pesosACentavos(v("precio"));
     const importe = pesosACentavos(v("importe"));
-    if (precio === null || Number.isNaN(precio)) { avisoEnDialogo(dialogo, "Revisá el precio del renglón " + pos + "."); return; }
-    if (Number.isNaN(importe)) { avisoEnDialogo(dialogo, "Revisá el importe del renglón " + pos + "."); return; }
+    if (precio === null || Number.isNaN(precio)) { avisoEnDialogo(dialogo, "Revisá el precio del renglón " + pos + "."); return null; }
+    if (Number.isNaN(importe)) { avisoEnDialogo(dialogo, "Revisá el importe del renglón " + pos + "."); return null; }
     const renglon = { pos, codigo: v("codigo"), descripcion: v("descripcion"), cantidad: v("cantidad") || "1", unidad: v("unidad"),
       precio_centavos: precio };
     if (importe !== null) renglon.importe_centavos = importe;
     if (v("desglose_cantidad")) {
       const precioDesglose = pesosACentavos(v("desglose_precio"));
-      if (precioDesglose === null || Number.isNaN(precioDesglose)) { avisoEnDialogo(dialogo, "Revisá el precio del desglose del renglón " + pos + "."); return; }
+      if (precioDesglose === null || Number.isNaN(precioDesglose)) { avisoEnDialogo(dialogo, "Revisá el precio del desglose del renglón " + pos + "."); return null; }
       Object.assign(renglon, { desglose_cantidad: v("desglose_cantidad"), desglose_unidad: v("desglose_unidad") || "MES",
         desglose_precio_centavos: precioDesglose });
     }
@@ -1325,22 +1626,12 @@ async function crearNuevaOC(dialogo, leido, archivo) {
     Object.assign(datos, { vig_desde: valor("desde") || null, vig_hasta: valor("hasta") || null,
       dia_inicio_periodo: Number(valor("dia") || "1") });
   }
-  if (!datos.objeto) { avisoEnDialogo(dialogo, "Falta el objeto de la contratación."); return; }
+  if (!datos.objeto) { avisoEnDialogo(dialogo, "Falta el objeto de la contratación."); return null; }
   const cabecera = Object.fromEntries(Object.entries(leido).filter(([k]) => k !== "renglones" && k !== "avisos"));
-  document.getElementById("noc-crear").disabled = true;
   const ficha = await api("POST", "/api/oc/desde-pdf", { oc: datos, archivo: archivo || "", leido: cabecera });
-  if (!ficha) {
-    const boton = document.getElementById("noc-crear");
-    if (boton) boton.disabled = false;
-    const aviso = document.querySelector("#avisos .mensaje-error p");
-    if (aviso) avisoEnDialogo(dialogo, aviso.textContent);
-    return;
-  }
-  dialogo.close();
-  ocEstado.ficha = ficha;
-  pintarFichaOC(ficha);
-  listarOC();
-  mostrarAviso("OC " + ficha.oc.numero + " creada desde su PDF.", "exito");
+  if (!ficha) { errorAlaVentana(); return null; }
+  limpiarAvisos();
+  return ficha;
 }
 
 /** Mensaje de error dentro de la ventana (los avisos de la página quedan tapados por el fondo del diálogo). */

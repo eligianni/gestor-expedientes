@@ -210,7 +210,7 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
     """OC con su proveedor, filtradas por efector, texto (sin tildes ni mayúsculas) y exclusión."""
     sql = (
         "SELECT oc.numero, oc.efector, oc.sap, p.razon_social, oc.objeto, oc.tipo, oc.comodato, oc.centralizada, "
-        "oc.vig_desde, oc.vig_hasta, oc.excluida, oc.origen, oc.cerrada_sap, oc.version, "
+        "oc.vig_desde, oc.vig_hasta, oc.excluida, oc.origen, oc.cerrada_sap, oc.version, oc.concepto_corto, "
         "(SELECT COUNT(*) FROM renglon r WHERE r.oc = oc.numero) AS renglones, "
         "(SELECT COALESCE(SUM(r.importe_centavos), 0) FROM renglon r WHERE r.oc = oc.numero) AS importe_centavos "
         "FROM oc JOIN proveedor p ON p.sap = oc.sap"
@@ -232,8 +232,10 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
         centro = centro_de_renglon({"crudo": r["crudo"]})
         if centro and centro not in CENTROS_CENTRALES and centro not in centros_propios(parametros_base, r["efector"]):
             otros[r["oc"]] = otros.get(r["oc"], 0) + 1
+    con_pdf = ocs_con_pdf(con)
     for f in filas:
         f["renglones_otro_centro"] = otros.get(f["numero"], 0)
+        f["pdf_cargado"] = f["numero"] in con_pdf
     buscado = util.normalizar_texto(texto or "")
     if buscado:
         filas = [
@@ -290,14 +292,27 @@ def ficha_oc(con, numero):
         for fila in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (oc["numero"],))
     ], centros_propios(db.leer_parametros(con), oc["efector"]))
     expedientes = [
-        dict(fila)
+        _resumen_expediente_oc(dict(fila))
         for fila in con.execute(
-            "SELECT id, tipo, periodo, estado, factura, version FROM expediente WHERE oc = ? ORDER BY periodo, id",
+            "SELECT id, tipo, periodo, estado, factura, version, datos FROM expediente WHERE oc = ? ORDER BY periodo, id",
             (oc["numero"],),
         )
     ]
     return {"oc": oc, "proveedor": proveedor, "renglones": renglones, "expedientes": expedientes,
             "pdf_oc": ultimo_pdf_oc(con, oc["numero"])}
+
+
+def _resumen_expediente_oc(fila):
+    """Fila de «Expedientes de esta OC»: importe de la factura y de dónde sale su consumo."""
+    datos = _datos_de(fila)
+    factura = datos.get("factura") if isinstance(datos.get("factura"), dict) else {}
+    centavos = factura.get("centavos")
+    fila.pop("datos", None)
+    fila["importe_centavos"] = centavos if isinstance(centavos, int) and not isinstance(centavos, bool) else None
+    fila["consumo_remitos"] = bool(_cantidades_de_remitos(datos))
+    manual = datos.get("consumo_manual") if isinstance(datos.get("consumo_manual"), dict) else {}
+    fila["consumo_manual"] = {str(k): str(v) for k, v in manual.items()}
+    return fila
 
 
 # --- Escritura -------------------------------------------------------------
@@ -495,12 +510,27 @@ def _propuesta_renglon(leido):
     }
 
 
+_PATRON_PDF = '%"fuente": "pdf_oc"%'
+
+
+def ocs_con_pdf(con):
+    """Números de OC que tienen cargado su PDF."""
+    numeros = set()
+    for fila in con.execute("SELECT clave FROM evento WHERE tabla = 'oc' AND accion = 'IMPORTACION' AND despues LIKE ?",
+                            (_PATRON_PDF,)):
+        try:
+            numeros.add(str(json.loads(fila["clave"]).get("numero")))
+        except (ValueError, AttributeError):
+            continue
+    return numeros
+
+
 def ultimo_pdf_oc(con, numero):
     """Última carga del PDF de la OC ({fecha, usuario, archivo}) o None."""
     fila = con.execute(
         "SELECT fecha, usuario, despues FROM evento WHERE tabla = 'oc' AND accion = 'IMPORTACION' AND clave = ? "
-        "ORDER BY id DESC LIMIT 1",
-        (json.dumps({"numero": str(numero)}, ensure_ascii=False, sort_keys=True),),
+        "AND despues LIKE ? ORDER BY id DESC LIMIT 1",
+        (json.dumps({"numero": str(numero)}, ensure_ascii=False, sort_keys=True), _PATRON_PDF),
     ).fetchone()
     if fila is None:
         return None
@@ -1099,8 +1129,22 @@ def cantidades_del_expediente(exp):
     datos = exp.get("datos")
     if isinstance(datos, str):
         datos = _datos_de(exp)
+    cantidades = _cantidades_de_remitos(datos or {})
+    if cantidades:
+        return cantidades
+    # Meses ya facturados sin remitos cargados (p. ej. migrados): el consumo se carga a mano.
+    manual = (datos or {}).get("consumo_manual")
+    for pos, cantidad in (manual.items() if isinstance(manual, dict) else []):
+        try:
+            cantidades[int(pos)] = _cantidad(cantidad)
+        except (TypeError, ValueError):
+            continue
+    return cantidades
+
+
+def _cantidades_de_remitos(datos):
     cantidades = {}
-    for remito in (datos or {}).get("remitos") or []:
+    for remito in datos.get("remitos") or []:
         if remito.get("es_equipo_comodato"):
             continue
         for item in remito.get("items") or []:
@@ -1687,6 +1731,50 @@ def guardar_gde(con, id_expediente, version, gde):
         contenido = _datos_de(actual)
         contenido["gde"] = limpio
         contenido["historial"].append(_entrada_historial("GDE", actual["estado"]))
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, {
+            "datos": contenido, "actualizado": db.ahora_utc(),
+        })
+    return obtener_expediente(con, id_expediente)
+
+
+def guardar_consumo_manual(con, id_expediente, version, cantidades):
+    """Consumo de un mes ya facturado que no tiene remitos cargados: {pos: cantidad} por renglón de la OC.
+
+    Solo para expedientes sin cantidades en sus remitos (si las tiene, el consumo sale de ahí). Cantidad vacía o 0 no se guarda.
+    """
+    version = _version(version)
+    if not isinstance(cantidades, dict):
+        raise ErrorValidacion("Faltan las cantidades consumidas por renglón.")
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        if not actual.get("oc"):
+            raise ErrorNegocio("El expediente %s no tiene OC: no hay renglones para cargarle consumo." % actual["id"])
+        contenido = _datos_de(actual)
+        if _cantidades_de_remitos(contenido):
+            raise ErrorNegocio("El expediente %s ya tiene el consumo de sus remitos; se corrige desde el paso 2." % actual["id"])
+        posiciones = {f["pos"] for f in con.execute("SELECT pos FROM renglon WHERE oc = ?", (actual["oc"],))}
+        limpio = {}
+        for pos, valor in cantidades.items():
+            try:
+                pos_int = int(pos)
+            except (TypeError, ValueError):
+                raise ErrorValidacion("Renglón inválido: %s." % pos) from None
+            if pos_int not in posiciones:
+                raise ErrorValidacion("La OC %s no tiene el renglón %s." % (actual["oc"], pos_int))
+            texto = str(valor if valor is not None else "").strip()
+            if not texto:
+                continue
+            try:
+                cantidad = util.a_decimal(texto, decimales=None)
+            except (TypeError, ValueError):
+                raise ErrorValidacion("Revisá la cantidad del renglón %s: «%s» no es un número." % (pos_int, texto)) from None
+            if cantidad < 0:
+                raise ErrorValidacion("La cantidad del renglón %s no puede ser negativa." % pos_int)
+            if cantidad:
+                limpio[str(pos_int)] = str(cantidad)
+        contenido["consumo_manual"] = limpio
+        contenido["historial"].append(_entrada_historial("CONSUMO_MANUAL", actual["estado"]))
         db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, {
             "datos": contenido, "actualizado": db.ahora_utc(),
         })
