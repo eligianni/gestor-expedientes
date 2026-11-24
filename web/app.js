@@ -799,15 +799,14 @@ async function pintarConsumoOC(numero, destino) {
   const { periodos, filas } = consumo.grilla;
   const porPos = Object.fromEntries(consumo.renglones.map((r) => [r.pos, r]));
   if (!filas.length) { vaciar(destino, el("p", { clase: "texto-suave", texto: "La OC no tiene renglones." })); return; }
-  const encabezados = ["Rgl.", "Descripción", "Cantidad OC", "Consumo previo", ...periodos.map(textoPeriodo), "Total consumido", "Saldo", "%"];
+  const encabezados = ["Rgl.", "Descripción", "Cantidad OC", ...periodos.map(textoPeriodo), "Total consumido", "Saldo", "%"];
   const cuerpo = filas.map((f) => {
     const r = porPos[f.pos] || {};
-    const total = Number(r.consumo_previo || 0) + Number(r.validado || 0);
+    const total = Number(r.validado || 0);
     return el("tr", { clase: f.por_agotarse ? "fila-por-agotarse" : null },
       el("td", { clase: "numero", texto: f.pos }),
       el("td", { clase: "izq", texto: f.descripcion }),
       el("td", { clase: "numero sin-corte", texto: textoCantidad(f.cantidad_oc) + (f.unidad ? " " + f.unidad : "") }),
-      el("td", { clase: "numero", texto: textoCantidad(r.consumo_previo) }),
       ...periodos.map((p) => {
         const valor = f.celdas[p];
         return el("td", { clase: "numero" + (valor && valor !== "0" ? "" : " celda-vacia"), texto: valor && valor !== "0" ? textoCantidad(valor) : "·" });
