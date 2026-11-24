@@ -1825,6 +1825,56 @@ def guardar_consumo_manual(con, id_expediente, version, cantidades):
     return obtener_expediente(con, id_expediente)
 
 
+_CAMPOS_FACTURA_REVISION = ("numero", "fecha", "centavos", "cae", "vto_cae", "destinatario", "domicilio",
+                            "periodo_desde", "periodo_hasta", "menciona")
+
+
+def revisar_comprobantes(con, id_expediente, factura=None, sii=None, cuit_emisor=None):
+    """Controles de factura y SII sobre lo leído de los PDF (o lo cargado en el paso 3), sin guardar nada.
+
+    Corre los mismos controles del paso 4 (ámbitos factura y sii) y suma lo que solo se ve con los PDF:
+    CUIT del emisor y del SII contra el proveedor, y SAP del SII contra el expediente.
+    """
+    ctx = contexto_controles(con, id_expediente)
+    datos = copy.deepcopy(ctx["expediente"].get("datos") or {})
+    if isinstance(factura, dict):
+        actual = dict(datos.get("factura") or {})
+        actual.update({k: v for k, v in factura.items() if k in _CAMPOS_FACTURA_REVISION})
+        datos["factura"] = actual
+    if isinstance(sii, dict) and sii:
+        datos["sii"] = sii
+    ctx["expediente"] = dict(ctx["expediente"], datos=datos)
+    resultados = [r for r in controles.evaluar(ctx)["resultados"] if r["ambito"] in ("factura", "sii")]
+    proveedor = ctx.get("proveedor") or {}
+    cuit_proveedor = re.sub(r"\D", "", proveedor.get("cuit") or "")
+
+    def extra(codigo, ambito, mensaje):
+        resultados.append({"codigo": codigo, "nivel": "error", "ambito": ambito, "mensaje": mensaje, "referencia": None})
+
+    if cuit_emisor and cuit_proveedor and re.sub(r"\D", "", cuit_emisor) != cuit_proveedor:
+        extra("cuit_factura", "factura", "El CUIT de la factura (%s) no es el del proveedor %s (%s)."
+              % (cuit_emisor, proveedor.get("razon_social") or "", proveedor.get("cuit")))
+    datos_sii = datos.get("sii") or {}
+    if datos_sii:
+        cuit_sii = re.sub(r"\D", "", datos_sii.get("cuit") or "")
+        if cuit_sii and cuit_proveedor and cuit_sii != cuit_proveedor:
+            extra("cuit_sii", "sii", "El CUIT cargado en el SII (%s) no es el del proveedor (%s)."
+                  % (datos_sii.get("cuit"), proveedor.get("cuit")))
+        sap = ctx["expediente"].get("sap")
+        if datos_sii.get("sap") and sap and util.sap_sin_ceros(datos_sii["sap"]) != util.sap_sin_ceros(sap):
+            extra("sap_sii", "sii", "El N° SAP del SII (%s) no es el del proveedor del expediente (%s)." % (datos_sii["sap"], sap))
+        letra_factura = None
+        try:
+            letra_factura = util.normalizar_factura(datos.get("factura", {}).get("numero") or "")[1]
+        except ValueError:
+            pass
+        if letra_factura and datos_sii.get("letra") and datos_sii["letra"] != letra_factura:
+            extra("letra_sii", "sii", "En el SII el comprobante es %s y la factura es letra %s."
+                  % (datos_sii.get("tipo_comprobante"), letra_factura))
+    errores = sum(1 for r in resultados if r["nivel"] == "error")
+    return {"resultados": resultados, "errores": errores}
+
+
 # --- Calendario (paso 22) ---------------------------------------------------
 
 ESTADOS_CALENDARIO = {

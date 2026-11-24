@@ -48,7 +48,7 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | `gestor/negocio.py`, `gestor/importar.py` | `db`, `util`, `letras`, `xlsx`, `controles`, `textos` | `server` |
 | `gestor/controles.py` | `util`, `letras` | leer la base (recibe `ctx` de `armar_contexto`) |
 | `gestor/pdf_texto.py` | stdlib | base, archivos, otros módulos de `gestor` |
-| `gestor/oc_pdf.py` | `util` | base, archivos, `negocio` |
+| `gestor/oc_pdf.py`, `gestor/factura_pdf.py` | `util` | base, archivos, `negocio` |
 | `gestor/tablas.py` | `db`, `negocio` (solo lectura), `util`, `xlsx_escritor` | escribir la base, `server` |
 | `gestor/migracion.py` | `db`, `util`, `xlsx`, `negocio` | `server` |
 | `gestor/textos.py`, `gestor/letras.py`, `gestor/util.py` | stdlib, `util`, `letras` | base, archivos, `negocio` |
@@ -69,6 +69,7 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | Controles | `gestor/controles.py` → `CONTROLES`, `NOTAS` |
 | Tokens visuales | `:root` de `web/style.css` |
 | Texto de un PDF digital | `gestor/pdf_texto.py` → `texto_de_pdf` (sin OCR) |
+| Datos de la factura desde su PDF | `gestor/factura_pdf.py` → `leer_factura` (varios formatos; sin descripción de ítems) |
 | Datos de la OC desde su PDF | `gestor/oc_pdf.py` → `leer_oc`; comparar/aplicar en `negocio.comparar_oc_pdf` / `aplicar_oc_pdf` |
 | Migración del seguimiento en Excel | `gestor/migracion.py` (NUMERACIÓN + solapa HBI 20252026 → expedientes, entregas) |
 | Pantalla Tablas y su Excel | `gestor/tablas.py` (columnas por tabla) + `web/app.js` (filtros, orden, vistas) |
@@ -187,6 +188,10 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - Paso 2 (remitos): formulario fila por fila (N°, fecha, fecha de firma, casilla de equipo en comodato por remito), hasta
   `negocio.MAX_REMITOS` (20) por expediente; va por `POST .../remitos/pegar` con `remitos: [...]` (el texto pegado sigue
   aceptado). Un número repetido actualiza fechas y conserva cantidades. Las cantidades se cargan después, por remito y renglón.
+- Paso 3: «Leer y controlar» sube el PDF de la factura (`POST /api/comprobantes/factura-pdf`) y/o el del SII
+  (`/api/comprobantes/sii-pdf`, mismo parser que el texto pegado) y controla enseguida con
+  `POST /api/expedientes/<id>/comprobantes/revisar` → `negocio.revisar_comprobantes`: los controles de ámbito factura/sii
+  del paso 4 sobre lo leído, más CUIT de factura y SII contra el proveedor, SAP y letra del SII. No guarda nada.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente
   (`negocio.guardar_consumo_manual`, `PUT /api/expedientes/<id>/consumo-manual`); `cantidades_del_expediente` lo usa solo
   si los remitos no tienen cantidades. La ficha de la OC muestra el consumo como tabla (renglón × período).

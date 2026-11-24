@@ -13,8 +13,8 @@ import threading
 import urllib.request
 from urllib.parse import parse_qs, quote, urlsplit
 
-from gestor import (APP_ID, __version__, comprobantes, config, controles, db, docx_gen, exportes, importar, migracion, negocio, oc_pdf,
-                    pdf_texto, tablas, textos, xlsx, xlsx_escritor)
+from gestor import (APP_ID, __version__, comprobantes, config, controles, db, docx_gen, exportes, factura_pdf, importar, migracion, negocio,
+                    oc_pdf, pdf_texto, tablas, textos, xlsx, xlsx_escritor)
 
 WEB = config.RAIZ / "web"
 
@@ -602,6 +602,46 @@ def comprobantes_analizar(h, m, cuerpo):
     return 200, _ok(comprobantes.analizar_texto_sii(texto))
 
 
+def _texto_pdf_de_pedido(h, cuerpo, que):
+    """(nombre, texto) del PDF subido en `archivo` (o del texto pegado en `texto`)."""
+    campos, archivos = leer_multipart(h, cuerpo)
+    if archivos.get("archivo") and archivos["archivo"][1]:
+        nombre, contenido = archivos["archivo"]
+        try:
+            return nombre, pdf_texto.texto_de_pdf(contenido)
+        except pdf_texto.PdfError as error:
+            raise ErrorHTTP(422, "negocio", str(error)) from None
+    texto = (campos.get("texto") or "").strip()
+    if not texto:
+        raise validacion("Elegí el PDF %s." % que)
+    return "", texto
+
+
+def factura_pdf_leer(h, m, cuerpo):
+    """PDF de la factura → datos para el paso 3 (no guarda nada)."""
+    nombre, texto = _texto_pdf_de_pedido(h, cuerpo, "de la factura")
+    destino = db.leer_parametros(h.conexion()).get("destinatario_factura") or {}
+    leido = factura_pdf.leer_factura(texto, destino.get("nombre") or "INSSJP", destino.get("domicilio") or "PERU 169")
+    if not any(leido.get(c) for c in ("numero", "cae", "centavos")):
+        raise ErrorHTTP(422, "negocio", "No se encontraron datos de una factura en el PDF (¿es un escaneo?).")
+    return 200, _ok({"leido": leido, "archivo": nombre})
+
+
+def sii_pdf_leer(h, m, cuerpo):
+    """PDF de la carga en el SII → datos del SII (no guarda nada)."""
+    nombre, texto = _texto_pdf_de_pedido(h, cuerpo, "de la carga en el SII")
+    sii = comprobantes.analizar_texto_sii(texto)
+    if not sii.get("cae") and not sii.get("nro_comprobante"):
+        raise ErrorHTTP(422, "negocio", "El PDF no parece la carga de la factura en el SII (no tiene CAE ni N° de comprobante).")
+    return 200, _ok({"sii": sii, "archivo": nombre})
+
+
+def comprobantes_revisar(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.revisar_comprobantes(h.conexion(), m.group("id"), datos.get("factura"), datos.get("sii"),
+                                                 datos.get("cuit_emisor")))
+
+
 def remitos_pegar(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.pegar_remitos(
@@ -661,6 +701,9 @@ RUTAS = [
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)"), expediente_editar),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/anular"), expediente_anular),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/remitos/pegar"), remitos_pegar),
+    ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/comprobantes/revisar"), comprobantes_revisar),
+    ("POST", re.compile(r"/api/comprobantes/factura-pdf"), factura_pdf_leer),
+    ("POST", re.compile(r"/api/comprobantes/sii-pdf"), sii_pdf_leer),
     ("POST", re.compile(r"/api/comprobantes/analizar"), comprobantes_analizar),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/controles"), expediente_controles),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/notas"), expediente_nota),
