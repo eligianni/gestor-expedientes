@@ -188,6 +188,8 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - Paso 2 (remitos): formulario fila por fila (N°, fecha, fecha de firma, casilla de equipo en comodato por remito), hasta
   `negocio.MAX_REMITOS` (20) por expediente; va por `POST .../remitos/pegar` con `remitos: [...]` (el texto pegado sigue
   aceptado). Un número repetido actualiza fechas y conserva cantidades. Las cantidades se cargan después, por remito y renglón.
+  Los remitos ya cargados (también los migrados, que vienen sin fecha ni cantidades) se editan en el mismo paso: número,
+  fechas, comodato y cantidades, y se guardan juntos con `PUT /api/expedientes/<id>` (`datos.remitos`).
 - Paso 3: «Leer y controlar» sube el PDF de la factura (`POST /api/comprobantes/factura-pdf`) y/o el del SII
   (`/api/comprobantes/sii-pdf`, mismo parser que el texto pegado) y controla enseguida con
   `POST /api/expedientes/<id>/comprobantes/revisar` → `negocio.revisar_comprobantes`: los controles de ámbito factura/sii

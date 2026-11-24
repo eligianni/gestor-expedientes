@@ -1967,40 +1967,45 @@ function pintarPaso2() {
     actualizarFilasRemito();
     return;
   }
-  partes.push(el("h3", { texto: "Cantidades de cada remito (" + remitos.length + ")" }),
-    el("p", { clase: "texto-suave", texto: "Para cada remito, poné cuánto se entregó de cada renglón de la OC (vacío = nada). "
-      + "Los remitos del equipo en comodato no llevan cantidades." }));
+  partes.push(el("h3", { texto: "Remitos cargados y sus cantidades (" + remitos.length + ")" }),
+    el("p", { clase: "texto-suave", texto: "Podés corregir el número, las fechas y si es del equipo en comodato. Para cada remito, poné "
+      + "cuánto se entregó de cada renglón de la OC (vacío = nada); los del equipo en comodato no llevan cantidades." }));
   const formulario = el("form", { clase: "formulario", novalidate: true, onsubmit: guardarRemitos });
   remitos.forEach((remito, i) => {
-    const bloque = el("fieldset", { clase: "panel" },
-      el("legend", { texto: "Remito " + remito.numero + " — " + remito.fecha
-        + (remito.fecha_firma ? " (firmado " + remito.fecha_firma + ")" : "")
-        + (remito.es_equipo_comodato ? " — equipo en comodato" : "") }));
-    if (!remito.es_equipo_comodato) {
-      const items = new Map((remito.items || []).map((it) => [Number(it.pos), it]));
-      const filas = renglones.map((r) => {
-        const item = items.get(Number(r.pos)) || {};
-        const idBase = "rem-" + i + "-" + r.pos;
-        return el("tr", {},
-          el("td", { clase: "numero", texto: r.pos }),
-          el("td", { clase: "izq" }, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
-          el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
-            "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + remito.numero })),
-          el("td", {}, entrada(item.codigo || "", { id: idBase + "-codigo", clase: "entrada-corta mono", placeholder: r.codigo || "",
-            "aria-label": "Código del renglón " + r.pos + " como figura en el remito " + remito.numero })));
-      });
-      bloque.append(el("div", { clase: "tabla-desplazable" }, el("table", {},
-        el("thead", {}, el("tr", {}, ...["Pos.", "Renglón de la OC", "Cantidad", "Código en el remito (vacío = igual)"]
+    // Cada remito ya cargado se puede corregir: número, fechas, si es del equipo en comodato y sus cantidades.
+    const comodato = el("input", { type: "checkbox", id: "rem-" + i + "-comodato", clase: "casilla-tabla", checked: Boolean(remito.es_equipo_comodato) });
+    const cantidades = el("div", { clase: "cantidades-remito", hidden: Boolean(remito.es_equipo_comodato) });
+    comodato.addEventListener("change", () => { cantidades.hidden = comodato.checked; });
+    const bloque = el("fieldset", { clase: "panel remito-cargado" + (remito.fecha ? "" : " remito-incompleto") },
+      el("legend", { texto: "Remito " + (i + 1) + (remito.fecha ? "" : " — falta la fecha") }),
+      el("div", { clase: "grilla-remito" },
+        campoFormulario("rem-" + i + "-numero", "N° de remito", entrada(remito.numero || "", { clase: "mono", autocomplete: "off" })),
+        campoFormulario("rem-" + i + "-fecha", "Fecha del remito", entrada(remito.fecha || "", { type: "date" })),
+        campoFormulario("rem-" + i + "-firma", "Fecha de firma (si tiene)", entrada(remito.fecha_firma || "", { type: "date" })),
+        el("div", { clase: "campo campo-casilla" }, comodato,
+          el("label", { for: "rem-" + i + "-comodato", texto: "Equipo en comodato" }))),
+      cantidades);
+    const items = new Map((remito.items || []).map((it) => [Number(it.pos), it]));
+    const filas = renglones.map((r) => {
+      const item = items.get(Number(r.pos)) || {};
+      const idBase = "rem-" + i + "-" + r.pos;
+      return el("tr", {},
+        el("td", { clase: "numero", texto: r.pos }),
+        el("td", { clase: "izq" }, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
+        el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
+          "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + (i + 1) })));
+    });
+    cantidades.append(el("div", { clase: "tabla-desplazable" }, el("table", {},
+        el("thead", {}, el("tr", {}, ...["Pos.", "Renglón de la OC", "Cantidad"]
           .map((t) => el("th", { scope: "col", clase: t === "Renglón de la OC" ? "izq" : null, texto: t })))),
-        el("tbody", {}, ...filas))));
-      bloque.append(casilla("rem-" + i + "-aclara", "Aclara el período (no se informa fuera de período)", remito.aclara_periodo));
-    }
+        el("tbody", {}, ...filas))),
+      casilla("rem-" + i + "-aclara", "Aclara el período (no se informa fuera de período)", remito.aclara_periodo));
     bloque.append(el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario",
       texto: "Quitar este remito", onclick: () => quitarRemito(i) })));
     formulario.append(bloque);
   });
   formulario.append(el("div", { clase: "acciones" },
-    el("button", { type: "submit", texto: "Guardar cantidades" }),
+    el("button", { type: "submit", texto: "Guardar remitos y cantidades" }),
     botonCertificado("secundario"),
     el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 3", onclick: () => mostrarPaso(3) })),
     el("p", { clase: "nota-pie", texto: "El certificado de validación sale con el período y las cantidades guardadas: "
@@ -2083,14 +2088,22 @@ async function pegarRemitos(evento) {
 function remitosDelFormulario() {
   const renglones = expEstado.ficha ? expEstado.ficha.renglones : [];
   return expEstado.exp.datos.remitos.map((remito, i) => {
-    if (remito.es_equipo_comodato) return remito;
+    const valor = (sufijo) => document.getElementById("rem-" + i + "-" + sufijo).value.trim();
+    const comodato = document.getElementById("rem-" + i + "-comodato").checked;
     const items = [];
-    for (const r of renglones) {
-      const cantidad = document.getElementById("rem-" + i + "-" + r.pos + "-cantidad").value.trim().replace(",", ".");
-      const codigo = document.getElementById("rem-" + i + "-" + r.pos + "-codigo").value.trim();
-      if (cantidad) items.push({ pos: r.pos, cantidad, codigo });
+    // El código del remito ya no se carga; si había uno guardado, se conserva.
+    const anteriores = new Map((remito.items || []).map((it) => [Number(it.pos), it.codigo || ""]));
+    if (!comodato) {
+      for (const r of renglones) {
+        const cantidad = valor(r.pos + "-cantidad").replace(",", ".");
+        if (cantidad) items.push({ pos: r.pos, cantidad, codigo: anteriores.get(Number(r.pos)) || "" });
+      }
     }
-    return Object.assign({}, remito, { items, aclara_periodo: document.getElementById("rem-" + i + "-aclara").checked });
+    return Object.assign({}, remito, {
+      numero: valor("numero"), fecha: valor("fecha") || null, fecha_firma: valor("firma") || null,
+      es_equipo_comodato: comodato, items,
+      aclara_periodo: comodato ? false : document.getElementById("rem-" + i + "-aclara").checked,
+    });
   });
 }
 
@@ -2098,9 +2111,16 @@ async function guardarRemitos(evento) {
   evento.preventDefault();
   limpiarAvisos();
   const remitos = remitosDelFormulario();
+  const sinNumero = remitos.findIndex((r) => !r.numero);
+  if (sinNumero >= 0) { mostrarAviso("Falta el número del remito " + (sinNumero + 1) + ".", "error"); return; }
+  const numeros = remitos.map((r) => r.numero);
+  const repetido = numeros.find((n, k) => numeros.indexOf(n) !== k);
+  if (repetido) { mostrarAviso("El remito " + repetido + " está dos veces.", "error"); return; }
   const invalida = remitos.flatMap((r) => r.items || []).find((it) => !/^\d+(\.\d+)?$/.test(it.cantidad));
   if (invalida) { mostrarAviso("La cantidad del renglón " + invalida.pos + " no es un número válido.", "error"); return; }
-  if (await guardarExpediente({ datos: { remitos } }, "Cantidades guardadas.")) pintarPaso2();
+  const sinFecha = remitos.filter((r) => !r.fecha).length;
+  if (await guardarExpediente({ datos: { remitos } }, "Remitos y cantidades guardados."
+    + (sinFecha ? " Ojo: " + sinFecha + (sinFecha === 1 ? " remito sigue" : " remitos siguen") + " sin fecha." : ""))) pintarPaso2();
 }
 
 async function quitarRemito(indice) {
