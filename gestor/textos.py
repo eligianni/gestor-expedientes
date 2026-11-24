@@ -42,6 +42,16 @@ def nombre_archivo(referencia):
     return re.sub(r'[\\/:*?"<>|]', "-", referencia) + ".pdf"
 
 
+def _texto_cv(mm_aa, razon):
+    return "%s - CERTIFICADO DE VALIDACIÓN - %s" % (mm_aa, razon)
+
+
+def referencia_cv(ctx):
+    """Referencia GDE del certificado de validación: no necesita la factura (se arma antes de facturar)."""
+    _requerir(ctx, "razon", "periodo")
+    return _prefijo(ctx) + _texto_cv(util.mm_aa(ctx["periodo"]), ctx["razon"])
+
+
 def referencias(ctx):
     """Referencias GDE en orden, cada una `{"clave", "referencia", "archivo"}`."""
     _requerir(ctx, "razon", "factura", "periodo")
@@ -60,7 +70,7 @@ def referencias(ctx):
         filas.append(("remitos", "%s - REMITOS - %s" % (mm_aa, razon)))
     if ctx.get("remito_equipo") and ctx.get("primera_validacion"):
         filas.append(("remito_equipo", "%s - REMITO POR EQUIPO EN COMODATO - %s" % (mm_aa, razon)))
-    filas.append(("cv", "%s - CERTIFICADO DE VALIDACIÓN - %s" % (mm_aa, razon)))
+    filas.append(("cv", _texto_cv(mm_aa, razon)))
     if ctx.get("tipo_oc") in ("BIEN", "PROVISION"):
         filas.append(("vale_hoja", "%s - VALE DE ENTRADA - %s" % (mm_aa, razon)))
     else:

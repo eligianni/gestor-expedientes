@@ -1580,7 +1580,7 @@ def datos_cv(con, id_expediente):
         entrega = "Mensual"
     else:
         entrega = "Única" if completa else "Parcial"
-    referencia = next(r["referencia"] for r in textos.referencias(ctx) if r["clave"] == "cv")
+    referencia = textos.referencia_cv(ctx)
     datos = {
         "fecha": max(hoy, hasta) if hasta else hoy,
         "proveedor": ctx["razon"],
@@ -1843,8 +1843,13 @@ def revisar_comprobantes(con, id_expediente, factura=None, sii=None, cuit_emisor
         datos["factura"] = actual
     if isinstance(sii, dict) and sii:
         datos["sii"] = sii
+    # Un SII sin ningún dato es como no tenerlo: no se controla (evita «La OC del SII (None)…»).
+    sii_cargado = any(v not in (None, "", []) for k, v in (datos.get("sii") or {}).items() if k != "faltantes")
+    if not sii_cargado:
+        datos["sii"] = {}
     ctx["expediente"] = dict(ctx["expediente"], datos=datos)
-    resultados = [r for r in controles.evaluar(ctx)["resultados"] if r["ambito"] in ("factura", "sii")]
+    resultados = [r for r in controles.evaluar(ctx)["resultados"]
+                  if r["ambito"] == "factura" or (r["ambito"] == "sii" and sii_cargado)]
     proveedor = ctx.get("proveedor") or {}
     cuit_proveedor = re.sub(r"\D", "", proveedor.get("cuit") or "")
 
@@ -1872,7 +1877,16 @@ def revisar_comprobantes(con, id_expediente, factura=None, sii=None, cuit_emisor
             extra("letra_sii", "sii", "En el SII el comprobante es %s y la factura es letra %s."
                   % (datos_sii.get("tipo_comprobante"), letra_factura))
     errores = sum(1 for r in resultados if r["nivel"] == "error")
-    return {"resultados": resultados, "errores": errores}
+    parametros = ctx.get("parametros") or {}
+    destino = parametros.get("destinatario_factura") or {}
+    sii_esperado = parametros.get("sii") or {}
+    esperado = {
+        "oc": (ctx.get("oc") or {}).get("numero"), "periodo": ctx["expediente"].get("periodo"),
+        "sap": ctx["expediente"].get("sap"), "cuit": proveedor.get("cuit"), "razon_social": proveedor.get("razon_social"),
+        "destinatario": destino.get("nombre", "INSSJP"), "domicilio": destino.get("domicilio", "PERU 169"),
+        "area": sii_esperado.get("area"), "tipo_servicio": sii_esperado.get("tipo_servicio"), "concepto": sii_esperado.get("concepto"),
+    }
+    return {"resultados": resultados, "errores": errores, "esperado": esperado, "sii_cargado": sii_cargado}
 
 
 # --- Calendario (paso 22) ---------------------------------------------------

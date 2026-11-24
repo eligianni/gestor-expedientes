@@ -81,6 +81,14 @@ class PruebaReferencias(unittest.TestCase):
         self.assertEqual(textos.caratula(_ctx(efector="CASPH")),
                          "CASPH - PAGO SAP 77170 GRUPO EFIA S.R.L. - FC 0003B00031812 - 4500555861")
 
+    def test_referencia_del_cv_sin_factura(self):
+        # El certificado de validación se arma antes de tener la factura y la carga en el SII.
+        self.assertEqual(textos.referencia_cv(_ctx(factura="")), "08-26 - CERTIFICADO DE VALIDACIÓN - GRUPO EFIA S.R.L.")
+        self.assertEqual(textos.referencia_cv(_ctx(efector="CASPH", factura=None)),
+                         "CASPH - 08-26 - CERTIFICADO DE VALIDACIÓN - GRUPO EFIA S.R.L.")
+        with self.assertRaises(textos.TextoIncompleto):
+            textos.referencia_cv(_ctx(periodo=None))
+
     def test_nombre_archivo_reemplaza_invalidos(self):
         self.assertEqual(textos.nombre_archivo("08-26 - RTO 1/2 - X:Y"), "08-26 - RTO 1-2 - X-Y.pdf")
         self.assertEqual(textos.nombre_archivo('a\\b*c?d"e<f>g|h'), "a-b-c-d-e-f-g-h.pdf")

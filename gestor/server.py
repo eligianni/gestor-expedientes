@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import unicodedata
 import socket
 import sqlite3
 import threading
@@ -92,7 +93,10 @@ def responder_archivo(h, archivo):
     h.send_header("Content-Type", archivo.tipo)
     h.send_header("Content-Length", str(len(archivo.contenido)))
     disposicion = "inline" if archivo.en_linea else "attachment"
-    h.send_header("Content-Disposition", disposicion + "; filename*=UTF-8''" + quote(archivo.nombre, safe=""))
+    # Nombre sin tildes de respaldo (filename=) y el nombre exacto (filename*=) para los navegadores que lo entienden.
+    respaldo = unicodedata.normalize("NFKD", archivo.nombre).encode("ascii", "ignore").decode("ascii").replace('"', "")
+    h.send_header("Content-Disposition", '%s; filename="%s"; filename*=UTF-8\'\'%s'
+                  % (disposicion, respaldo, quote(archivo.nombre, safe="")))
     h.send_header("Cache-Control", "no-store")
     h.end_headers()
     h.wfile.write(archivo.contenido)
@@ -494,6 +498,11 @@ def expediente_cv_docx(h, m, cuerpo):
     return 200, Archivo(contenido, TIPO_DOCX, cv["archivo"])
 
 
+def expediente_cv_verificar(h, m, cuerpo):
+    """¿Se puede armar el certificado de validación? Devuelve el nombre del archivo o el dato que falta (422)."""
+    return 200, _ok({"archivo": negocio.datos_cv(h.conexion(), m.group("id"))["archivo"]})
+
+
 def expediente_autorizacion_docx(h, m, cuerpo):
     autorizacion = negocio.datos_autorizacion(h.conexion(), m.group("id"))
     contenido = docx_gen.generar_autorizacion_docx(autorizacion["referencia"], autorizacion["cuerpo"])
@@ -733,6 +742,7 @@ RUTAS = [
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/eventual"), expediente_eventual),
     ("GET", re.compile(r"/api/correctivos/informe-mensual"), correctivos_informe_mensual),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv\.docx"), expediente_cv_docx),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/cv/verificar"), expediente_cv_verificar),
     ("GET", re.compile(r"/api/exportes/(?P<nombre>[a-z0-9-]+)\.(?P<formato>[a-z]+)"), exporte),
     ("GET", re.compile(r"/api/entregas"), entregas_listar),
     ("POST", re.compile(r"/api/entregas"), entrega_crear),
