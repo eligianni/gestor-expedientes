@@ -553,3 +553,6 @@ th.izq .orden-columna { justify-content: flex-start; text-align: left; }
 .tabla-remitos-nuevos input[type="date"], .tabla-remitos-nuevos input.mono { min-height: 40px; }
 .tabla-remitos-nuevos input.mono { width: 190px; }
 .tabla-remitos-nuevos .casilla-tabla { width: 22px; height: 22px; min-height: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--primario); }
+
+/* Aviso fijo: el programa abierto quedó viejo después de actualizar */
+.aviso-fijo { position: sticky; top: 0; z-index: 20; margin: 0; border-radius: 0; }

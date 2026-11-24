@@ -48,11 +48,26 @@ def validacion(mensaje):
     return ErrorHTTP(400, "validacion", mensaje)
 
 
+def huella_codigo():
+    """(archivo, fecha, tamaño) del código Python: si cambia en el disco (un `git pull`), el programa abierto quedó viejo."""
+    archivos = sorted((config.RAIZ / "gestor").glob("*.py")) + [config.RAIZ / "app.py"]
+    huella = []
+    for archivo in archivos:
+        try:
+            dato = archivo.stat()
+        except OSError:
+            continue
+        huella.append((archivo.name, dato.st_mtime_ns, dato.st_size))
+    return tuple(huella)
+
+
 def responder(h, estado, cuerpo, tipo):
     h.send_response(estado)
     h.send_header("Content-Type", tipo)
     h.send_header("Content-Length", str(len(cuerpo)))
     h.send_header("Cache-Control", "no-store")
+    if getattr(h.server, "huella", None) is not None and huella_codigo() != h.server.huella:
+        h.send_header("X-Gestor-Desactualizado", "1")
     h.end_headers()
     h.wfile.write(cuerpo)
 
@@ -837,6 +852,7 @@ def crear_servidor(puerto, cfg):
     httpd.cfg = cfg
     httpd.estado_db = "sin_base"
     httpd.integridad = False
+    httpd.huella = huella_codigo()
     ruta_base = config.ruta(cfg, "base_datos")
     try:
         db.inicializar(ruta_base, cfg["parametros_iniciales"])
