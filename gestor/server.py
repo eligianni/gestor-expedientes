@@ -606,6 +606,7 @@ def remitos_pegar(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.pegar_remitos(
         h.conexion(), m.group("id"), datos.get("version"), datos.get("texto"), datos.get("es_equipo_comodato", False),
+        datos.get("remitos"),
     ))
 
 

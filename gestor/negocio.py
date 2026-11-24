@@ -1014,15 +1014,52 @@ def _periodo_del_expediente(fila):
                         util.fecha_desde_texto(fila["periodo_hasta"]))
 
 
-def pegar_remitos(con, id_expediente, version, texto, es_equipo_comodato=False):
-    """Agrega los remitos pegados (un mismo número reemplaza al anterior) y, si el período no es manual, lo sugiere."""
+MAX_REMITOS = 20
+
+
+def remitos_del_formulario(remitos):
+    """Remitos cargados uno por uno: [{numero, fecha, fecha_firma?, es_equipo_comodato?}] con fechas ISO o dd/mm/aaaa."""
+    if not isinstance(remitos, list):
+        raise ErrorValidacion("Faltan los remitos.")
+    nuevos = []
+    for orden, remito in enumerate(remitos, start=1):
+        if not isinstance(remito, dict):
+            raise ErrorValidacion("Remito %d: datos inválidos." % orden)
+        numero = str(remito.get("numero") or "").strip()
+        if not numero:
+            raise ErrorValidacion("Remito %d: falta el número." % orden)
+        try:
+            fecha = util.iso(util.fecha_desde_texto(str(remito.get("fecha") or "").strip()))
+        except ValueError:
+            raise ErrorValidacion("Remito %s: falta la fecha o no es válida." % numero) from None
+        firma = str(remito.get("fecha_firma") or "").strip()
+        try:
+            fecha_firma = util.iso(util.fecha_desde_texto(firma)) if firma else None
+        except ValueError:
+            raise ErrorValidacion("Remito %s: la fecha de firma no es válida." % numero) from None
+        nuevos.append({
+            "numero": numero, "fecha": fecha, "fecha_firma": fecha_firma,
+            "es_equipo_comodato": _bandera(remito.get("es_equipo_comodato") or 0, "es_equipo_comodato") == 1,
+            "aclara_periodo": False, "items": [],
+        })
+    return nuevos
+
+
+def pegar_remitos(con, id_expediente, version, texto, es_equipo_comodato=False, remitos=None):
+    """Agrega remitos (pegados o del formulario, uno por uno); un mismo número reemplaza al anterior (conserva sus cantidades).
+
+    Máximo MAX_REMITOS por expediente. Si el período no es manual, lo sugiere.
+    """
     version = _version(version)
-    nuevos = parsear_remitos_pegados(texto)
+    if remitos is not None:
+        nuevos = remitos_del_formulario(remitos)
+    else:
+        nuevos = parsear_remitos_pegados(texto)
+        equipo = _bandera(es_equipo_comodato if es_equipo_comodato is not None else 0, "es_equipo_comodato") == 1
+        for remito in nuevos:
+            remito["es_equipo_comodato"] = equipo
     if not nuevos:
-        raise ErrorValidacion("Pegá al menos un remito (numero;fecha[;fecha_firma]).")
-    equipo = _bandera(es_equipo_comodato if es_equipo_comodato is not None else 0, "es_equipo_comodato") == 1
-    for remito in nuevos:
-        remito["es_equipo_comodato"] = equipo
+        raise ErrorValidacion("Cargá al menos un remito (número y fecha).")
     with db.transaccion(con):
         actual = _leer_expediente(con, id_expediente)
         _no_anulado(actual)
@@ -1030,10 +1067,17 @@ def pegar_remitos(con, id_expediente, version, texto, es_equipo_comodato=False):
         por_numero = {r["numero"]: i for i, r in enumerate(contenido["remitos"])}
         for remito in nuevos:
             if remito["numero"] in por_numero:
+                anterior = contenido["remitos"][por_numero[remito["numero"]]]
+                if not remito["es_equipo_comodato"] and not anterior.get("es_equipo_comodato"):
+                    remito["items"] = anterior.get("items") or []
+                    remito["aclara_periodo"] = bool(anterior.get("aclara_periodo"))
                 contenido["remitos"][por_numero[remito["numero"]]] = remito
             else:
                 por_numero[remito["numero"]] = len(contenido["remitos"])
                 contenido["remitos"].append(remito)
+        if len(contenido["remitos"]) > MAX_REMITOS:
+            raise ErrorValidacion("Un expediente puede tener hasta %d remitos (quedarían %d)."
+                                  % (MAX_REMITOS, len(contenido["remitos"])))
         oc = db.leer_fila(con, "oc", {"numero": actual["oc"]}) if actual.get("oc") else None
         sugerido = periodo_sugerido(oc, contenido["remitos"])
         columnas = {}

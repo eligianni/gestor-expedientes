@@ -184,6 +184,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - OC «Acciones pendientes» (`faltantesOC` en `app.js`): falta el PDF (`negocio.ocs_con_pdf`, `listar_oc.pdf_cargado`) o el
   concepto corto; ambos llevan (*) en la ventana de edición (que también tiene la carga del PDF) y sin ellos «Nuevo
   expediente» de la ficha está deshabilitado. La ficha no muestra GDE del PDF, concepto corto ni día de inicio (solo al editar).
+- Paso 2 (remitos): formulario fila por fila (N°, fecha, fecha de firma, casilla de equipo en comodato por remito), hasta
+  `negocio.MAX_REMITOS` (20) por expediente; va por `POST .../remitos/pegar` con `remitos: [...]` (el texto pegado sigue
+  aceptado). Un número repetido actualiza fechas y conserva cantidades. Las cantidades se cargan después, por remito y renglón.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente
   (`negocio.guardar_consumo_manual`, `PUT /api/expedientes/<id>/consumo-manual`); `cantidades_del_expediente` lo usa solo
   si los remitos no tienen cantidades. La ficha de la OC muestra el consumo como tabla (renglón × período).

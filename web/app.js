@@ -1888,15 +1888,27 @@ function pintarPaso2() {
   const contenedor = document.getElementById("asistente-paso-2");
   const exp = expEstado.exp;
   const renglones = expEstado.ficha ? expEstado.ficha.renglones : [];
+  const cargados = exp.datos.remitos.length;
+  const filasNuevas = el("tbody", { id: "remitos-nuevos" });
+  const agregarFila = el("button", { type: "button", clase: "secundario", texto: "+ Otro remito",
+    onclick: () => { filasNuevas.append(filaRemitoNuevo()); actualizarFilasRemito(); filasNuevas.lastElementChild.querySelector("input").focus(); } });
+  filasNuevas.append(filaRemitoNuevo());
   const partes = [
     el("h3", { texto: "2. Remitos" }),
-    el("form", { clase: "formulario", novalidate: true, onsubmit: pegarRemitos },
-      el("div", { clase: "campo campo-ancho" },
-        el("label", { for: "remitos-texto", texto: "Pegar remitos, uno por línea: numero;fecha[;fecha_firma]" }),
-        el("textarea", { id: "remitos-texto", rows: "6", spellcheck: "false", "aria-describedby": "remitos-ayuda" }),
-        el("p", { id: "remitos-ayuda", clase: "texto-suave", texto: "Por ejemplo 0001-00003354;25/08/2026 o 0001-00000002;28/08/2026;02/09/2026. Un número que ya está reemplaza al anterior." })),
-      casilla("remitos-equipo", "Son remitos del equipo en comodato", false),
-      el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Agregar remitos" }))),
+    el("form", { clase: "formulario", id: "remitos-form", novalidate: true, onsubmit: pegarRemitos },
+      el("p", { clase: "texto-suave", texto: "Cargá cada remito en su fila (hasta " + MAX_REMITOS + " por expediente). Después de "
+        + "agregarlos, más abajo vas a cargar la cantidad de cada renglón de la OC en cada remito." }),
+      el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-remitos-nuevos" },
+        el("thead", {}, el("tr", {},
+          el("th", { scope: "col", texto: "#" }), el("th", { scope: "col", texto: "N° de remito" }),
+          el("th", { scope: "col", texto: "Fecha del remito" }), el("th", { scope: "col", texto: "Fecha de firma (si tiene)" }),
+          el("th", { scope: "col", texto: "Equipo en comodato" }), el("th", { scope: "col", texto: "" }))),
+        filasNuevas)),
+      el("div", { clase: "acciones" },
+        agregarFila,
+        el("button", { type: "submit", texto: "Agregar remitos" }),
+        el("span", { id: "remitos-cupo", clase: "texto-suave", "data-cargados": String(cargados) })),
+      el("p", { clase: "nota-pie", texto: "Si cargás un número que ya está, se actualizan sus fechas y se conservan sus cantidades." })),
   ];
   if (expEstado.fuera.length) {
     partes.push(el("div", { clase: "mensaje mensaje-aviso" },
@@ -1906,8 +1918,12 @@ function pintarPaso2() {
   if (!remitos.length) {
     partes.push(el("p", { clase: "texto-suave", texto: "Todavía no hay remitos cargados." }));
     vaciar(contenedor, ...partes);
+    actualizarFilasRemito();
     return;
   }
+  partes.push(el("h3", { texto: "Cantidades de cada remito (" + remitos.length + ")" }),
+    el("p", { clase: "texto-suave", texto: "Para cada remito, poné cuánto se entregó de cada renglón de la OC (vacío = nada). "
+      + "Los remitos del equipo en comodato no llevan cantidades." }));
   const formulario = el("form", { clase: "formulario", novalidate: true, onsubmit: guardarRemitos });
   remitos.forEach((remito, i) => {
     const bloque = el("fieldset", { clase: "panel" },
@@ -1921,7 +1937,7 @@ function pintarPaso2() {
         const idBase = "rem-" + i + "-" + r.pos;
         return el("tr", {},
           el("td", { clase: "numero", texto: r.pos }),
-          el("td", {}, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
+          el("td", { clase: "izq" }, (r.codigo ? r.codigo + " · " : "") + r.descripcion, r.otro_centro || r.central ? " " : null, marcaOtroCentro(r)),
           el("td", {}, entrada(item.cantidad || "", { id: idBase + "-cantidad", inputmode: "decimal", clase: "entrada-corta",
             "aria-label": "Cantidad del renglón " + r.pos + " en el remito " + remito.numero })),
           el("td", {}, entrada(item.codigo || "", { id: idBase + "-codigo", clase: "entrada-corta mono", placeholder: r.codigo || "",
@@ -1929,7 +1945,7 @@ function pintarPaso2() {
       });
       bloque.append(el("div", { clase: "tabla-desplazable" }, el("table", {},
         el("thead", {}, el("tr", {}, ...["Pos.", "Renglón de la OC", "Cantidad", "Código en el remito (vacío = igual)"]
-          .map((t) => el("th", { scope: "col", texto: t })))),
+          .map((t) => el("th", { scope: "col", clase: t === "Renglón de la OC" ? "izq" : null, texto: t })))),
         el("tbody", {}, ...filas))));
       bloque.append(casilla("rem-" + i + "-aclara", "Aclara el período (no se informa fuera de período)", remito.aclara_periodo));
     }
@@ -1942,18 +1958,68 @@ function pintarPaso2() {
     el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 3", onclick: () => mostrarPaso(3) })));
   partes.push(formulario);
   vaciar(contenedor, ...partes);
+  actualizarFilasRemito();
+}
+
+const MAX_REMITOS = 20;
+
+/** Fila del formulario para cargar un remito nuevo. */
+function filaRemitoNuevo() {
+  const fila = el("tr", { clase: "fila-remito-nuevo" },
+    el("td", { clase: "numero orden-remito" }),
+    el("td", {}, entrada("", { "data-campo": "numero", clase: "mono", placeholder: "0001-00003354", autocomplete: "off" })),
+    el("td", {}, entrada("", { "data-campo": "fecha", type: "date" })),
+    el("td", {}, entrada("", { "data-campo": "fecha_firma", type: "date" })),
+    el("td", {}, el("input", { type: "checkbox", "data-campo": "es_equipo_comodato", clase: "casilla-tabla" })),
+    el("td", {}, el("button", { type: "button", clase: "secundario boton-quitar", texto: "Quitar",
+      onclick: (e) => {
+        const tbody = e.target.closest("tbody");
+        e.target.closest("tr").remove();
+        if (!tbody.children.length) tbody.append(filaRemitoNuevo());
+        actualizarFilasRemito();
+      } })));
+  return fila;
+}
+
+/** Numera las filas, pone las etiquetas accesibles y respeta el máximo de remitos por expediente. */
+function actualizarFilasRemito() {
+  const tbody = document.getElementById("remitos-nuevos");
+  const cupo = document.getElementById("remitos-cupo");
+  if (!tbody || !cupo) return;
+  const cargados = Number(cupo.dataset.cargados || 0);
+  [...tbody.children].forEach((fila, i) => {
+    const n = i + 1;
+    fila.querySelector(".orden-remito").textContent = String(cargados + n);
+    const nombres = { numero: "Número", fecha: "Fecha", fecha_firma: "Fecha de firma", es_equipo_comodato: "Equipo en comodato" };
+    for (const control of fila.querySelectorAll("[data-campo]")) {
+      control.setAttribute("aria-label", nombres[control.dataset.campo] + " del remito " + (cargados + n));
+    }
+    fila.querySelector(".boton-quitar").setAttribute("aria-label", "Quitar la fila del remito " + (cargados + n));
+  });
+  const total = cargados + tbody.children.length;
+  const boton = document.querySelector("#remitos-form button.secundario:not(.boton-quitar)");
+  if (boton) boton.disabled = total >= MAX_REMITOS;
+  cupo.textContent = cargados + " cargados · " + Math.max(0, MAX_REMITOS - cargados) + " disponibles";
 }
 
 async function pegarRemitos(evento) {
   evento.preventDefault();
   limpiarAvisos();
-  const texto = document.getElementById("remitos-texto").value;
-  if (!texto.trim()) { mostrarAviso("Pegá al menos un remito.", "error"); return; }
+  const remitos = [];
+  for (const fila of document.querySelectorAll("#remitos-nuevos tr")) {
+    const valor = (campo) => fila.querySelector('[data-campo="' + campo + '"]');
+    const remito = { numero: valor("numero").value.trim(), fecha: valor("fecha").value, fecha_firma: valor("fecha_firma").value,
+      es_equipo_comodato: valor("es_equipo_comodato").checked };
+    if (!remito.numero && !remito.fecha && !remito.fecha_firma) continue;  // fila vacía
+    const orden = fila.querySelector(".orden-remito").textContent;
+    if (!remito.numero) { mostrarAviso("Falta el número del remito " + orden + ".", "error"); valor("numero").focus(); return; }
+    if (!remito.fecha) { mostrarAviso("Falta la fecha del remito " + remito.numero + ".", "error"); valor("fecha").focus(); return; }
+    remitos.push(remito);
+  }
+  if (!remitos.length) { mostrarAviso("Cargá al menos un remito (número y fecha).", "error"); return; }
   const exp = expEstado.exp;
   estado.recargar = () => abrirExpediente(exp.id, 2);
-  const datos = await api("POST", "/api/expedientes/" + exp.id + "/remitos/pegar", {
-    version: exp.version, texto, es_equipo_comodato: document.getElementById("remitos-equipo").checked,
-  });
+  const datos = await api("POST", "/api/expedientes/" + exp.id + "/remitos/pegar", { version: exp.version, remitos });
   if (!datos) return;
   expEstado.sugerido = datos.periodo_sugerido;
   expEstado.fuera = datos.fuera_de_periodo || [];
