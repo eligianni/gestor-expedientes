@@ -788,13 +788,47 @@ function pintarFichaOC(ficha) {
   const origenConsumo = (x) => (x.consumo_remitos ? "De los remitos"
     : (Object.keys(x.consumo_manual || {}).length ? "Cargado a mano" : "Sin consumo"));
   partes.push(expedientes.length
-    ? tabla(["N°", "Tipo", "Período", "Estado", "Factura", "Importe $", "Consumo"], expedientes.map((x) => [
-      x.id, x.tipo, x.periodo || "", ESTADOS_TEXTO[x.estado] || x.estado, x.factura,
-      x.importe_centavos === null || x.importe_centavos === undefined ? "—" : formatoPesos(x.importe_centavos), origenConsumo(x)]))
+    ? tablaExpedientesOC(expedientes, origenConsumo)
     : el("p", { clase: "texto-suave", texto: "Todavía no hay expedientes para esta OC." }));
   vaciar(document.getElementById("oc-detalle"), el("div", { clase: "panel" }, ...partes));
   document.getElementById("oc-lista").hidden = true;
   pintarConsumoOC(oc.numero, consumo);
+}
+
+// Estados en los que el expediente ya está terminado: se puede ver, no tramitar.
+const ESTADOS_TERMINADOS = new Set(["ENVIADO", "CONTABILIZADO", "CERRADO", "FINALIZADO", "ANULADO"]);
+
+/** «Expedientes de esta OC»: cada fila abre el expediente («Tramitar» si sigue en curso, «Visualizar» si terminó). */
+function tablaExpedientesOC(expedientes, origenConsumo) {
+  const encabezados = ["N°", "Tipo", "Período", "Estado", "Factura", "Importe $", "Consumo", ""];
+  const filas = expedientes.map((x) => {
+    const terminado = ESTADOS_TERMINADOS.has(x.estado);
+    // En curso, se abre en el primer paso que le falta: remitos, factura o controles.
+    const paso = terminado ? 1 : (!x.consumo_remitos && !Object.keys(x.consumo_manual || {}).length ? 2 : (!x.factura ? 3 : 4));
+    const abrir = () => abrirExpedienteDesdeOC(x.id, paso);
+    const boton = el("button", { type: "button", clase: terminado ? "secundario" : null, texto: terminado ? "Visualizar" : "Tramitar",
+      "aria-label": (terminado ? "Visualizar" : "Tramitar") + " el expediente " + x.id,
+      onclick: (e) => { e.stopPropagation(); abrir(); } });
+    return el("tr", { clase: "fila-clic", title: (terminado ? "Ver" : "Seguir tramitando") + " el expediente " + x.id, onclick: abrir },
+      el("td", { clase: "numero", texto: String(x.id) }),
+      el("td", { texto: x.tipo }),
+      el("td", { texto: x.periodo || "" }),
+      el("td", {}, el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[x.estado] || "neutra"), texto: ESTADOS_TEXTO[x.estado] || x.estado })),
+      el("td", { clase: "mono", texto: x.factura || "" }),
+      el("td", { clase: "numero", texto: x.importe_centavos === null || x.importe_centavos === undefined ? "—" : formatoPesos(x.importe_centavos) }),
+      el("td", { texto: origenConsumo(x) }),
+      el("td", {}, boton));
+  });
+  return el("div", { clase: "tabla-desplazable" }, el("table", {},
+    el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
+    el("tbody", {}, ...filas)));
+}
+
+/** Abre el expediente en la pantalla Expedientes, en el paso indicado. */
+function abrirExpedienteDesdeOC(id, paso) {
+  limpiarAvisos();
+  Object.assign(expEstado, { exp: { id }, ficha: null, paso, sugerido: null, fuera: [], sii: null });
+  mostrarPantalla("pantalla-expedientes", false);
 }
 
 /** "2026-09" → "09/2026"; las columnas especiales tienen su nombre. */

@@ -556,3 +556,7 @@ th.izq .orden-columna { justify-content: flex-start; text-align: left; }
 
 /* Aviso fijo: el programa abierto quedó viejo después de actualizar */
 .aviso-fijo { position: sticky; top: 0; z-index: 20; margin: 0; border-radius: 0; }
+
+/* Filas que abren algo al hacer clic (expedientes de la OC) */
+tr.fila-clic { cursor: pointer; }
+tr.fila-clic:hover td { background: var(--primario-suave); }
