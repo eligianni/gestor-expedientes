@@ -69,3 +69,12 @@ class PruebaCheck(ayudas.CasoConEntorno):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PruebaProgramaDesactualizado(ayudas.CasoConServidor):
+    """Después de un `git pull` con el programa abierto, cada respuesta avisa que hay que reiniciarlo."""
+
+    def test_avisa_si_el_codigo_cambio_en_el_disco(self):
+        self.assertNotIn("X-Gestor-Desactualizado", self.servidor.get("/api/salud").cabeceras)
+        self.servidor.httpd.huella = (("otro.py", 0, 0),)
+        self.assertEqual(self.servidor.get("/api/salud").cabeceras.get("X-Gestor-Desactualizado"), "1")

@@ -89,6 +89,16 @@ function limpiarAvisos() {
 // --- API --------------------------------------------------------------------
 
 /** Llama a la API. Devuelve `datos` o null si hubo error (el error ya se mostró en #avisos). */
+/** El programa abierto es anterior a la última actualización (git pull): hay que cerrarlo y volver a abrirlo. */
+const TEXTO_PROGRAMA_VIEJO = "El programa abierto es una versión anterior a la actualización: lo que guardes puede fallar. "
+  + "Cerrá la ventana negra del programa (todas, si hay más de una), volvé a abrirlo con «python app.py» y usá la pestaña que se abre.";
+
+function avisarProgramaViejo() {
+  if (document.getElementById("aviso-programa-viejo")) return;
+  document.body.prepend(el("div", { id: "aviso-programa-viejo", clase: "mensaje mensaje-error aviso-fijo", role: "alert" },
+    el("p", { texto: TEXTO_PROGRAMA_VIEJO })));
+}
+
 async function api(metodo, ruta, cuerpo) {
   const opciones = { method: metodo, headers: {} };
   if (cuerpo instanceof FormData) {
@@ -106,6 +116,9 @@ async function api(metodo, ruta, cuerpo) {
     mostrarAviso("No se pudo comunicar con el programa. ¿Sigue abierto?", "error");
     return null;
   }
+  const rutaDesconocida = respuesta.status === 404 && datos && datos.error && /^Ruta no encontrada/.test(datos.error.mensaje || "");
+  if (respuesta.headers.get("X-Gestor-Desactualizado") === "1" || rutaDesconocida) avisarProgramaViejo();
+  if (rutaDesconocida) { mostrarAviso(TEXTO_PROGRAMA_VIEJO, "error"); return null; }
   if (respuesta.status === 409) {
     const mensaje = (datos && datos.error && datos.error.mensaje) || MENSAJE_CONFLICTO;
     mostrarAviso(mensaje, "error", {

@@ -199,6 +199,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   `CAMPOS_OC_FORM`, `PUT /api/oc/<n>`); la confirmación se muestra dentro de la ventana y la ficha queda en lectura
   (`resumenDatosOC`). Buscar cierra la ficha abierta. La leyenda del CV solo se muestra en centralizadas.
 - Todo archivo nuevo de `web/` se sirve solo si está en `server.ESTATICOS` (lista blanca); nunca desde internet.
+- Programa viejo abierto después de un `git pull`: los archivos de `web/` se leen en cada pedido pero el Python no. El
+  servidor guarda `huella_codigo()` al arrancar y, si cambió en el disco, responde con `X-Gestor-Desactualizado: 1`;
+  `api()` muestra un aviso fijo para reiniciar (también ante «Ruta no encontrada»).
 - `httpd.shutdown()` se llama desde otro thread (`POST /api/apagar`), nunca desde el que atiende.
 - En la prueba de concurrencia las funciones de `multiprocessing` van a nivel de módulo (Windows usa `spawn`).
 
