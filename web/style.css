@@ -595,3 +595,9 @@ tr.fila-subrenglon td { padding-top: 4px; padding-bottom: 4px; font-size: 13px; 
 .editor-subrenglones { border: 0; padding: 0; margin: 8px 0 0; }
 .editor-subrenglones legend { font-weight: 600; padding: 0; }
 .tabla-consumo tr.fila-agotada td:first-child { box-shadow: inset 4px 0 0 var(--error); }
+
+/* Anular expediente: acción destructiva (con palabra, no solo color) */
+button.secundario.boton-peligro { color: var(--error); border-color: var(--error); }
+button.secundario.boton-peligro:hover { background: var(--error-fondo); color: var(--error); }
+.boton-peligro-lleno { background: var(--error); border-color: var(--error); color: var(--primario-texto); }
+.boton-peligro-lleno:hover { background: var(--error); filter: brightness(0.92); }

@@ -208,6 +208,8 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`importar._con_subrenglones_guardados`). En el CV va una fila por subrenglón y lo entregado se asigna en orden según
   lo consumido antes (`negocio._consumido_antes`). Consumo: `agotado` cuando el saldo llega a 0. La ficha no muestra
   «Consumo previo».
+- Los expedientes no se borran: «Anular expediente» (arriba del asistente, `abrirDialogoAnular`) pide un motivo y llama a
+  `POST /api/expedientes/<id>/anular`; queda ANULADO y deja de contar para consumo y controles.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente
   (`negocio.guardar_consumo_manual`, `PUT /api/expedientes/<id>/consumo-manual`); `cantidades_del_expediente` lo usa solo
   si los remitos no tienen cantidades. La ficha de la OC muestra el consumo como tabla (renglón × período).
