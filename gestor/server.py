@@ -408,7 +408,14 @@ def oc_nueva_leer(h, m, cuerpo):
 
 def oc_nueva_crear(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
-    return 200, _ok(negocio.crear_oc_desde_pdf(h.conexion(), datos.get("oc"), datos.get("archivo") or "", datos.get("leido")))
+    return 200, _ok(negocio.crear_oc_desde_pdf(h.conexion(), datos.get("oc"), datos.get("archivo") or "", datos.get("leido"),
+                                               datos.get("subrenglones")))
+
+
+def renglon_subrenglones(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.guardar_subrenglones(h.conexion(), m.group("numero"), m.group("pos"), datos.get("version"),
+                                                 datos.get("subrenglones")))
 
 
 def oc_pdf_aplicar(h, m, cuerpo):
@@ -710,6 +717,7 @@ RUTAS = [
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_editar),
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)/consumo"), oc_consumo),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
+    ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)/subrenglones"), renglon_subrenglones),
     ("POST", re.compile(r"/api/oc/pdf"), oc_nueva_leer),
     ("POST", re.compile(r"/api/oc/desde-pdf"), oc_nueva_crear),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/pdf"), oc_pdf_leer),

@@ -589,3 +589,9 @@ tr.fila-clic:hover td { background: var(--primario-suave); }
 .grilla-remito .casilla-tabla { width: 22px; height: 22px; min-height: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--primario); }
 .remito-incompleto { box-shadow: 0 0 0 1px var(--aviso), var(--sombra-panel); }
 .remito-incompleto legend { color: var(--aviso); }
+
+/* Subrenglones (1-10, 1-20…) debajo de su renglón, y renglón agotado */
+tr.fila-subrenglon td { padding-top: 4px; padding-bottom: 4px; font-size: 13px; color: var(--texto-suave); background: var(--superficie-hundida); }
+.editor-subrenglones { border: 0; padding: 0; margin: 8px 0 0; }
+.editor-subrenglones legend { font-weight: 600; padding: 0; }
+.tabla-consumo tr.fila-agotada td:first-child { box-shadow: inset 4px 0 0 var(--error); }

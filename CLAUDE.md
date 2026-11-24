@@ -202,6 +202,12 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - Certificado de validación: lleva todos los renglones (0 si no hubo entrega), cantidad de la OC sin unidad, objeto con
   mayúscula inicial y la celda de la fecha ensanchada (`docx_gen._ensanchar_fecha`, sin tocar la plantilla). No necesita factura ni SII (`textos.referencia_cv`, solo razón y período). Botón en el paso 2
   y en el 5 (`botonCertificado`): primero `GET .../cv/verificar` (422 con lo que falta) y después baja `cv.docx`.
+- Subrenglones (1-10, 1-20…): sin columna propia, en `renglon.crudo["_subrenglones"]` (`negocio.subrenglones_de`); se
+  guardan al crear/aplicar desde el PDF (`subrenglones: {pos: [...]}`; al reaplicar se conserva la descripción editada),
+  se editan en «Editar» del renglón (`PUT /api/oc/<n>/renglones/<pos>/subrenglones`) y la importación los conserva
+  (`importar._con_subrenglones_guardados`). En el CV va una fila por subrenglón y lo entregado se asigna en orden según
+  lo consumido antes (`negocio._consumido_antes`). Consumo: `agotado` cuando el saldo llega a 0. La ficha no muestra
+  «Consumo previo».
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente
   (`negocio.guardar_consumo_manual`, `PUT /api/expedientes/<id>/consumo-manual`); `cantidades_del_expediente` lo usa solo
   si los remitos no tienen cantidades. La ficha de la OC muestra el consumo como tabla (renglón × período).

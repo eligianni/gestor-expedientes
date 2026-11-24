@@ -291,6 +291,8 @@ def ficha_oc(con, numero):
         _decodificar(dict(fila), _JSON_RENGLON)
         for fila in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (oc["numero"],))
     ], centros_propios(db.leer_parametros(con), oc["efector"]))
+    for r in renglones:
+        r["subrenglones"] = subrenglones_de(r)
     expedientes = [
         _resumen_expediente_oc(dict(fila))
         for fila in con.execute(
@@ -543,6 +545,87 @@ def ultimo_pdf_oc(con, numero):
     return {"fecha": fila["fecha"], "usuario": fila["usuario"], "archivo": despues.get("archivo") or ""}
 
 
+# Subrenglones (los del PDF de la OC: 1-10, 1-20…). No tienen columna propia: van en `renglon.crudo["_subrenglones"]`
+# y la importación del z_compras2 los conserva. Su cantidad es la que va en el certificado de validación.
+CLAVE_SUBRENGLONES = "_subrenglones"
+
+
+def subrenglones_de(renglon):
+    """Lista [{pos, cantidad, unidad, descripcion, precio_centavos}] guardada en el renglón (vacía si no tiene)."""
+    crudo = renglon.get("crudo")
+    if isinstance(crudo, str):
+        try:
+            crudo = json.loads(crudo or "{}")
+        except ValueError:
+            crudo = {}
+    lista = (crudo or {}).get(CLAVE_SUBRENGLONES) if isinstance(crudo, dict) else None
+    return list(lista) if isinstance(lista, list) else []
+
+
+def _validar_subrenglones(lista, pos_renglon):
+    if lista is None:
+        return []
+    if not isinstance(lista, list):
+        raise ErrorValidacion("Los subrenglones del renglón %d deben ser una lista." % pos_renglon)
+    limpios, vistos = [], set()
+    for sub in lista:
+        if not isinstance(sub, dict):
+            raise ErrorValidacion("Subrenglón inválido en el renglón %d." % pos_renglon)
+        pos = _entero(sub.get("pos"), "subrenglón", minimo=1)
+        if pos in vistos:
+            raise ErrorValidacion("El subrenglón %d-%d está repetido." % (pos_renglon, pos))
+        vistos.add(pos)
+        precio = sub.get("precio_centavos")
+        limpios.append({
+            "pos": pos,
+            "cantidad": _decimal_texto(sub.get("cantidad"), "cantidad del subrenglón %d-%d" % (pos_renglon, pos)),
+            "unidad": _texto(sub.get("unidad") or "", "unidad").upper(),
+            "descripcion": _texto(sub.get("descripcion") or "", "descripción"),
+            "precio_centavos": None if precio in (None, "") else _entero(precio, "precio del subrenglón", minimo=0),
+        })
+    return sorted(limpios, key=lambda x: x["pos"])
+
+
+def _escribir_subrenglones(con, numero, pos, lista, version=None):
+    """Dentro de una transacción: guarda los subrenglones en el crudo del renglón (versión + evento)."""
+    fila = db.leer_fila(con, "renglon", {"oc": numero, "pos": pos})
+    if fila is None:
+        return
+    crudo = json.loads(fila.get("crudo") or "{}")
+    if (crudo.get(CLAVE_SUBRENGLONES) or []) == lista:
+        if version is not None and version != fila["version"]:
+            raise db.ConflictoVersion()
+        return
+    if lista:
+        crudo[CLAVE_SUBRENGLONES] = lista
+    else:
+        crudo.pop(CLAVE_SUBRENGLONES, None)
+    db.actualizar_con_version(con, "renglon", {"oc": numero, "pos": pos},
+                              fila["version"] if version is None else version, {"crudo": crudo})
+
+
+def guardar_subrenglones(con, numero, pos, version, lista):
+    """Edita a mano los subrenglones de un renglón (descripción, cantidad, unidad)."""
+    version = _version(version)
+    pos = _entero(pos, "renglón", minimo=1)
+    limpios = _validar_subrenglones(lista, pos)
+    with db.transaccion(con):
+        oc = _leer_oc(con, numero)
+        if db.leer_fila(con, "renglon", {"oc": oc["numero"], "pos": pos}) is None:
+            raise NoEncontrado("La OC %s no tiene el renglón %d." % (oc["numero"], pos))
+        _escribir_subrenglones(con, oc["numero"], pos, limpios, version)
+    return ficha_oc(con, numero)
+
+
+def _subrenglones_por_renglon(valor):
+    """{pos: [subrenglones]} validado (lo que manda la pantalla al aplicar o crear desde el PDF)."""
+    if not valor:
+        return {}
+    if not isinstance(valor, dict):
+        raise ErrorValidacion("Los subrenglones deben ser un objeto renglón → lista.")
+    return {int(pos): _validar_subrenglones(lista, int(pos)) for pos, lista in valor.items() if str(pos).isdigit()}
+
+
 def comparar_oc_pdf(con, numero, leido):
     """Compara lo leído del PDF (gestor.oc_pdf.leer_oc) con la OC de la base. No escribe nada."""
     ficha = ficha_oc(con, numero)
@@ -598,15 +681,18 @@ def comparar_oc_pdf(con, numero, leido):
             "ultimo_pdf": ultimo_pdf_oc(con, oc["numero"])}
 
 
-def crear_oc_desde_pdf(con, datos, archivo="", leido=None):
+def crear_oc_desde_pdf(con, datos, archivo="", leido=None, subrenglones=None):
     """Alta de una OC con los datos del PDF confirmados por la usuaria (ventana «Nueva OC»).
 
     Es una OC cargada a mano (origen MANUAL) con todos sus datos como manuales —también cantidad, unidad, precio y
     desglose de los renglones—, así la importación del z_compras2 no los pisa; y queda registrada la carga del PDF.
     """
+    por_renglon = _subrenglones_por_renglon(subrenglones)
     ficha = crear_oc_manual(con, datos)
     numero = ficha["oc"]["numero"]
     with db.transaccion(con):
+        for pos, lista in por_renglon.items():
+            _escribir_subrenglones(con, numero, pos, lista)
         for fila in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (numero,)).fetchall():
             fila = dict(fila)
             presentes = [c for c in CAMPOS_RENGLON_PDF if fila.get(c) not in (None, "")]
@@ -684,6 +770,7 @@ def aplicar_oc_pdf(con, numero, datos):
 
     archivo = _texto(datos.get("archivo"), "archivo")
     leido = datos.get("leido") if isinstance(datos.get("leido"), dict) else {}
+    por_renglon = _subrenglones_por_renglon(datos.get("subrenglones"))
 
     with db.transaccion(con):
         actual = _leer_oc(con, numero)
@@ -722,6 +809,14 @@ def aplicar_oc_pdf(con, numero, datos):
                 cambios["revisar_desglose"] = 0
             cambios["campos_manuales"] = _con_manuales(fila, [c for c in cambios if c in CAMPOS_RENGLON_PDF])
             db.actualizar_con_version(con, "renglon", {"oc": actual["numero"], "pos": pos}, version_renglon, cambios)
+        for pos, lista in por_renglon.items():
+            fila = db.leer_fila(con, "renglon", {"oc": actual["numero"], "pos": pos})
+            if fila is None:
+                continue
+            # Si ya estaban cargados, se conserva la descripción editada a mano de cada subrenglón.
+            descripciones = {s["pos"]: s.get("descripcion") for s in subrenglones_de(fila)}
+            lista = [dict(s, descripcion=descripciones.get(s["pos"]) or s["descripcion"]) for s in lista]
+            _escribir_subrenglones(con, actual["numero"], pos, lista)
         db.registrar_evento(con, "IMPORTACION", "oc", {"numero": actual["numero"]}, None, {
             "fuente": FUENTE_PDF, "archivo": archivo, "leido": leido,
             "campos_oc": sorted(c for c in validos_oc if c != "campos_manuales"),
@@ -1274,6 +1369,7 @@ def _consumo(con, oc):
             "ideal_mes": _cantidad_texto(ideal),
             "pct_consumido": pct,
             "por_agotarse": cantidad_oc > 0 and (saldo < ideal or pct >= umbral),
+            "agotado": cantidad_oc > 0 and saldo <= 0,
             "por_periodo": {p: _cantidad_texto(c) for p, c in sorted(por_periodo.items())},
         })
     return filas
@@ -1304,7 +1400,7 @@ def _grilla_desde(oc, filas):
             celdas = {p: f["por_periodo"].get(p, "0") for p in columnas}
         resultado.append({
             "pos": f["pos"], "descripcion": f["descripcion"], "cantidad_oc": f["cantidad_oc"], "unidad": f["unidad"],
-            "celdas": celdas, "saldo": f["saldo"], "por_agotarse": f["por_agotarse"],
+            "celdas": celdas, "saldo": f["saldo"], "por_agotarse": f["por_agotarse"], "agotado": f["agotado"],
         })
     return {"periodos": columnas, "filas": resultado}
 
@@ -1522,6 +1618,22 @@ def _texto_periodo_cv(ctx):
                          util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_hasta"])))
 
 
+def _consumido_antes(con, exp):
+    """{pos: cantidad} de los expedientes de la misma OC anteriores a éste (por período; a igual período, por número)."""
+    total = {}
+    for fila in con.execute("SELECT id, periodo, datos FROM expediente WHERE oc = ? AND id <> ? AND estado <> 'ANULADO'",
+                            (exp["oc"], exp["id"])):
+        if fila["periodo"] and exp.get("periodo"):
+            anterior = (fila["periodo"], fila["id"]) < (exp["periodo"], exp["id"])
+        else:
+            anterior = fila["id"] < exp["id"]
+        if not anterior:
+            continue
+        for pos, cantidad in cantidades_del_expediente({"datos": fila["datos"]}).items():
+            total[pos] = total.get(pos, Decimal(0)) + cantidad
+    return total
+
+
 def _con_mayuscula(texto):
     """El objeto en el CV es una oración: primera letra en mayúscula (el resto queda como está)."""
     return texto[:1].upper() + texto[1:]
@@ -1558,6 +1670,7 @@ def datos_cv(con, id_expediente):
             fecha = util.ddmmaaaa(util.fecha_desde_texto(remito["fecha"]))
             if fecha not in fechas.setdefault(pos, []):
                 fechas[pos].append(fecha)
+    previos = _consumido_antes(con, exp)
     filas, completa = [], True
     for pos, renglon in sorted(renglones.items()):
         con_desglose = renglon.get("desglose_cantidad") not in (None, "")
@@ -1565,13 +1678,34 @@ def datos_cv(con, id_expediente):
         entregada = cantidades.get(pos, Decimal(0))
         if entregada != cantidad_oc:
             completa = False
+        fecha = ", ".join(fechas.get(pos, []))
+        subrenglones = subrenglones_de(renglon)
+        if subrenglones:
+            # Con subrenglones (1-10, 1-20…) va uno por fila; lo entregado se asigna en orden: se completa el primero y
+            # después el siguiente (por ejemplo 2026 en el 1-10 y 2027 en el 1-20).
+            ya_usado = _cantidad(renglon.get("consumo_previo")) + previos.get(pos, Decimal(0))
+            resto = entregada
+            for k, sub in enumerate(subrenglones):
+                capacidad = _cantidad(sub.get("cantidad"))
+                libre = max(Decimal(0), capacidad - max(Decimal(0), ya_usado))
+                ya_usado -= capacidad
+                toma = min(libre, resto) if k < len(subrenglones) - 1 else resto
+                resto -= toma
+                filas.append({
+                    "renglon": "%d-%s" % (pos, sub.get("pos")),
+                    "descripcion": sub.get("descripcion") or renglon.get("descripcion") or "",
+                    "cantidad_oc": _cantidad_texto(capacidad),
+                    "cantidad_entregada": _cantidad_texto(toma),
+                    "fecha_entrega": fecha if toma else "",
+                })
+            continue
         # Van todos los renglones de la OC, también los que no tuvieron entregas (cantidad 0); sin la unidad.
         filas.append({
             "renglon": str(pos),
             "descripcion": renglon.get("descripcion") or "",
             "cantidad_oc": _cantidad_texto(cantidad_oc),
             "cantidad_entregada": _cantidad_texto(entregada),
-            "fecha_entrega": ", ".join(fechas.get(pos, [])),
+            "fecha_entrega": fecha,
         })
     hasta = util.fecha_desde_texto(ctx["periodo_hasta"]) if ctx.get("periodo_hasta") else None
     hoy = util.fecha_desde_texto(db.ahora_utc()[:10])
