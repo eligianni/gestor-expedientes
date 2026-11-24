@@ -192,6 +192,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`/api/comprobantes/sii-pdf`, mismo parser que el texto pegado) y controla enseguida con
   `POST /api/expedientes/<id>/comprobantes/revisar` → `negocio.revisar_comprobantes`: los controles de ámbito factura/sii
   del paso 4 sobre lo leído, más CUIT de factura y SII contra el proveedor, SAP y letra del SII. No guarda nada.
+  La pantalla es una sola tabla «Corroborar los datos» (`FILAS_COMPROBANTES` en `app.js`: factura editable | SII | debe
+  ser, con «Coincide / No coincide»); el resumen «N errores · N para verificar» abre la ventana `#dialogo-revision`.
+  Un SII sin datos no se controla.
 - Certificado de validación: no necesita factura ni SII (`textos.referencia_cv`, solo razón y período). Botón en el paso 2
   y en el 5 (`botonCertificado`): primero `GET .../cv/verificar` (422 con lo que falta) y después baja `cv.docx`.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente

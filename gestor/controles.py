@@ -278,17 +278,17 @@ def control_sii_coincide(ctx):
     oc = ctx.get("oc")
     if oc and util.sap_sin_ceros(sii.get("orden_compra") or "") != util.sap_sin_ceros(oc["numero"]):
         resultados.append(Resultado("sii_coincide", "error", "sii",
-                                    "La OC del SII (%s) no es la del expediente (%s)." % (sii.get("orden_compra"), oc["numero"]),
+                                    "La OC del SII (%s) no es la del expediente (%s)." % (sii.get("orden_compra") or "sin OC", oc["numero"]),
                                     "oc"))
     if factura.get("numero") and not (sii.get("nro_comprobante")
                                       and util.misma_factura(factura["numero"], sii["nro_comprobante"])):
         resultados.append(Resultado("sii_coincide", "error", "sii",
                                     "El N° de comprobante del SII (%s) no coincide con la factura %s."
-                                    % (sii.get("nro_comprobante"), factura["numero"]), "numero"))
+                                    % (sii.get("nro_comprobante") or "sin número", factura["numero"]), "numero"))
     if factura.get("cae") and str(sii.get("cae") or "") != str(factura["cae"]).strip():
         resultados.append(Resultado("sii_coincide", "error", "sii",
                                     "El CAE del SII (%s) no coincide con el de la factura (%s)."
-                                    % (sii.get("cae"), factura["cae"]), "cae"))
+                                    % (sii.get("cae") or "sin CAE", factura["cae"]), "cae"))
     if factura.get("centavos") not in (None, "") and sii.get("monto_centavos") != int(factura["centavos"]):
         monto = sii.get("monto_centavos")
         resultados.append(Resultado("sii_coincide", "error", "sii",
@@ -304,7 +304,7 @@ def control_sii_periodo(ctx):
     if not sii or not periodo or sii.get("periodo") == periodo:
         return []
     return [Resultado("sii_periodo", "error", "sii",
-                      "El período cargado en el SII (%s) no es el período validado (%s)." % (sii.get("periodo"), periodo))]
+                      "El período cargado en el SII (%s) no es el período validado (%s)." % (sii.get("periodo") or "sin período", periodo))]
 
 
 def control_sii_destino(ctx):

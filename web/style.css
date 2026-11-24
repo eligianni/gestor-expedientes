@@ -560,3 +560,24 @@ th.izq .orden-columna { justify-content: flex-start; text-align: left; }
 /* Filas que abren algo al hacer clic (expedientes de la OC) */
 tr.fila-clic { cursor: pointer; }
 tr.fila-clic:hover td { background: var(--primario-suave); }
+
+/* Paso 3: una sola tabla para corroborar factura, SII y lo que debe ser */
+.encabezado-comprobantes { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-top: 8px; }
+.encabezado-comprobantes h4 { margin: 0; }
+.tabla-comprobantes th[scope="row"] { font-weight: 600; white-space: nowrap; }
+.tabla-comprobantes td { vertical-align: middle; }
+.tabla-comprobantes input { width: 100%; min-width: 150px; min-height: 40px; }
+.tabla-comprobantes .celda-periodo { white-space: nowrap; }
+.tabla-comprobantes .celda-periodo input { width: 150px; min-width: 0; display: inline-block; }
+.tabla-comprobantes .celda-no-aplica { background: var(--superficie-hundida); }
+.tabla-comprobantes tr.fila-distinta td, .tabla-comprobantes tr.fila-distinta th { background: var(--error-fondo); }
+.enlace-resumen { min-height: 44px; padding: 0 4px; border: 0; background: none; box-shadow: none; font-weight: 650;
+  text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.enlace-resumen:hover { background: none; }
+.enlace-resumen.tono-error { color: var(--error); }
+.enlace-resumen.tono-violeta { color: var(--violeta); }
+.enlace-resumen.tono-aviso { color: var(--aviso); }
+.enlace-resumen.tono-info { color: var(--info); }
+.pegar-sii { flex: 1 1 100%; }
+#dialogo-revision .resultado { margin-bottom: 8px; }
+.tabla-comprobantes th[scope="row"] { text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--texto); background: var(--superficie); }

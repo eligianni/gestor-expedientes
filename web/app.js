@@ -2125,34 +2125,60 @@ const CAMPOS_FACTURA = [
   ["periodo_hasta", "Período de la factura: hasta (si lo indica)", "fecha"],
 ];
 
-const ETIQUETAS_SII = [
-  ["cae", "CAE"], ["fecha_emision", "Fecha de emisión"], ["periodo", "Período"], ["monto_centavos", "Monto"],
-  ["tipo_comprobante", "Tipo de comprobante"], ["nro_comprobante", "N° de comprobante"], ["razon_social", "Razón social"],
-  ["cuit", "CUIT"], ["sap", "N° SAP"], ["area", "Área"], ["tipo_servicio", "Tipo de servicio"], ["concepto", "Concepto"],
-  ["orden_compra", "Orden de compra"], ["cod_tramite", "Código de trámite"],
+// Una sola tabla para corroborar: cada dato con lo de la factura (editable), lo del SII y lo que debe ser.
+// [clave, rótulo, campo de la factura (input) o función que lo lee, clave del SII, clave de lo esperado, tipo de comparación]
+const FILAS_COMPROBANTES = [
+  ["numero", "N° de comprobante", "numero", "nro_comprobante", null, "factura"],
+  ["letra", "Letra / tipo de comprobante", (f) => letraFactura(f.numero), "tipo_comprobante", null, "letra"],
+  ["fecha", "Fecha de emisión", "fecha", "fecha_emision", null, "texto"],
+  ["centavos", "Importe total $", "centavos", "monto_centavos", null, "pesos"],
+  ["cae", "CAE", "cae", "cae", null, "texto"],
+  ["vto_cae", "Vencimiento del CAE", "vto_cae", null, null, "texto"],
+  ["periodo", "Período", "periodo", "periodo", "periodo", "periodo"],
+  ["oc", "Orden de compra", (f) => (f.menciona || {}).oc, "orden_compra", "oc", "sap"],
+  ["cuit", "CUIT del proveedor", (f) => (expEstado.facturaPdf || {}).cuit_emisor, "cuit", "cuit", "digitos"],
+  ["razon_social", "Razón social", null, "razon_social", "razon_social", "texto"],
+  ["sap", "N° SAP del proveedor", null, "sap", "sap", "sap"],
+  ["destinatario", "Destinatario", "destinatario", null, "destinatario", "texto"],
+  ["domicilio", "Domicilio del destinatario", "domicilio", null, "domicilio", "domicilio"],
+  ["area", "Área (SII)", null, "area", "area", "texto"],
+  ["tipo_servicio", "Tipo de servicio (SII)", null, "tipo_servicio", "tipo_servicio", "texto"],
+  ["concepto", "Concepto (SII)", null, "concepto", "concepto", "texto"],
+  ["cod_tramite", "Código de trámite (SII)", null, "cod_tramite", null, "texto"],
 ];
 
+function letraFactura(numero) {
+  const m = /^\s*\d+\s*([A-Z])/i.exec(numero || "");
+  return m ? m[1].toUpperCase() : "";
+}
+
 function controlFactura(campo, tipo, valor) {
-  const atributos = { id: "fac-" + campo };
+  const atributos = { id: "fac-" + campo, "aria-label": (CAMPOS_FACTURA.find(([c]) => c === campo) || [, campo])[1] };
   if (tipo === "fecha") atributos.type = "date";
   if (tipo === "pesos") atributos.inputmode = "decimal";
   if (campo === "numero" || campo === "cae") atributos.clase = "mono";
   return entrada(tipo === "pesos" ? formatoPesos(valor) : valor, atributos);
 }
 
-function pintarSii(sii) {
-  const bloque = document.getElementById("sii-resultado");
-  if (!sii || !Object.keys(sii).length) {
-    vaciar(bloque, el("p", { clase: "texto-suave", texto: "Todavía no se cargó el texto del SII." }));
-    return;
-  }
-  const filas = ETIQUETAS_SII.map(([clave, etiqueta]) => [etiqueta,
-    clave === "monto_centavos" ? (sii[clave] === null || sii[clave] === undefined ? "" : "$ " + formatoPesos(sii[clave])) : (sii[clave] ?? "")]);
-  const partes = [tabla(["Dato del SII", "Valor"], filas)];
-  if (sii.faltantes && sii.faltantes.length) {
-    partes.unshift(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: "No se encontró en el texto: " + sii.faltantes.join(", ") + "." })));
-  }
-  vaciar(bloque, ...partes);
+/** Valor normalizado para comparar (null = no hay dato). */
+function normalizarDato(valor, tipo) {
+  if (valor === null || valor === undefined || valor === "") return null;
+  const texto = String(valor).trim();
+  if (!texto) return null;
+  if (tipo === "factura") { const m = /^(\d+)\s*[A-Z]?\s*-?\s*(\d+)$/i.exec(texto); return m ? Number(m[1]) + "-" + Number(m[2]) : texto; }
+  if (tipo === "letra") { const m = /([ABCM])\s*$/i.exec(texto); return m ? m[1].toUpperCase() : texto.toUpperCase(); }
+  if (tipo === "digitos") return texto.replace(/\D/g, "");
+  if (tipo === "sap") return texto.replace(/^0+/, "");
+  if (tipo === "domicilio") return texto.toUpperCase().replace(/[ÚU]/g, "U").replace(/\s+/g, " ").slice(0, 8);
+  // Texto: sin tildes, mayúsculas y sin signos («GRUPO EFIA S.R.L.» = «GRUPO EFIA SRL»).
+  return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function textoDato(valor, tipo) {
+  if (valor === null || valor === undefined || valor === "") return "—";
+  if (tipo === "pesos") return "$ " + formatoPesos(valor);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(valor))) return String(valor).split("-").reverse().join("/");
+  return String(valor);
 }
 
 async function pintarPaso3() {
@@ -2162,67 +2188,127 @@ async function pintarPaso3() {
   const parametros = await api("GET", "/api/parametros");
   if (parametros && parametros.parametros.destinatario_factura) destino = parametros.parametros.destinatario_factura;
   const valores = Object.assign({ destinatario: destino.nombre, domicilio: destino.domicilio + " " + destino.localidad }, factura);
-  const campos = CAMPOS_FACTURA.map(([campo, etiqueta, tipo]) =>
-    campoFormulario("fac-" + campo, etiqueta, controlFactura(campo, tipo, valores[campo])));
   expEstado.sii = null;
   expEstado.facturaPdf = null;
+  expEstado.revision = null;
+  const tiposFactura = Object.fromEntries(CAMPOS_FACTURA.map(([c, , t]) => [c, t]));
+  const filas = FILAS_COMPROBANTES.map(([clave, rotulo, campoFactura, claveSii, claveEsperado]) => {
+    let celdaFactura;
+    if (clave === "periodo") {
+      celdaFactura = el("td", { clase: "celda-periodo" },
+        controlFactura("periodo_desde", "fecha", valores.periodo_desde), el("span", { clase: "texto-suave", texto: " al " }),
+        controlFactura("periodo_hasta", "fecha", valores.periodo_hasta));
+    } else if (typeof campoFactura === "string") {
+      celdaFactura = el("td", {}, controlFactura(campoFactura, tiposFactura[campoFactura], valores[campoFactura]));
+    } else {
+      celdaFactura = el("td", { id: "cmp-fac-" + clave, clase: campoFactura ? null : "celda-no-aplica", texto: campoFactura ? "—" : "" });
+    }
+    return el("tr", { "data-clave": clave },
+      el("th", { scope: "row", clase: "izq", texto: rotulo }),
+      celdaFactura,
+      el("td", { id: "cmp-sii-" + clave, clase: claveSii ? null : "celda-no-aplica", texto: claveSii ? "—" : "" }),
+      el("td", { id: "cmp-esp-" + clave, clase: claveEsperado ? null : "celda-no-aplica", texto: claveEsperado ? "—" : "" }),
+      el("td", { id: "cmp-est-" + clave }));
+  });
   const archivoFactura = el("input", { type: "file", accept: "application/pdf,.pdf" });
   const archivoSii = el("input", { type: "file", accept: "application/pdf,.pdf" });
+  const tablaDatos = el("table", { clase: "tabla-comprobantes" },
+    el("thead", {}, el("tr", {},
+      el("th", { scope: "col", clase: "izq", texto: "Dato" }), el("th", { scope: "col", texto: "Factura" }),
+      el("th", { scope: "col", texto: "Carga en el SII" }), el("th", { scope: "col", texto: "Debe ser (expediente)" }),
+      el("th", { scope: "col", texto: "" }))),
+    el("tbody", {}, ...filas));
+  tablaDatos.addEventListener("input", actualizarComparacion);
   vaciar(contenedor,
     el("h3", { texto: "3. Factura y SII" }),
     el("section", { clase: "panel seccion-pdf-oc", "aria-labelledby": "comprobantes-pdf-titulo" },
       el("h4", { id: "comprobantes-pdf-titulo", texto: "Cargar desde los PDF" }),
       el("p", { clase: "texto-suave", texto: "Subí el PDF de la factura y el de su carga en el SII: se completan los datos y se controlan "
-        + "enseguida contra el expediente. Podés subir uno solo; lo que no se encuentre lo completás a mano." }),
+        + "enseguida contra el expediente. Podés subir uno solo; lo que no se encuentre lo completás a mano en la tabla." }),
       el("div", { clase: "grilla-dialogo" },
         campoFormulario("fac-pdf", "PDF de la factura", archivoFactura, "El PDF digital del proveedor (no un escaneo)."),
         campoFormulario("sii-pdf", "PDF de la carga en el SII", archivoSii, "La constancia «Factura de Proveedor» del SII.")),
       el("div", { clase: "acciones" },
-        el("button", { type: "button", texto: "Leer y controlar", onclick: () => leerComprobantesPdf(archivoFactura, archivoSii) }))),
-    el("div", { id: "comprobantes-revision", "aria-live": "polite" }),
+        el("button", { type: "button", texto: "Leer y controlar", onclick: () => leerComprobantesPdf(archivoFactura, archivoSii) }),
+        el("details", { clase: "pegar-sii" },
+          el("summary", { texto: "¿El PDF del SII no se puede leer? Pegá su texto" }),
+          el("div", { clase: "campo campo-ancho" },
+            el("label", { for: "sii-texto", texto: "Texto de la factura cargada en el SII" }),
+            el("textarea", { id: "sii-texto", rows: "6", spellcheck: "false" })),
+          el("div", { clase: "acciones" },
+            el("button", { type: "button", clase: "secundario", texto: "Analizar texto del SII", onclick: analizarSii }))))),
     el("form", { clase: "formulario", novalidate: true, onsubmit: guardarFactura },
-      el("h4", { texto: "Datos de la factura" }),
-      el("div", { clase: "grilla-dialogo" }, ...campos),
-      el("h4", { texto: "Carga en el SII" }),
-      el("div", { id: "sii-resultado" }),
-      el("details", {},
-        el("summary", { texto: "¿El PDF del SII no se puede leer? Pegá su texto" }),
-        el("div", { clase: "campo campo-ancho" },
-          el("label", { for: "sii-texto", texto: "Texto de la factura cargada en el SII" }),
-          el("textarea", { id: "sii-texto", rows: "8", spellcheck: "false" })),
-        el("div", { clase: "acciones" },
-          el("button", { type: "button", clase: "secundario", texto: "Analizar texto del SII", onclick: analizarSii }))),
+      el("div", { clase: "encabezado-comprobantes" },
+        el("h4", { texto: "Corroborar los datos" }),
+        el("div", { id: "comprobantes-resumen", "aria-live": "polite" })),
+      el("div", { id: "comprobantes-notas" }),
+      el("div", { clase: "tabla-desplazable" }, tablaDatos),
       el("div", { clase: "acciones" },
         el("button", { type: "submit", texto: "Guardar factura y SII" }),
         el("button", { type: "button", clase: "secundario", texto: "Volver a controlar", onclick: () => revisarComprobantes() }),
         el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 4", onclick: () => mostrarPaso(4) }))));
-  pintarSii(expEstado.exp.datos.sii);
-  if (factura.numero || (expEstado.exp.datos.sii && Object.keys(expEstado.exp.datos.sii).length)) revisarComprobantes(true);
+  actualizarComparacion();
+  const siiGuardado = expEstado.exp.datos.sii || {};
+  if (factura.numero || Object.entries(siiGuardado).some(([k, v]) => k !== "faltantes" && v)) revisarComprobantes(true);
+  else vaciar(document.getElementById("comprobantes-resumen"),
+    el("span", { clase: "texto-suave", texto: "Subí los PDF o completá la factura para controlarla." }));
+}
+
+/** Completa las columnas SII / Debe ser y marca en cada fila si coincide. */
+function actualizarComparacion() {
+  const factura = facturaDelFormulario();
+  const sii = expEstado.sii || expEstado.exp.datos.sii || {};
+  const esperado = (expEstado.revision && expEstado.revision.esperado) || {};
+  for (const [clave, , campoFactura, claveSii, claveEsperado, tipo] of FILAS_COMPROBANTES) {
+    let valorFactura = null;
+    if (clave === "periodo") valorFactura = factura.periodo_desde ? factura.periodo_desde.slice(0, 7) : null;
+    else if (typeof campoFactura === "string") valorFactura = factura[campoFactura];
+    else if (campoFactura) {
+      valorFactura = campoFactura(factura);
+      document.getElementById("cmp-fac-" + clave).textContent = textoDato(valorFactura, tipo);
+    }
+    const valorSii = claveSii ? sii[claveSii] : null;
+    const valorEsperado = claveEsperado ? esperado[claveEsperado] : null;
+    if (claveSii) document.getElementById("cmp-sii-" + clave).textContent = textoDato(valorSii, tipo === "pesos" ? "pesos" : "texto");
+    if (claveEsperado) document.getElementById("cmp-esp-" + clave).textContent = textoDato(valorEsperado, "texto");
+    const valores = [valorFactura, valorSii, valorEsperado].map((v) => normalizarDato(v, tipo === "pesos" ? "texto" : tipo)).filter((v) => v !== null);
+    const estado = document.getElementById("cmp-est-" + clave);
+    const fila = estado.closest("tr");
+    fila.classList.remove("fila-distinta");
+    if (valores.length < 2) {
+      vaciar(estado, valores.length ? null : el("span", { clase: "pastilla pastilla-neutra", texto: "Sin dato" }));
+    } else if (valores.every((v) => v === valores[0])) {
+      vaciar(estado, el("span", { clase: "pastilla pastilla-exito", texto: "Coincide" }));
+    } else {
+      fila.classList.add("fila-distinta");
+      vaciar(estado, el("span", { clase: "pastilla pastilla-error", texto: "No coincide" }));
+    }
+  }
 }
 
 /** Factura del formulario del paso 3 (centavos en int; NaN si el importe está mal escrito). */
 function facturaDelFormulario() {
   const factura = Object.assign({}, expEstado.exp.datos.factura || {});
   for (const [campo, , tipo] of CAMPOS_FACTURA) {
-    const valor = document.getElementById("fac-" + campo).value.trim();
+    const control = document.getElementById("fac-" + campo);
+    if (!control) continue;
+    const valor = control.value.trim();
     factura[campo] = tipo === "pesos" ? pesosACentavos(valor) : (valor || null);
   }
   if (expEstado.facturaPdf && expEstado.facturaPdf.menciona) factura.menciona = expEstado.facturaPdf.menciona;
   return factura;
 }
 
-/** Lee los PDF elegidos (factura y/o SII), completa el formulario y controla enseguida. */
+/** Lee los PDF elegidos (factura y/o SII), completa la tabla y controla enseguida. */
 async function leerComprobantesPdf(archivoFactura, archivoSii) {
   limpiarAvisos();
   if (!archivoFactura.files[0] && !archivoSii.files[0]) { mostrarAviso("Elegí el PDF de la factura, el del SII o los dos.", "error"); return; }
-  const destino = document.getElementById("comprobantes-revision");
-  cargando(destino);
   const notas = [];
   if (archivoFactura.files[0]) {
     const datos = new FormData();
     datos.append("archivo", archivoFactura.files[0], archivoFactura.files[0].name);
     const respuesta = await api("POST", "/api/comprobantes/factura-pdf", datos);
-    if (!respuesta) { vaciar(destino); return; }
+    if (!respuesta) return;
     const leido = respuesta.leido;
     expEstado.facturaPdf = leido;
     for (const [campo, , tipo] of CAMPOS_FACTURA) {
@@ -2237,47 +2323,75 @@ async function leerComprobantesPdf(archivoFactura, archivoSii) {
     const datos = new FormData();
     datos.append("archivo", archivoSii.files[0], archivoSii.files[0].name);
     const respuesta = await api("POST", "/api/comprobantes/sii-pdf", datos);
-    if (!respuesta) { vaciar(destino); return; }
-    expEstado.sii = respuesta.sii;
-    pintarSii(respuesta.sii);
-    const completar = (campo, valor) => {
-      const control = document.getElementById("fac-" + campo);
-      if (control && !control.value && valor !== null && valor !== undefined) control.value = valor;
-    };
-    completar("cae", respuesta.sii.cae);
-    completar("fecha", respuesta.sii.fecha_emision);
-    completar("centavos", respuesta.sii.monto_centavos === null ? null : formatoPesos(respuesta.sii.monto_centavos));
+    if (!respuesta) return;
+    usarSii(respuesta.sii, notas);
   }
   await revisarComprobantes(false, notas);
 }
 
-/** Controla la factura y el SII (lo del formulario y lo leído) contra el expediente, sin guardar. */
+/** Toma los datos del SII (del PDF o del texto pegado) y completa lo que falte de la factura. */
+function usarSii(sii, notas) {
+  expEstado.sii = sii;
+  const completar = (campo, valor) => {
+    const control = document.getElementById("fac-" + campo);
+    if (control && !control.value && valor !== null && valor !== undefined) control.value = valor;
+  };
+  completar("cae", sii.cae);
+  completar("fecha", sii.fecha_emision);
+  completar("centavos", sii.monto_centavos === null ? null : formatoPesos(sii.monto_centavos));
+  if (sii.faltantes && sii.faltantes.length) notas.push("No se encontró en el SII: " + sii.faltantes.join(", ") + ".");
+}
+
+/** Controla factura y SII contra el expediente (sin guardar) y deja el resumen: «3 errores · 1 para verificar». */
 async function revisarComprobantes(silencioso, notas) {
-  const destino = document.getElementById("comprobantes-revision");
   const factura = facturaDelFormulario();
   if (Number.isNaN(factura.centavos)) { mostrarAviso("El importe de la factura no es un importe válido.", "error"); return; }
   const sii = expEstado.sii || expEstado.exp.datos.sii || null;
   const revision = await api("POST", "/api/expedientes/" + expEstado.exp.id + "/comprobantes/revisar", {
     factura, sii, cuit_emisor: expEstado.facturaPdf ? expEstado.facturaPdf.cuit_emisor : null });
-  if (!revision) { vaciar(destino); return; }
-  const partes = [el("h4", { texto: "Control de la factura y el SII" })];
-  for (const nota of notas || []) partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: nota })));
+  if (!revision) return;
+  expEstado.revision = revision;
+  actualizarComparacion();
+  vaciar(document.getElementById("comprobantes-notas"),
+    ...(notas || []).map((nota) => el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: nota }))));
+  const cuenta = (nivel) => revision.resultados.filter((r) => r.nivel === nivel).length;
+  const resumen = document.getElementById("comprobantes-resumen");
   if (!revision.resultados.length) {
-    partes.push(el("div", { clase: "mensaje mensaje-exito", role: "status" },
-      el("p", { texto: "✓ La factura y el SII coinciden con el expediente." + (expEstado.facturaPdf || expEstado.sii ? " Guardá para conservarlos." : "") })));
+    vaciar(resumen, el("span", { clase: "pastilla pastilla-exito", texto: "Todo coincide con el expediente" }));
   } else {
-    partes.push(el("p", { clase: "texto-suave", texto: revision.errores
-      ? revision.errores + (revision.errores === 1 ? " error" : " errores") + " para corregir antes de seguir:"
-      : "Sin errores; revisá lo siguiente:" }));
-    const orden = { error: 0, salvable: 1, aviso: 2, verificar: 3 };
-    for (const r of [...revision.resultados].sort((a, b) => (orden[a.nivel] ?? 9) - (orden[b.nivel] ?? 9))) {
-      partes.push(el("div", { clase: "resultado nivel-" + r.nivel },
-        el("p", {}, el("span", { clase: "nivel", texto: NIVELES_TEXTO[r.nivel] || r.nivel }),
-          (r.ambito === "sii" ? "SII: " : "Factura: ") + r.mensaje)));
-    }
+    const partes = [];
+    const enlace = (cantidad, singular, plural, tono) => el("button", { type: "button", clase: "enlace-resumen tono-" + tono,
+      texto: cantidad + " " + (cantidad === 1 ? singular : plural), onclick: () => abrirDialogoRevision(revision) });
+    if (cuenta("error")) partes.push(enlace(cuenta("error"), "error", "errores", "error"));
+    if (cuenta("salvable")) partes.push(enlace(cuenta("salvable"), "salvable", "salvables", "violeta"));
+    if (cuenta("aviso")) partes.push(enlace(cuenta("aviso"), "aviso", "avisos", "aviso"));
+    if (cuenta("verificar")) partes.push(enlace(cuenta("verificar"), "para verificar", "para verificar", "info"));
+    vaciar(resumen, ...partes.flatMap((p, i) => (i ? [el("span", { clase: "texto-suave", texto: " · " }), p] : [p])));
   }
-  vaciar(destino, el("section", { clase: "panel revision-comprobantes" }, ...partes));
-  if (!silencioso) destino.scrollIntoView({ block: "nearest" });
+  if (!silencioso) document.getElementById("comprobantes-resumen").scrollIntoView({ block: "nearest" });
+}
+
+/** Ventana con el detalle de lo que no coincide (errores primero). */
+function abrirDialogoRevision(revision) {
+  const anterior = document.getElementById("dialogo-revision");
+  if (anterior) anterior.remove();
+  const orden = { error: 0, salvable: 1, aviso: 2, verificar: 3 };
+  const items = [...revision.resultados].sort((a, b) => (orden[a.nivel] ?? 9) - (orden[b.nivel] ?? 9)).map((r) =>
+    el("div", { clase: "resultado nivel-" + r.nivel },
+      el("p", {}, el("span", { clase: "nivel", texto: NIVELES_TEXTO[r.nivel] || r.nivel }),
+        (r.ambito === "sii" ? "SII: " : "Factura: ") + r.mensaje)));
+  const dialogo = el("dialog", { id: "dialogo-revision", clase: "dialogo dialogo-mediano", "aria-labelledby": "revision-titulo" },
+    el("div", { clase: "dialogo-encabezado" },
+      el("h2", { id: "revision-titulo", texto: "Control de la factura y el SII" }),
+      el("p", { clase: "texto-suave", texto: revision.errores
+        ? revision.errores + (revision.errores === 1 ? " error" : " errores") + " para corregir antes de seguir."
+        : "Sin errores; revisá lo siguiente." })),
+    ...items,
+    el("div", { clase: "acciones dialogo-acciones" },
+      el("button", { type: "button", texto: "Cerrar", onclick: () => dialogo.close() })));
+  dialogo.addEventListener("close", () => dialogo.remove());
+  document.body.append(dialogo);
+  dialogo.showModal();
 }
 
 async function analizarSii() {
@@ -2286,17 +2400,9 @@ async function analizarSii() {
   if (!texto.trim()) { mostrarAviso("Pegá el texto de la factura cargada en el SII.", "error"); return; }
   const sii = await api("POST", "/api/comprobantes/analizar", { texto });
   if (!sii) return;
-  expEstado.sii = sii;
-  pintarSii(sii);
-  const completar = (campo, valor) => {
-    const control = document.getElementById("fac-" + campo);
-    if (control && !control.value && valor !== null && valor !== undefined) control.value = valor;
-  };
-  completar("cae", sii.cae);
-  completar("fecha", sii.fecha_emision);
-  completar("centavos", sii.monto_centavos === null ? null : formatoPesos(sii.monto_centavos));
-  mostrarAviso("Texto del SII analizado. Revisá los datos y guardá.", "exito");
-  await revisarComprobantes();
+  const notas = [];
+  usarSii(sii, notas);
+  await revisarComprobantes(false, notas);
 }
 
 async function guardarFactura(evento) {
