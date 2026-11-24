@@ -181,6 +181,12 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`claseColumna` en `app.js` por el título; en Tablas, `COLUMNAS_A_LA_IZQUIERDA`). La lista de OC muestra las marcas
   (centralizada, comodato, otro centro, manual, excluida) como etiquetas en «Observaciones», no en «Tipo». Tablas tiene
   «Ver más grande» (`body.vista-amplia`, sin menú ni encabezado; Esc sale) y la tabla de Entregas (`tablas.tabla_entregas`).
+- OC «Acciones pendientes» (`faltantesOC` en `app.js`): falta el PDF (`negocio.ocs_con_pdf`, `listar_oc.pdf_cargado`) o el
+  concepto corto; ambos llevan (*) en la ventana de edición (que también tiene la carga del PDF) y sin ellos «Nuevo
+  expediente» de la ficha está deshabilitado. La ficha no muestra GDE del PDF, concepto corto ni día de inicio (solo al editar).
+- Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente
+  (`negocio.guardar_consumo_manual`, `PUT /api/expedientes/<id>/consumo-manual`); `cantidades_del_expediente` lo usa solo
+  si los remitos no tienen cantidades. La ficha de la OC muestra el consumo como tabla (renglón × período).
 - Editar una OC: lápiz (`botonLapiz`) en la lista y en la ficha → ventana `abrirDialogoEditarOC` (campos de
   `CAMPOS_OC_FORM`, `PUT /api/oc/<n>`); la confirmación se muestra dentro de la ventana y la ficha queda en lectura
   (`resumenDatosOC`). Buscar cierra la ficha abierta. La leyenda del CV solo se muestra en centralizadas.
