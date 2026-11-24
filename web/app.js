@@ -2148,13 +2148,14 @@ const CAMPOS_FACTURA = [
 // Una sola tabla para corroborar: cada dato con lo de la factura (editable), lo del SII y lo que debe ser.
 // [clave, rótulo, campo de la factura (input) o función que lo lee, clave del SII, clave de lo esperado, tipo de comparación]
 const FILAS_COMPROBANTES = [
+  // El SII muestra el punto de venta con 4 dígitos aunque la factura tenga 5: se comparan los números, no los ceros.
   ["numero", "N° de comprobante", "numero", "nro_comprobante", null, "factura"],
   ["letra", "Letra / tipo de comprobante", (f) => letraFactura(f.numero), "tipo_comprobante", null, "letra"],
   ["fecha", "Fecha de emisión", "fecha", "fecha_emision", null, "texto"],
   ["centavos", "Importe total $", "centavos", "monto_centavos", null, "pesos"],
   ["cae", "CAE", "cae", "cae", null, "texto"],
   ["vto_cae", "Vencimiento del CAE", "vto_cae", null, null, "texto"],
-  ["periodo", "Período", "periodo", "periodo", "periodo", "periodo"],
+  ["periodo", "Período (mes en que termina)", "periodo", "periodo", "periodo", "periodo"],
   ["oc", "Orden de compra", (f) => (f.menciona || {}).oc, "orden_compra", "oc", "sap"],
   ["cuit", "CUIT del proveedor", (f) => (expEstado.facturaPdf || {}).cuit_emisor, "cuit", "cuit", "digitos"],
   ["razon_social", "Razón social", null, "razon_social", "razon_social", "texto"],
@@ -2281,7 +2282,8 @@ function actualizarComparacion() {
   const esperado = (expEstado.revision && expEstado.revision.esperado) || {};
   for (const [clave, , campoFactura, claveSii, claveEsperado, tipo] of FILAS_COMPROBANTES) {
     let valorFactura = null;
-    if (clave === "periodo") valorFactura = factura.periodo_desde ? factura.periodo_desde.slice(0, 7) : null;
+    // Período: el mes en que termina (así se carga en el SII cuando es un período específico).
+    if (clave === "periodo") valorFactura = (factura.periodo_hasta || factura.periodo_desde || "").slice(0, 7) || null;
     else if (typeof campoFactura === "string") valorFactura = factura[campoFactura];
     else if (campoFactura) {
       valorFactura = campoFactura(factura);

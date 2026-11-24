@@ -117,3 +117,26 @@ class PruebaControlesApi(ayudas.CasoConServidor):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PruebaPeriodoSii(unittest.TestCase):
+    """En el SII se carga el mes en que termina el período validado (si es un período específico, el mes del «hasta»)."""
+
+    def _ctx(self, periodo, desde, hasta, periodo_sii):
+        return {"expediente": {"periodo": periodo, "periodo_desde": desde, "periodo_hasta": hasta,
+                               "datos": {"sii": {"periodo": periodo_sii}}}}
+
+    def test_periodo_especifico_se_carga_con_el_mes_de_fin(self):
+        ctx = self._ctx("2026-09", "2026-09-15", "2026-10-14", "2026-10")
+        self.assertEqual(controles.control_sii_periodo(ctx), [])
+
+    def test_mes_calendario(self):
+        self.assertEqual(controles.control_sii_periodo(self._ctx("2026-08", "2026-08-01", "2026-08-31", "2026-08")), [])
+        mal = controles.control_sii_periodo(self._ctx("2026-08", "2026-08-01", "2026-08-31", "2026-07"))
+        self.assertEqual([(r.codigo, r.nivel) for r in mal], [("sii_periodo", "error")])
+        self.assertEqual(mal[0].mensaje, "El período cargado en el SII (2026-07) no es el del período validado (2026-08).")
+
+    def test_periodo_especifico_mal_cargado(self):
+        mal = controles.control_sii_periodo(self._ctx("2026-09", "2026-09-15", "2026-10-14", "2026-09"))
+        self.assertEqual(mal[0].mensaje, "El período cargado en el SII (2026-09) no es el del período validado (2026-10, "
+                                         "el mes en que termina el 15/09/2026 al 14/10/2026).")

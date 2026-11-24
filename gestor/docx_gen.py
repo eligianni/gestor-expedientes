@@ -168,6 +168,34 @@ def fecha_larga(fecha):
 
 # --- CV --------------------------------------------------------------------------
 
+ANCHO_FECHA = 3098  # twips: entra «24 de Septiembre del 2026» en un renglón
+
+
+def _ensanchar_fecha(cuerpo):
+    """La celda de la fecha es angosta en la plantilla: se ensancha corriendo la tabla a la izquierda (mismo borde derecho)."""
+    for tabla in cuerpo.iter(W + "tbl"):
+        if celda_derecha_de(tabla, "Buenos Aires,") is None:
+            continue
+        columnas = tabla.findall(W + "tblGrid/" + W + "gridCol")
+        if len(columnas) != 2:
+            return
+        actual = int(columnas[1].get(W + "w") or 0)
+        extra = ANCHO_FECHA - actual
+        if extra <= 0:
+            return
+        columnas[1].set(W + "w", str(ANCHO_FECHA))
+        sangria = tabla.find(W + "tblPr/" + W + "tblInd")
+        if sangria is not None:
+            sangria.set(W + "w", str(max(0, int(sangria.get(W + "w") or 0) - extra)))
+        for fila in tabla.findall(W + "tr"):
+            celdas = fila.findall(W + "tc")
+            if len(celdas) == 2:
+                ancho = celdas[1].find(W + "tcPr/" + W + "tcW")
+                if ancho is not None:
+                    ancho.set(W + "w", str(ANCHO_FECHA))
+        return
+
+
 def generar_cv(ruta_plantilla, datos):
     """Completa la plantilla del CV con `datos` (textos ya formateados) y devuelve el .docx en bytes.
 
@@ -185,6 +213,7 @@ def generar_cv(ruta_plantilla, datos):
     cuerpo = raiz.find(W + "body")
 
     _poner_en_celda(_celda(cuerpo, "Buenos Aires,"), fecha_larga(datos["fecha"]))
+    _ensanchar_fecha(cuerpo)
     for rotulo, clave in (("Proveedor:", "proveedor"), ("N° SAP:", "sap"), ("N° Expediente:", "expediente"),
                           ("N° C.A. :", "ca"), ("Orden de Compra:", "oc"), ("Vigencia de la OC :", "vigencia"),
                           ("Rubro:", "rubro"), ("Entrega:", "entrega"), ("Período:", "periodo_texto")):
