@@ -1580,7 +1580,7 @@ def datos_cv(con, id_expediente):
         entrega = "Mensual"
     else:
         entrega = "Única" if completa else "Parcial"
-    referencia = next(r["referencia"] for r in textos.referencias(ctx) if r["clave"] == "cv")
+    referencia = textos.referencia_cv(ctx)
     datos = {
         "fecha": max(hoy, hasta) if hasta else hoy,
         "proveedor": ctx["razon"],

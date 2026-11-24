@@ -2001,7 +2001,10 @@ function pintarPaso2() {
   });
   formulario.append(el("div", { clase: "acciones" },
     el("button", { type: "submit", texto: "Guardar cantidades" }),
-    el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 3", onclick: () => mostrarPaso(3) })));
+    botonCertificado("secundario"),
+    el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 3", onclick: () => mostrarPaso(3) })),
+    el("p", { clase: "nota-pie", texto: "El certificado de validación sale con el período y las cantidades guardadas: "
+      + "no hace falta la factura ni la carga en el SII." }));
   partes.push(formulario);
   vaciar(contenedor, ...partes);
   actualizarFilasRemito();
@@ -2412,6 +2415,21 @@ function bloqueTexto(titulo, texto, conFormato) {
         onclick: () => copiarTexto(texto) })));
 }
 
+/** Botón del certificado de validación: primero verifica (y avisa qué falta), después descarga el .docx. */
+function botonCertificado(clase) {
+  return el("button", { type: "button", clase: clase || null, texto: "Descargar certificado de validación (.docx)",
+    onclick: async () => {
+      limpiarAvisos();
+      const base = "/api/expedientes/" + expEstado.exp.id;
+      const listo = await api("GET", base + "/cv/verificar");
+      if (!listo) return;
+      const enlace = el("a", { href: base + "/cv.docx", download: "" });
+      document.body.append(enlace);
+      enlace.click();
+      enlace.remove();
+    } });
+}
+
 // Paso 5: textos generados.
 
 async function pintarPaso5() {
@@ -2422,14 +2440,16 @@ async function pintarPaso5() {
     : expEstado.exp.tipo === "EVENTUAL" ? seccionEventual(textos) : null;
   if (!textos) {
     vaciar(contenedor, el("h3", { texto: "5. Textos" }), correctivo,
-      el("p", { clase: "texto-suave", texto: "Completá los datos que faltan (ver el mensaje de arriba) para generar los textos." }));
+      el("div", { clase: "acciones" }, botonCertificado()),
+      el("p", { clase: "texto-suave", texto: "Completá los datos que faltan (ver el mensaje de arriba) para generar los textos. "
+        + "El certificado de validación no necesita la factura: sale con el período y las cantidades de los remitos." }));
     return;
   }
   const base = "/api/expedientes/" + expEstado.exp.id;
   const partes = [
     el("h3", { texto: "5. Documentos y textos" }),
     el("div", { clase: "acciones" },
-      el("a", { clase: "boton", href: base + "/cv.docx", download: "", texto: "Descargar certificado de validación (.docx)" }),
+      botonCertificado(),
       textos.autorizacion
         ? el("a", { clase: "boton secundario", href: base + "/autorizacion.docx", download: "", texto: "Descargar autorización (.docx)" })
         : null),
