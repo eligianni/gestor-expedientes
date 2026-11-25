@@ -153,6 +153,20 @@
           <div class="acciones"><button type="submit">Ver centralizadas</button></div>
         </form>
         <div id="centralizadas-tabla"></div>
+        <form id="centralizadas-importar" class="panel formulario" novalidate>
+          <h2>Cargar el seguimiento en Excel</h2>
+          <p class="texto-suave">El SEGUIMIENTO_CENTRALIZADAS (hojas «NOTAS ENVIADAS» y «ENTREGAS ÚNICAS»): cada fila queda como la
+            validación de esa OC, efector y mes, con su remito, IF del certificado, nota y fecha de envío. Lo que ya esté cargado no se repite.</p>
+          <div class="campo">
+            <label for="central-archivo">Archivo (.xlsx)</label>
+            <input id="central-archivo" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+          </div>
+          <div class="acciones">
+            <button type="submit" class="secundario">Ver qué se carga</button>
+            <button type="button" id="central-importar-confirmar">Cargar</button>
+          </div>
+          <div id="central-importar-resultado" aria-live="polite"></div>
+        </form>
         <form id="centralizadas-exporte" class="panel formulario filtros" novalidate>
           <div class="campo">
             <label for="central-periodo">Exportar las validaciones del período (AAAA-MM, vacío = todos)</label>

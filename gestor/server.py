@@ -305,6 +305,33 @@ def _pedido_migracion(h, cuerpo):
     return hojas_num, hojas_rem, "%s + %s" % (archivos["numeracion"][0], archivos["remitos"][0])
 
 
+def _pedido_centralizadas(h, cuerpo):
+    _, archivos = leer_multipart(h, cuerpo)
+    if not (archivos.get("archivo") and archivos["archivo"][1]):
+        raise validacion("Elegí el seguimiento de centralizadas (.xlsx).")
+    nombre, contenido = archivos["archivo"]
+    try:
+        return xlsx.leer_hojas(io.BytesIO(contenido)), nombre
+    except xlsx.XlsxError as error:
+        raise validacion(str(error)) from None
+
+
+def centralizadas_vista_previa(h, m, cuerpo):
+    hojas, _ = _pedido_centralizadas(h, cuerpo)
+    try:
+        return 200, _ok(migracion.planificar_centralizadas(h.conexion(), hojas))
+    except migracion.ErrorMigracion as error:
+        raise validacion(str(error)) from None
+
+
+def centralizadas_confirmar(h, m, cuerpo):
+    hojas, nombre = _pedido_centralizadas(h, cuerpo)
+    try:
+        return 200, _ok(migracion.migrar_centralizadas(h.conexion(), hojas, nombre))
+    except migracion.ErrorMigracion as error:
+        raise validacion(str(error)) from None
+
+
 def migracion_vista_previa(h, m, cuerpo):
     hojas_num, hojas_rem, _ = _pedido_migracion(h, cuerpo)
     try:
@@ -726,6 +753,8 @@ RUTAS = [
     ("GET", re.compile(r"/api/importaciones"), importaciones),
     ("POST", re.compile(r"/api/importar/seguimiento/vista-previa"), migracion_vista_previa),
     ("POST", re.compile(r"/api/importar/seguimiento/confirmar"), migracion_confirmar),
+    ("POST", re.compile(r"/api/importar/centralizadas/vista-previa"), centralizadas_vista_previa),
+    ("POST", re.compile(r"/api/importar/centralizadas/confirmar"), centralizadas_confirmar),
     ("GET", re.compile(r"/api/oc"), oc_listar),
     ("POST", re.compile(r"/api/oc"), oc_crear),
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)"), oc_ficha),

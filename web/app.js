@@ -3623,6 +3623,8 @@ function iniciarCentralizadas() {
   pintarBotonesCentralizadas();
   document.getElementById("central-anio").value = String(new Date().getFullYear());
   document.getElementById("centralizadas-filtros").addEventListener("submit", (e) => { e.preventDefault(); cargarCentralizadas(); });
+  document.getElementById("centralizadas-importar").addEventListener("submit", (e) => { e.preventDefault(); importarCentralizadas(false); });
+  document.getElementById("central-importar-confirmar").addEventListener("click", () => importarCentralizadas(true));
 }
 
 // --- Centralizadas: tabla OC × período con CV, nota, fecha de envío y checklist ----------
@@ -3671,6 +3673,36 @@ async function cargarCentralizadas() {
       ...Object.values(ESTADOS_TABLERO).map(([letra, texto, tono]) =>
         el("li", {}, el("span", { clase: "celda-tablero tono-" + tono, texto: letra }), " " + texto))),
     el("p", { clase: "nota-pie", texto: "Hacé clic en un mes para abrir su validación o empezarla." }));
+}
+
+/** Carga el seguimiento de centralizadas en Excel: primero «Ver qué se carga» y después «Cargar». */
+async function importarCentralizadas(confirmar) {
+  limpiarAvisos();
+  const archivo = document.getElementById("central-archivo");
+  if (!archivo.files[0]) { mostrarAviso("Elegí el seguimiento de centralizadas (.xlsx).", "error"); return; }
+  const destino = document.getElementById("central-importar-resultado");
+  cargando(destino);
+  const datos = new FormData();
+  datos.append("archivo", archivo.files[0], archivo.files[0].name);
+  const informe = await api("POST", "/api/importar/centralizadas/" + (confirmar ? "confirmar" : "vista-previa"), datos);
+  if (!informe) { vaciar(destino); return; }
+  const r = informe.resumen;
+  const partes = [el("div", { clase: "mensaje " + (confirmar ? "mensaje-exito" : "mensaje-aviso") }, el("p", { texto: confirmar
+    ? "Listo: " + r.creados + " validaciones cargadas (" + r.ya_cargadas + " ya estaban)."
+    : r.a_crear + " validaciones para cargar (" + r.validadas + " ya validadas, con nota), " + r.ya_cargadas + " ya cargadas"
+      + (r.ocs_a_marcar ? "; " + r.ocs_a_marcar + " OC se marcan como centralizadas" : "") + "." }))];
+  if (informe.sin_oc.length) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso mensaje-columna" },
+      el("p", { texto: informe.sin_oc.length + " OC del Excel no están en el gestor y sus filas no se cargan. Cargá su PDF "
+        + "(Órdenes de compra → Nueva OC) y volvé a cargar el Excel: lo que ya esté no se repite." }),
+      el("ul", {}, ...informe.sin_oc.map((x) => el("li", { texto: x.oc + " — " + x.razon_social + " (" + x.filas + " filas)" })))));
+  }
+  if (informe.avisos.length) {
+    partes.push(el("details", {}, el("summary", { texto: informe.avisos.length + " avisos del Excel" }),
+      el("ul", {}, ...informe.avisos.map((a) => el("li", { texto: a })))));
+  }
+  vaciar(destino, ...partes);
+  if (confirmar) cargarCentralizadas();
 }
 
 function irAOC(numero) {
