@@ -1059,8 +1059,12 @@ def crear_expediente(con, datos):
             fila[campo] = _validar_campo_expediente(campo, datos[campo])
     if fila.get("periodo") and numero_oc and not (fila.get("periodo_desde") and fila.get("periodo_hasta")):
         # Período elegido al crear (por ejemplo desde el tablero de centralizadas): queda fijo, con sus fechas.
-        limites = limites_de_periodo(fila["periodo"], int(oc.get("dia_inicio_periodo") or 1))
-        fila.update(periodo_desde=util.iso(limites.desde), periodo_hasta=util.iso(limites.hasta), periodo_manual=1)
+        if tipo == "CENTRALIZADA":
+            desde, hasta = limites_centralizada(oc, fila["periodo"])
+        else:
+            limites = limites_de_periodo(fila["periodo"], int(oc.get("dia_inicio_periodo") or 1))
+            desde, hasta = limites.desde, limites.hasta
+        fila.update(periodo_desde=util.iso(desde), periodo_hasta=util.iso(hasta), periodo_manual=1)
     with db.transaccion(con):
         nuevo_id = db.insertar(con, "expediente", fila)
     return obtener_expediente(con, nuevo_id)
@@ -2677,6 +2681,24 @@ ESTADO_TABLERO = {"BORRADOR": "en_curso", "CONTROLADO": "en_curso", "EN_FIRMA": 
                   "ENVIADO": "validado"}
 
 
+def limites_centralizada(oc, periodo):
+    """Las centralizadas se validan por mes calendario; el primero y el último se recortan a la vigencia
+    (por ejemplo «FEBRERO (14/02/26 al 28/02/26)»)."""
+    limites = limites_de_periodo(periodo, 1)
+    desde, hasta = limites.desde, limites.hasta
+    if oc.get("vig_desde"):
+        desde = max(desde, util.fecha_desde_texto(oc["vig_desde"]))
+    fin = _fin_vigencia(oc)
+    if fin:
+        hasta = min(hasta, util.fecha_desde_texto(fin))
+    return desde, hasta
+
+
+def periodos_centralizada(oc):
+    """Meses calendario (AAAA-MM) de la vigencia de una OC centralizada."""
+    return periodos_de_vigencia(dict(oc, dia_inicio_periodo=1))
+
+
 def tablero_centralizadas(con, anio, efector=None, hoy=None):
     """Una fila por OC centralizada y efector que la valida, con el estado de la validación de cada mes del año."""
     try:
@@ -2684,6 +2706,7 @@ def tablero_centralizadas(con, anio, efector=None, hoy=None):
     except (TypeError, ValueError):
         raise ErrorValidacion("El año no es válido.") from None
     hoy = hoy or util.fecha_desde_texto(db.ahora_utc()[:10])
+    dias_gracia = int(db.leer_parametros(con).get("dias_gracia", 10))
     validaciones = {}
     for fila in con.execute("SELECT id, oc, efector, periodo, estado, datos FROM expediente "
                             "WHERE tipo = 'CENTRALIZADA' AND estado <> 'ANULADO' ORDER BY id"):
@@ -2693,11 +2716,10 @@ def tablero_centralizadas(con, anio, efector=None, hoy=None):
     for oc in con.execute("SELECT o.*, p.razon_social FROM oc o LEFT JOIN proveedor p ON p.sap = o.sap "
                           "WHERE o.centralizada = 1 AND o.excluida = 0 ORDER BY p.razon_social, o.numero"):
         oc = dict(oc)
-        periodos = [p for p in periodos_de_vigencia(oc) if p.startswith("%04d-" % anio)]
+        periodos = [p for p in periodos_centralizada(oc) if p.startswith("%04d-" % anio)]
         sueltas = [k for k in validaciones if k[0] == oc["numero"] and (k[2] or "").startswith("%04d-" % anio)]
         if not periodos and not sueltas:
             continue
-        dia = int(oc.get("dia_inicio_periodo") or 1)
         for ef in efectores_de_oc(con, oc):
             if efector in EFECTORES and ef != efector:
                 continue
@@ -2710,8 +2732,15 @@ def tablero_centralizadas(con, anio, efector=None, hoy=None):
                 elif periodo not in periodos:
                     estado = "fuera"
                 else:
-                    limites = limites_de_periodo(periodo, dia)
-                    estado = "sin_iniciar" if hoy < limites.desde else ("pendiente" if hoy <= limites.hasta else "atrasado")
+                    # Los remitos llegan los primeros días del mes siguiente: hasta `dias_gracia` (10) después del fin
+                    # del mes está pendiente, no atrasada (noviembre: pendiente hasta el 10/12).
+                    desde, hasta = limites_centralizada(oc, periodo)
+                    if hoy < desde:
+                        estado = "sin_iniciar"
+                    elif hoy <= hasta + timedelta(days=dias_gracia):
+                        estado = "pendiente"
+                    else:
+                        estado = "atrasado"
                 central = (_datos_de(exp).get("centralizada") or {}) if exp else {}
                 celdas.append({"periodo": periodo, "estado": estado, "expediente_id": exp["id"] if exp else None,
                                "numero_cv": central.get("numero_cv") or "", "numero_nota": central.get("numero_nota") or "",

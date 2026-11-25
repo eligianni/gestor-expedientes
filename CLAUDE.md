@@ -217,6 +217,10 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   sin `tipo`). Reparto por efector en `renglon.crudo["_por_efector"]` (`guardar_por_efector`, `PUT .../renglones/<pos>/
   efectores`): consumo (`consumo_oc(efector=)`), CV y lo consumido antes van por efector; la OC aparece en la lista de cada
   efector que la valida (`efectores_de_oc`). Tablero: `GET /api/centralizadas/tablero` (`negocio.tablero_centralizadas`).
+  Se validan por mes calendario recortado a la vigencia (`negocio.limites_centralizada`); en el tablero un mes está
+  «pendiente» hasta `dias_gracia` (10) días después de terminar. El SEGUIMIENTO_CENTRALIZADAS en Excel se carga desde la
+  pantalla («NOTAS ENVIADAS» y «ENTREGAS ÚNICAS», HUR = CASPH): `migracion.planificar_centralizadas` / `migrar_centralizadas`
+  (`/api/importar/centralizadas/{vista-previa,confirmar}`), idempotente por OC + efector + mes; marca las OC como centralizadas.
 - Los expedientes no se borran: «Anular expediente» (arriba del asistente, `abrirDialogoAnular`) pide un motivo y llama a
   `POST /api/expedientes/<id>/anular`; queda ANULADO y deja de contar para consumo y controles.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente

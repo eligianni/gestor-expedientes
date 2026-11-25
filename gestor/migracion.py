@@ -12,6 +12,7 @@
 
 Todas las columnas se buscan por NOMBRE normalizado (util.clave_encabezado), nunca por posición.
 """
+import copy
 import getpass
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -546,3 +547,143 @@ def leer_archivos(numeracion, remitos):
         return xlsx.leer_hojas(numeracion), xlsx.leer_hojas(remitos)
     except xlsx.XlsxError as error:
         raise ErrorMigracion(str(error)) from None
+
+
+# --- Seguimiento de centralizadas (SEGUIMIENTO_CENTRALIZADAS.xlsx) ---------------------------------------------
+# Hoja «NOTAS ENVIADAS»: una fila por OC + destino (HBI / HUR) + mes, con el remito, el IF del certificado firmado, la
+# nota a Central y la fecha de envío. Hoja «ENTREGAS ÚNICAS»: bienes de una sola entrega (HBI). Cada fila es una
+# validación centralizada (expediente tipo CENTRALIZADA) en el estado que le corresponde: con nota → validada.
+
+FUENTE_CENTRALIZADAS = "migracion_centralizadas"
+_DESTINOS = {"HBI": "HBI", "HUR": "CASPH", "CASPH": "CASPH", "HURLINGHAM": "CASPH"}
+
+
+def _gde_o_texto(valor):
+    """Número GDE normalizado; si tiene un error de tipeo («GESP%INSSJP»), se corrige lo obvio o se guarda como está."""
+    texto = _texto(valor)
+    if not texto or texto in ("-", "—"):
+        return "", False
+    for candidato in (texto, texto.replace("%", "#")):
+        normalizado = util.normalizar_gde(candidato)
+        if util.validar_gde(normalizado):
+            return normalizado, False
+    return texto, True
+
+
+def _hoja(hojas, *nombres):
+    buscados = {_clave(n) for n in nombres}
+    for nombre, filas in (hojas.items() if isinstance(hojas, dict) else hojas):
+        if _clave(nombre) in buscados:
+            return list(filas)
+    return None
+
+
+def leer_centralizadas(hojas):
+    """Filas de las hojas «NOTAS ENVIADAS» y «ENTREGAS ÚNICAS» como dicts por nombre de columna."""
+    filas = []
+    notas = _hoja(hojas, "NOTAS ENVIADAS")
+    if notas is None:
+        raise ErrorMigracion("El archivo no tiene la hoja «NOTAS ENVIADAS».")
+    indice = next((i for i, f in enumerate(notas) if {"oc", "destino"} <= {_clave(c) for c in f if c}), None)
+    if indice is None:
+        raise ErrorMigracion("En «NOTAS ENVIADAS» no encontré los encabezados (OC, DESTINO, PERIODO…).")
+    for _, primero, _ in _registros(notas, indice):
+        filas.append(dict(primero, _hoja="NOTAS ENVIADAS"))
+    unicas = _hoja(hojas, "ENTREGAS UNICAS", "ENTREGAS ÚNICAS")
+    if unicas:
+        indice = next((i for i, f in enumerate(unicas) if {"oc", "sap"} <= {_clave(c) for c in f if c}), None)
+        if indice is not None:
+            for _, primero, _ in _registros(unicas, indice):
+                filas.append(dict(primero, _hoja="ENTREGAS ÚNICAS"))
+    return filas
+
+
+def _ya_existe_validacion(con, oc, efector, periodo):
+    fila = con.execute("SELECT id FROM expediente WHERE tipo = 'CENTRALIZADA' AND oc = ? AND efector = ? AND periodo = ? "
+                       "AND estado <> 'ANULADO'", (oc, efector, periodo)).fetchone()
+    return fila["id"] if fila else None
+
+
+def planificar_centralizadas(con, hojas):
+    """Qué validaciones se crearían (sin escribir nada): una por OC + efector + mes, con su estado."""
+    planes, sin_oc, avisos = [], {}, []
+    vistos = set()
+    for r in leer_centralizadas(hojas):
+        oc = _numero_entero(_primero(r, "oc", "n o c"))
+        periodo = _periodo(_primero(r, "periodo"))
+        if not oc or not periodo:
+            continue
+        destino = _texto(_primero(r, "destino")).upper() or "HBI"
+        efector = _DESTINOS.get(destino)
+        if efector is None:
+            avisos.append("OC %s %s: destino «%s» desconocido; se toma HBI." % (oc, periodo, destino))
+            efector = "HBI"
+        fila_oc = db.leer_fila(con, "oc", {"numero": oc})
+        razon = _texto(_primero(r, "razon social"))
+        if fila_oc is None:
+            sin_oc.setdefault(oc, {"oc": oc, "razon_social": razon, "filas": 0})["filas"] += 1
+            continue
+        clave = (oc, efector, periodo)
+        if clave in vistos:
+            avisos.append("OC %s %s %s está dos veces en el Excel: se toma la primera." % (oc, efector, periodo))
+            continue
+        vistos.add(clave)
+        cv, cv_raro = _gde_o_texto(_primero(r, "cv ifgfc", "cv"))
+        nota, nota_rara = _gde_o_texto(_primero(r, "nota"))
+        if cv_raro or nota_rara:
+            avisos.append("OC %s %s %s: número GDE con formato raro, se guarda como está (%s)."
+                          % (oc, efector, periodo, cv if cv_raro else nota))
+        remitos = [x for x in re.split(r"\s*[/,;]\s*", _texto(_primero(r, "rto n", "n remito"))) if x and x not in ("-", "—")]
+        estado = "ENVIADO" if nota else ("FIRMADO" if cv else "BORRADOR")
+        planes.append({
+            "oc": oc, "efector": efector, "periodo": periodo, "sap": fila_oc["sap"], "razon_social": razon,
+            "remitos": remitos, "numero_cv": cv, "numero_nota": nota, "fecha_envio": _fecha_iso(_primero(r, "fecha", "fecha envio")),
+            "observaciones": _texto(_primero(r, "observaciones", "control")).strip("-").strip(), "estado": estado,
+            "hoja": r["_hoja"], "marcar_centralizada": not fila_oc.get("centralizada"),
+            "ya_existe": _ya_existe_validacion(con, oc, efector, periodo),
+        })
+    a_crear = [p for p in planes if not p["ya_existe"]]
+    return {
+        "validaciones": planes, "sin_oc": sorted(sin_oc.values(), key=lambda x: x["oc"]), "avisos": avisos,
+        "resumen": {
+            "filas": len(planes) + sum(x["filas"] for x in sin_oc.values()), "a_crear": len(a_crear),
+            "ya_cargadas": len(planes) - len(a_crear), "validadas": sum(1 for p in a_crear if p["estado"] == "ENVIADO"),
+            "sin_oc": len(sin_oc), "ocs_a_marcar": len({p["oc"] for p in a_crear if p["marcar_centralizada"]}),
+        },
+    }
+
+
+def migrar_centralizadas(con, hojas, archivo=""):
+    """Crea las validaciones del seguimiento (idempotente) y marca como centralizadas las OC que no lo estaban."""
+    informe = planificar_centralizadas(con, hojas)
+    for numero in sorted({p["oc"] for p in informe["validaciones"] if p["marcar_centralizada"] and not p["ya_existe"]}):
+        oc = db.leer_fila(con, "oc", {"numero": numero})
+        negocio.actualizar_oc(con, numero, oc["version"], {"centralizada": 1})
+    ahora = db.ahora_utc()
+    usuario = getpass.getuser()
+    creados = 0
+    with db.transaccion(con):
+        for plan in informe["validaciones"]:
+            if plan["ya_existe"] or _ya_existe_validacion(con, plan["oc"], plan["efector"], plan["periodo"]):
+                continue
+            oc = db.leer_fila(con, "oc", {"numero": plan["oc"]})
+            desde, hasta = negocio.limites_centralizada(oc, plan["periodo"])
+            datos = copy.deepcopy(negocio.DATOS_INICIALES)
+            datos["remitos"] = [_remito(numero) for numero in plan["remitos"]]
+            datos["centralizada"] = {"numero_cv": plan["numero_cv"], "numero_nota": plan["numero_nota"],
+                                     "fecha_envio": plan["fecha_envio"] or ""}
+            if plan["observaciones"]:
+                datos["observaciones"] = plan["observaciones"]
+            datos["historial"] = [{"fecha": ahora, "usuario": usuario, "accion": "MIGRACION", "estado": plan["estado"],
+                                   "motivo": "Seguimiento de centralizadas (%s)" % plan["hoja"]}]
+            db.insertar(con, "expediente", {
+                "tipo": "CENTRALIZADA", "efector": plan["efector"], "oc": plan["oc"], "sap": plan["sap"],
+                "periodo": plan["periodo"], "periodo_desde": util.iso(desde), "periodo_hasta": util.iso(hasta),
+                "periodo_manual": 1, "factura": "", "estado": plan["estado"], "datos": datos,
+                "creado": ahora, "actualizado": ahora, "usuario": usuario,
+            })
+            creados += 1
+        informe["resumen"]["creados"] = creados
+        db.registrar_evento(con, "IMPORTACION", "expediente", {"fuente": FUENTE_CENTRALIZADAS}, None,
+                            {"archivo": archivo, "resumen": informe["resumen"]})
+    return informe
