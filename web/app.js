@@ -596,7 +596,7 @@ async function listarOC() {
       el("button", { type: "button", clase: "secundario boton-celda", texto: oc.numero,
         "aria-label": "Ver la OC " + oc.numero, onclick: () => abrirFichaOC(oc.numero) }),
       botonLapiz("Editar los datos de la OC " + oc.numero, () => abrirDialogoEditarOC(oc.numero)))),
-    el("td", { texto: oc.efector }),
+    el("td", { texto: (oc.efectores && oc.efectores.length ? oc.efectores : [oc.efector]).join(" · ") }),
     el("td", { clase: "izq", texto: oc.razon_social + " (SAP " + oc.sap + ")" }),
     el("td", { clase: "izq", texto: oc.objeto || "—" }),
     el("td", { texto: TIPOS_OC_TEXTO[oc.tipo] || oc.tipo }),
@@ -624,9 +624,11 @@ function vigenciaCorta(oc) {
   return corta(oc.vig_desde) + " – " + (oc.vig_hasta ? corta(oc.vig_hasta) : "sin fin");
 }
 
-/** Lo obligatorio que le falta a la OC para crear expedientes (PDF y concepto corto). */
+/** Lo obligatorio que le falta a la OC para crear expedientes o validaciones (PDF y, salvo centralizadas, concepto corto). */
 function faltantesOC(oc) {
-  return [!oc.pdf_cargado && "el PDF de la OC", !(oc.concepto_corto || "").trim() && "el concepto corto (Texto SAP)"].filter(Boolean);
+  // Las centralizadas no llevan textos SAP (el pago lo hace Nivel Central): solo hace falta el PDF.
+  return [!oc.pdf_cargado && "el PDF de la OC",
+    !oc.centralizada && !(oc.concepto_corto || "").trim() && "el concepto corto (Texto SAP)"].filter(Boolean);
 }
 
 /** Etiquetas de color (con su palabra) para lo que hay que tener en cuenta de la OC. */
@@ -744,19 +746,39 @@ function pintarFichaOC(ficha) {
         el("td", { clase: "izq", texto: sub.descripcion || "" }),
         el("td", { clase: "numero", texto: textoCantidad(sub.cantidad) + (sub.unidad ? " " + sub.unidad : "") }),
         el("td", { clase: "numero", texto: sub.precio_centavos ? formatoPesos(sub.precio_centavos) : "" }),
-        el("td", {}), el("td", {}), el("td", {}), el("td", {})));
+        el("td", {}), el("td", {}), el("td", {}), el("td", {}), oc.centralizada ? el("td", {}) : null));
     }
   });
   const encabezadosRenglones = ["Pos.", "Descripción", "Cantidad", "Precio $", "Importe $", "Desglose",
     "Entregado / por entregar (SAP)", ""];
+  if (oc.centralizada) {
+    // Reparto por efector: cuánto de cada renglón valida HBI y cuánto CASPH (se carga en «Editar» del renglón).
+    encabezadosRenglones.splice(7, 0, "HBI / CASPH");
+    renglones.forEach((r, k) => {
+      const reparto = r.por_efector || {};
+      const texto = Object.keys(reparto).length
+        ? ["HBI", "CASPH"].filter((e) => reparto[e] !== undefined).map((e) => e + " " + textoCantidad(reparto[e])).join(" · ")
+        : "Sin repartir";
+      filasRenglones[k].insertBefore(el("td", { clase: "sin-corte" + (Object.keys(reparto).length ? "" : " texto-suave"), texto }),
+        filasRenglones[k].lastElementChild);
+    });
+  }
 
-  const nuevoExp = el("button", { type: "button", texto: "Nuevo expediente", disabled: faltan.length > 0,
-    title: faltan.length ? "Primero cargá " + faltan.join(" y ") + "." : "Crear un expediente de pago para esta OC",
-    onclick: () => nuevoExpedienteDesdeOC(oc) });
+  const central = Boolean(oc.centralizada);
+  const efectores = oc.efectores && oc.efectores.length ? oc.efectores : [oc.efector];
+  const titulo = faltan.length ? "Primero cargá " + faltan.join(" y ") + "." : null;
+  // Centralizada: no se crea un expediente de pago sino una validación por efector (HBI y CASPH por separado).
+  const nuevoExp = central
+    ? el("div", { clase: "acciones" }, ...efectores.map((ef) => el("button", { type: "button", disabled: faltan.length > 0,
+      texto: "Nueva validación" + (efectores.length > 1 ? " " + ef : ""), title: titulo || "Validar un período de " + ef,
+      onclick: () => nuevaValidacionCentralizada(oc.numero, ef) })))
+    : el("button", { type: "button", texto: "Nuevo expediente", disabled: faltan.length > 0,
+      title: titulo || "Crear un expediente de pago para esta OC", onclick: () => nuevoExpedienteDesdeOC(oc) });
   const etiquetas = observacionesOC(ocCompleta);
   const cabecera = el("div", { clase: "cabecera-oc" },
     el("div", { clase: "cabecera-oc-texto" },
-      el("p", { clase: "sobretitulo", texto: "Orden de compra · " + oc.efector + " · " + (TIPOS_OC_TEXTO[oc.tipo] || oc.tipo) }),
+      el("p", { clase: "sobretitulo", texto: "Orden de compra · " + efectores.join(" y ") + " · " + (TIPOS_OC_TEXTO[oc.tipo] || oc.tipo)
+        + (central ? " · centralizada" : "") }),
       el("h2", { id: "oc-ficha-titulo", clase: "titulo-oc", tabindex: "-1", texto: "OC " + oc.numero }),
       el("p", { clase: "subtitulo-oc", texto: (proveedor ? proveedor.razon_social : "Proveedor sin cargar") + " · SAP " + oc.sap }),
       typeof etiquetas === "string" ? null : el("div", { clase: "etiquetas etiquetas-izq" }, ...etiquetas.childNodes)),
@@ -766,7 +788,7 @@ function pintarFichaOC(ficha) {
         iconoLapiz(), "Editar datos y PDF")));
   const pendiente = faltan.length
     ? el("div", { clase: "mensaje mensaje-pendiente" },
-      el("p", { texto: "Para crear expedientes falta cargar " + faltan.join(" y ") + "." }),
+      el("p", { texto: "Para " + (central ? "validar" : "crear expedientes") + " falta cargar " + faltan.join(" y ") + "." }),
       el("button", { type: "button", texto: "Completar ahora", onclick: () => abrirDialogoEditarOC(oc.numero) }))
     : null;
 
@@ -787,6 +809,9 @@ function pintarFichaOC(ficha) {
     partes.push(el("div", { clase: "acciones" },
       el("button", { type: "button", clase: "secundario", texto: "Agregar renglón", onclick: () => editarRenglon(null) })));
   }
+  // Consumo: en una centralizada que validan los dos efectores, una tabla por efector (cada uno con su cantidad).
+  const porEfector = central && efectores.length > 1;
+  const consumos = porEfector ? efectores.map((ef) => [ef, el("div", { id: "oc-consumo-" + ef })]) : [[null, consumo]];
   partes.push(
     el("h3", { texto: "Consumo de la OC" }),
     el("div", { clase: "acciones" },
@@ -794,40 +819,51 @@ function pintarFichaOC(ficha) {
         title: editables.length ? "Para los meses facturados que no tienen remitos cargados"
           : "Todos los expedientes ya tienen el consumo de sus remitos",
         onclick: () => abrirDialogoConsumoManual(ficha) }),
-      botonesExporte("consumo-oc", { oc: oc.numero }, "del consumo de la OC " + oc.numero)),
-    consumo,
-    el("h3", { texto: "Expedientes de esta OC" }));
+      porEfector ? null : botonesExporte("consumo-oc", { oc: oc.numero }, "del consumo de la OC " + oc.numero)));
+  for (const [ef, destino] of consumos) {
+    if (ef) partes.push(el("h4", { texto: "Consumo " + ef }), botonesExporte("consumo-oc", { oc: oc.numero, efector: ef },
+      "del consumo de " + ef + " de la OC " + oc.numero));
+    partes.push(destino);
+  }
+  partes.push(el("h3", { texto: central ? "Validaciones de esta OC" : "Expedientes de esta OC" }));
   const origenConsumo = (x) => (x.consumo_remitos ? "De los remitos"
     : (Object.keys(x.consumo_manual || {}).length ? "Cargado a mano" : "Sin consumo"));
   partes.push(expedientes.length
-    ? tablaExpedientesOC(expedientes, origenConsumo)
-    : el("p", { clase: "texto-suave", texto: "Todavía no hay expedientes para esta OC." }));
+    ? tablaExpedientesOC(expedientes, origenConsumo, central)
+    : el("p", { clase: "texto-suave", texto: central ? "Todavía no hay validaciones de esta OC." : "Todavía no hay expedientes para esta OC." }));
   vaciar(document.getElementById("oc-detalle"), el("div", { clase: "panel" }, ...partes));
   document.getElementById("oc-lista").hidden = true;
-  pintarConsumoOC(oc.numero, consumo);
+  for (const [ef, destino] of consumos) pintarConsumoOC(oc.numero, destino, ef);
 }
 
 // Estados en los que el expediente ya está terminado: se puede ver, no tramitar.
 const ESTADOS_TERMINADOS = new Set(["ENVIADO", "CONTABILIZADO", "CERRADO", "FINALIZADO", "ANULADO"]);
 
 /** «Expedientes de esta OC»: cada fila abre el expediente («Tramitar» si sigue en curso, «Visualizar» si terminó). */
-function tablaExpedientesOC(expedientes, origenConsumo) {
-  const encabezados = ["N°", "Tipo", "Período", "Estado", "Factura", "Importe $", "Consumo", ""];
+function tablaExpedientesOC(expedientes, origenConsumo, central) {
+  const encabezados = central ? ["N°", "Efector", "Período", "Estado", "N° de nota", "Consumo", ""]
+    : ["N°", "Tipo", "Período", "Estado", "Factura", "Importe $", "Consumo", ""];
   const filas = expedientes.map((x) => {
     const terminado = ESTADOS_TERMINADOS.has(x.estado);
     // En curso, se abre en el primer paso que le falta: remitos, factura o controles.
-    const paso = terminado ? 1 : (!x.consumo_remitos && !Object.keys(x.consumo_manual || {}).length ? 2 : (!x.factura ? 3 : 4));
+    const sinConsumo = !x.consumo_remitos && !Object.keys(x.consumo_manual || {}).length;
+    const paso = terminado ? 1 : (sinConsumo ? 2 : (central ? (x.numero_cv ? 4 : 3) : (!x.factura ? 3 : 4)));
     const abrir = () => abrirExpedienteDesdeOC(x.id, paso);
     const boton = el("button", { type: "button", clase: terminado ? "secundario" : null, texto: terminado ? "Visualizar" : "Tramitar",
       "aria-label": (terminado ? "Visualizar" : "Tramitar") + " el expediente " + x.id,
       onclick: (e) => { e.stopPropagation(); abrir(); } });
+    const estadoTexto = central ? (ESTADOS_CENTRALIZADA_TEXTO[x.estado] || x.estado) : (ESTADOS_TEXTO[x.estado] || x.estado);
+    const celdas = central
+      ? [el("td", { texto: x.efector || "" }), el("td", { texto: x.periodo || "" }),
+        el("td", {}, el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[x.estado] || "neutra"), texto: estadoTexto })),
+        el("td", { clase: "mono", texto: x.numero_nota || "—" })]
+      : [el("td", { texto: x.tipo }), el("td", { texto: x.periodo || "" }),
+        el("td", {}, el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[x.estado] || "neutra"), texto: estadoTexto })),
+        el("td", { clase: "mono", texto: x.factura || "" }),
+        el("td", { clase: "numero", texto: x.importe_centavos === null || x.importe_centavos === undefined ? "—" : formatoPesos(x.importe_centavos) })];
     return el("tr", { clase: "fila-clic", title: (terminado ? "Ver" : "Seguir tramitando") + " el expediente " + x.id, onclick: abrir },
       el("td", { clase: "numero", texto: String(x.id) }),
-      el("td", { texto: x.tipo }),
-      el("td", { texto: x.periodo || "" }),
-      el("td", {}, el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[x.estado] || "neutra"), texto: ESTADOS_TEXTO[x.estado] || x.estado })),
-      el("td", { clase: "mono", texto: x.factura || "" }),
-      el("td", { clase: "numero", texto: x.importe_centavos === null || x.importe_centavos === undefined ? "—" : formatoPesos(x.importe_centavos) }),
+      ...celdas,
       el("td", { texto: origenConsumo(x) }),
       el("td", {}, boton));
   });
@@ -851,9 +887,9 @@ function textoPeriodo(periodo) {
 }
 
 /** Tabla de consumo: renglón × período, con total, saldo y % consumido. */
-async function pintarConsumoOC(numero, destino) {
+async function pintarConsumoOC(numero, destino, efector) {
   cargando(destino);
-  const consumo = await api("GET", "/api/oc/" + encodeURIComponent(numero) + "/consumo");
+  const consumo = await api("GET", "/api/oc/" + encodeURIComponent(numero) + "/consumo" + (efector ? "?efector=" + efector : ""));
   if (!consumo) { vaciar(destino); return; }
   const { periodos, filas } = consumo.grilla;
   const porPos = Object.fromEntries(consumo.renglones.map((r) => [r.pos, r]));
@@ -1309,6 +1345,16 @@ function editarRenglon(renglon) {
     campoFormulario("rg-desglose-unidad", "Desglose: unidad", entrada(r.desglose_unidad || (nuevo ? "" : ""))),
     campoFormulario("rg-desglose-precio", "Desglose: precio por unidad $", entrada(formatoPesos(r.desglose_precio_centavos), { inputmode: "decimal" })),
     casilla("rg-correctivo", "Es un renglón de mantenimiento correctivo", r.es_correctivo));
+  if (!nuevo && ocEstado.ficha && ocEstado.ficha.oc.centralizada) {
+    const reparto = r.por_efector || {};
+    campos.push(el("fieldset", { clase: "campo campo-ancho editor-subrenglones" },
+      el("legend", { texto: "Cantidad de cada efector (OC centralizada)" }),
+      el("p", { clase: "texto-suave", texto: "En la misma unidad que el consumo (" + (r.desglose_unidad || r.unidad || "unidades")
+        + "). Si el renglón es de un solo efector, poné 0 en el otro. Vacío los dos = toda la cantidad para cada uno." }),
+      el("div", { clase: "grilla-dialogo" },
+        campoFormulario("rg-ef-HBI", "HBI", entrada(textoCantidad(reparto.HBI), { inputmode: "decimal" })),
+        campoFormulario("rg-ef-CASPH", "CASPH", entrada(textoCantidad(reparto.CASPH), { inputmode: "decimal" })))));
+  }
   if (!nuevo) campos.push(editorSubrenglones(r));
   const formulario = el("form", { clase: "panel formulario", novalidate: true,
     onsubmit: (e) => { e.preventDefault(); guardarRenglon(renglon); } },
@@ -1388,7 +1434,17 @@ async function guardarRenglon(renglon) {
     const subrenglones = subrenglonesDelEditor();
     if (subrenglones === null) return;
     const cambioSub = JSON.stringify(subrenglones) !== JSON.stringify((renglon.subrenglones || []).map(subrenglonPdf));
-    if (!Object.keys(cambios).length && !cambioSub) { mostrarAviso("No hay cambios para guardar.", "aviso"); return; }
+    const reparto = {};
+    for (const ef of ["HBI", "CASPH"]) {
+      const control = document.getElementById("rg-ef-" + ef);
+      const texto = control ? control.value.trim().replace(",", ".") : "";
+      if (texto && !/^\d+(\.\d+)?$/.test(texto)) { mostrarAviso("La cantidad de " + ef + " no es un número.", "error"); return; }
+      if (texto) reparto[ef] = texto;
+    }
+    const anterior = renglon.por_efector || {};
+    const cambioReparto = Boolean(document.getElementById("rg-ef-HBI"))
+      && ["HBI", "CASPH"].some((ef) => (reparto[ef] ?? "") !== (anterior[ef] ?? ""));
+    if (!Object.keys(cambios).length && !cambioSub && !cambioReparto) { mostrarAviso("No hay cambios para guardar.", "aviso"); return; }
     let version = renglon.version;
     if (Object.keys(cambios).length) {
       ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero) + "/renglones/" + renglon.pos, { version, cambios });
@@ -1398,6 +1454,12 @@ async function guardarRenglon(renglon) {
     if (cambioSub) {
       ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero) + "/renglones/" + renglon.pos + "/subrenglones",
         { version, subrenglones });
+      if (!ficha) return;
+      version = ficha.renglones.find((x) => x.pos === renglon.pos).version;
+    }
+    if (cambioReparto) {
+      ficha = await api("PUT", "/api/oc/" + encodeURIComponent(oc.numero) + "/renglones/" + renglon.pos + "/efectores",
+        { version, por_efector: reparto });
     }
   }
   if (!ficha) return;
@@ -1784,7 +1846,8 @@ function pastillaEstado(estadoExp) {
   return el("span", { clase: "pastilla" + (tono ? " pastilla-" + tono : ""), texto: ESTADOS_TEXTO[estadoExp] || estadoExp });
 }
 
-const TIPOS_EXPEDIENTE = [["COMUN", "Común"], ["CENTRALIZADA", "Centralizada"], ["CORRECTIVO", "Correctivo"], ["EVENTUAL", "Pago eventual"]];
+// Las centralizadas no son expedientes de pago: se validan desde «Centralizadas» o la ficha de la OC.
+const TIPOS_EXPEDIENTE = [["COMUN", "Común"], ["CORRECTIVO", "Correctivo"], ["EVENTUAL", "Pago eventual"]];
 
 const expEstado = { exp: null, ficha: null, paso: 1, sugerido: null, fuera: [], sii: null };
 
@@ -1892,27 +1955,106 @@ function pintarEncabezadoAsistente() {
     resumen.textContent = "Elegí el tipo y la OC para empezar.";
     return;
   }
-  titulo.textContent = "Expediente " + exp.id + " — " + (exp.razon_social || "sin proveedor");
+  titulo.textContent = (exp.tipo === "CENTRALIZADA" ? "Validación " : "Expediente ") + exp.id + " — " + (exp.razon_social || "sin proveedor");
   document.getElementById("asistente-anular").hidden = exp.estado === "ANULADO";
   resumen.textContent = [
     exp.oc ? "OC " + exp.oc : "sin OC",
     "período " + (exp.periodo || "sin definir") + (exp.periodo_manual ? " (manual)" : ""),
-    "estado " + (ESTADOS_TEXTO[exp.estado] || exp.estado),
+    "estado " + (exp.tipo === "CENTRALIZADA" ? (ESTADOS_CENTRALIZADA_TEXTO[exp.estado] || exp.estado)
+      : (ESTADOS_TEXTO[exp.estado] || exp.estado)) + (exp.tipo === "CENTRALIZADA" ? " · validación centralizada de " + exp.efector : ""),
     ficha && ficha.oc.comodato ? "OC con comodato" : "",
   ].filter(Boolean).join(" · ");
 }
 
+// Validación centralizada: 4 pasos propios (no hay factura, SII ni autorización: eso lo hace Nivel Central).
+const PASOS_CENTRALIZADA = { 1: "1. OC y período", 2: "2. Remitos y certificado", 3: "3. CV firmado", 4: "4. Nota a Central" };
+const ESTADOS_CENTRALIZADA_TEXTO = { BORRADOR: "En curso", CONTROLADO: "En curso", EN_FIRMA: "En curso", FIRMADO: "CV firmado",
+  ENVIADO: "Validado", ANULADO: "Anulada" };
+
+function esCentralizada() {
+  return Boolean(expEstado.exp && expEstado.exp.tipo === "CENTRALIZADA");
+}
+
 function mostrarPaso(paso) {
   if (!expEstado.exp && paso !== 1) paso = 1;
+  const central = esCentralizada();
+  if (central && paso > 4) paso = 1;
   expEstado.paso = paso;
   for (let n = 1; n <= 7; n++) document.getElementById("asistente-paso-" + n).hidden = n !== paso;
   for (const boton of document.querySelectorAll(".pasos button[data-paso]")) {
     const n = Number(boton.dataset.paso);
+    if (!boton.dataset.original) boton.dataset.original = boton.textContent;
+    boton.textContent = central ? (PASOS_CENTRALIZADA[n] || boton.dataset.original) : boton.dataset.original;
+    boton.parentElement.hidden = central && n > 4;
     if (n === paso) boton.setAttribute("aria-current", "step"); else boton.removeAttribute("aria-current");
     boton.disabled = !expEstado.exp && n !== 1;
   }
-  const pintores = { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4, 5: pintarPaso5, 6: pintarPaso6, 7: pintarPaso7 };
+  const pintores = central
+    ? { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPasoCvFirmado, 4: pintarPasoNotaCentral }
+    : { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4, 5: pintarPaso5, 6: pintarPaso6, 7: pintarPaso7 };
   if (pintores[paso]) pintores[paso]();
+}
+
+/** Paso 3 de una validación centralizada: el N° de IF del certificado de validación firmado. */
+function pintarPasoCvFirmado() {
+  const contenedor = document.getElementById("asistente-paso-3");
+  const central = expEstado.exp.datos.centralizada || {};
+  const campo = entradaGde("central-cv", "N° de IF del certificado de validación firmado", central.numero_cv);
+  vaciar(contenedor,
+    el("h3", { texto: "3. Certificado de validación firmado" }),
+    el("p", { clase: "texto-suave", texto: "Bajá el certificado, hacelo firmar en GDE y cargá acá su número de IF." }),
+    el("div", { clase: "acciones" }, botonCertificado("secundario")),
+    el("form", { clase: "formulario", novalidate: true, onsubmit: async (e) => {
+      e.preventDefault();
+      if (await guardarCentral({ numero_cv: document.getElementById("central-cv").value.trim() }, "N° de IF guardado.")) mostrarPaso(3);
+    } },
+      campo,
+      el("div", { clase: "acciones" },
+        el("button", { type: "submit", texto: "Guardar N° de IF" }),
+        el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 4", onclick: () => mostrarPaso(4) }))));
+}
+
+/** Paso 4: la Nota a Central (para copiar), su número y la fecha de envío. Con eso queda «Validado». */
+async function pintarPasoNotaCentral() {
+  const contenedor = document.getElementById("asistente-paso-4");
+  const central = expEstado.exp.datos.centralizada || {};
+  cargando(contenedor);
+  const nota = await api("GET", "/api/expedientes/" + expEstado.exp.id + "/nota-central");
+  const partes = [el("h3", { texto: "4. Nota a Central" })];
+  if (nota) {
+    partes.push(bloqueTexto("Referencia de la nota", nota.referencia, false), bloqueTexto("Nota a Central", nota.cuerpo, true));
+  } else {
+    partes.push(el("p", { clase: "texto-suave", texto: "Completá los datos que faltan (ver el mensaje de arriba) para generar la nota." }));
+  }
+  partes.push(el("form", { clase: "formulario panel", novalidate: true, onsubmit: async (e) => {
+    e.preventDefault();
+    const numero = document.getElementById("central-nota").value.trim();
+    const fecha = document.getElementById("central-envio").value;
+    if (await guardarCentral({ numero_nota: numero, fecha_envio: fecha || null },
+      numero && fecha ? "Nota enviada: la validación quedó «Validada»." : "Datos de la nota guardados.")) mostrarPaso(4);
+  } },
+    el("h4", { texto: "Envío" }),
+    entradaGde("central-nota", "N° de la nota (GDE)", central.numero_nota),
+    campoFormulario("central-envio", "Fecha de envío", entrada(central.fecha_envio || "", { type: "date" }),
+      "Con el número y la fecha de envío, la validación queda «Validada»."),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar y dar por validado" }))));
+  vaciar(contenedor, ...partes);
+}
+
+/** Guarda los datos de la validación centralizada (IF del CV, nota, fecha de envío) conservando los demás. */
+async function guardarCentral(cambios, mensaje) {
+  limpiarAvisos();
+  const exp = expEstado.exp;
+  const central = Object.assign({ numero_cv: "", numero_nota: "", fecha_envio: null }, exp.datos.centralizada || {}, cambios);
+  estado.recargar = () => abrirExpediente(exp.id, expEstado.paso);
+  const actualizado = await api("PUT", "/api/expedientes/" + exp.id + "/centralizada", {
+    version: exp.version, centralizada: { numero_cv: central.numero_cv || "", numero_nota: central.numero_nota || "",
+      fecha_envio: central.fecha_envio || null } });
+  if (!actualizado) return null;
+  expEstado.exp = actualizado;
+  pintarEncabezadoAsistente();
+  mostrarAviso(mensaje, "exito");
+  return actualizado;
 }
 
 function nuevoExpediente() {
@@ -3052,7 +3194,11 @@ function reanudar() {
 function iniciarExpedientes() {
   document.getElementById("expedientes-filtros").addEventListener("submit", (e) => { e.preventDefault(); listarExpedientes(); });
   document.getElementById("expediente-nuevo").addEventListener("click", nuevoExpediente);
-  document.getElementById("asistente-volver").addEventListener("click", () => { limpiarAvisos(); mostrarLista(); });
+  document.getElementById("asistente-volver").addEventListener("click", () => {
+    limpiarAvisos();
+    if (esCentralizada()) { mostrarLista(); mostrarPantalla("pantalla-centralizadas", true); return; }
+    mostrarLista();
+  });
   document.getElementById("asistente-anular").addEventListener("click", abrirDialogoAnular);
   for (const boton of document.querySelectorAll(".pasos button[data-paso]")) {
     boton.addEventListener("click", () => { limpiarAvisos(); mostrarPaso(Number(boton.dataset.paso)); });
@@ -3481,6 +3627,13 @@ function iniciarCentralizadas() {
 
 // --- Centralizadas: tabla OC × período con CV, nota, fecha de envío y checklist ----------
 
+const ESTADOS_TABLERO = {
+  validado: ["V", "Validado", "exito"], cv_firmado: ["F", "CV firmado", "violeta"], en_curso: ["C", "En curso", "info"],
+  pendiente: ["P", "Pendiente (en plazo)", "aviso"], atrasado: ["A", "Atrasado", "error"], sin_iniciar: ["·", "Todavía no empezó", "neutra"],
+  fuera: ["-", "Fuera de la vigencia", "neutra"],
+};
+
+/** Tablero: una fila por OC centralizada y efector, un mes por columna con el estado de su validación. */
 async function cargarCentralizadas() {
   const destino = document.getElementById("centralizadas-tabla");
   const anio = document.getElementById("central-anio").value.trim();
@@ -3488,65 +3641,63 @@ async function cargarCentralizadas() {
   cargando(destino);
   const parametros = new URLSearchParams({ anio });
   if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
-  const datos = await api("GET", "/api/centralizadas?" + parametros.toString());
+  const datos = await api("GET", "/api/centralizadas/tablero?" + parametros.toString());
   if (!datos) { vaciar(destino); return; }
-  if (!datos.expedientes.length) {
-    vaciar(destino, el("p", { clase: "texto-suave", texto: "No hay expedientes centralizados en " + datos.anio + "." }));
+  if (!datos.filas.length) {
+    vaciar(destino, el("p", { clase: "texto-suave", texto: "No hay OC centralizadas con vigencia en " + datos.anio
+      + ". Una OC es centralizada si lo dice su PDF («UOC: Nivel Central») o si la marcás al editarla." }));
     return;
   }
-  const encabezados = ["OC", "Período", "Proveedor", "Estado", "N° de CV", "N° de nota", "Fecha de envío", "Documentación auditada", "Enviada", ""];
-  vaciar(destino, el("div", { clase: "tabla-desplazable" }, el("table", {},
-    el("caption", { texto: "Centralizadas " + datos.anio }),
-    el("thead", {}, el("tr", {}, ...encabezados.map((t) => el("th", { scope: "col", texto: t })))),
-    el("tbody", {}, ...datos.expedientes.map(filaCentralizada)))));
+  const meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+  const filas = datos.filas.map((f) => el("tr", {},
+    el("th", { scope: "row", clase: "izq" },
+      el("button", { type: "button", clase: "enlace", texto: "OC " + f.oc, onclick: () => irAOC(f.oc) }),
+      el("span", { clase: "texto-suave", texto: " · " + f.razon_social })),
+    el("td", {}, el("span", { clase: "pastilla pastilla-neutra", texto: f.efector })),
+    ...f.celdas.map((c) => {
+      const [letra, texto, tono] = ESTADOS_TABLERO[c.estado] || ["?", c.estado, "neutra"];
+      const etiqueta = texto + " — " + c.periodo + (c.numero_nota ? " · nota " + c.numero_nota : "");
+      if (c.estado === "fuera") return el("td", { clase: "celda-tablero tono-" + tono, title: etiqueta, texto: letra });
+      return el("td", { clase: "celda-tablero tono-" + tono },
+        el("button", { type: "button", clase: "boton-celda", title: etiqueta, "aria-label": "OC " + f.oc + " " + f.efector + ", " + etiqueta
+          + (c.expediente_id ? ": abrir la validación" : ": empezar la validación"),
+          texto: letra, onclick: () => abrirValidacionCentralizada(f.oc, f.efector, c) }));
+    })));
+  vaciar(destino, el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tablero-centralizadas" },
+      el("thead", {}, el("tr", {}, el("th", { scope: "col", clase: "izq", texto: "OC" }), el("th", { scope: "col", texto: "Efector" }),
+        ...meses.map((m) => el("th", { scope: "col", texto: m })))),
+      el("tbody", {}, ...filas))),
+    el("ul", { clase: "leyenda-tablero", "aria-label": "Referencias" },
+      ...Object.values(ESTADOS_TABLERO).map(([letra, texto, tono]) =>
+        el("li", {}, el("span", { clase: "celda-tablero tono-" + tono, texto: letra }), " " + texto))),
+    el("p", { clase: "nota-pie", texto: "Hacé clic en un mes para abrir su validación o empezarla." }));
 }
 
-function filaCentralizada(c) {
-  const sufijo = "-" + c.id;
-  const etiqueta = "OC " + c.oc + " " + c.periodo;
-  const cv = entrada(c.numero_cv, { autocomplete: "off", "aria-label": "N° de CV, " + etiqueta, id: "central-cv" + sufijo });
-  const nota = entrada(c.numero_nota, { autocomplete: "off", "aria-label": "N° de nota, " + etiqueta, id: "central-nota" + sufijo });
-  const fecha = entrada(c.fecha_envio, { type: "date", "aria-label": "Fecha de envío, " + etiqueta, id: "central-fecha" + sufijo });
-  const casillas = c.documentos.map((doc) => {
-    const casilla = el("input", { type: "checkbox" });
-    casilla.checked = !!c.checklist[doc];
-    casilla.dataset.documento = doc;
-    return el("label", {}, casilla, el("span", { texto: doc }));
-  });
-  const checklist = casillas.length
-    ? el("div", { clase: "checklist-central", role: "group", "aria-label": "Documentación auditada, " + etiqueta }, ...casillas)
-    : el("span", { clase: "texto-suave", texto: "La OC no tiene documentación requerida" });
-  return el("tr", {},
-    el("td", { texto: c.oc }),
-    el("td", { texto: c.periodo }),
-    el("td", { texto: c.razon_social }),
-    el("td", { texto: ESTADOS_TEXTO[c.estado] || c.estado }),
-    el("td", {}, cv),
-    el("td", {}, nota),
-    el("td", {}, fecha),
-    el("td", {}, checklist),
-    el("td", { texto: c.enviada ? "◆ Sí" : "No" }),
-    el("td", {}, el("button", { type: "button", texto: "Guardar", "aria-label": "Guardar " + etiqueta,
-      onclick: () => guardarFilaCentralizada(c, cv.value.trim(), nota.value.trim(), fecha.value, checklist) })));
+function irAOC(numero) {
+  ocEstado.ficha = { oc: { numero } };
+  mostrarPantalla("pantalla-oc", true);
 }
 
-async function guardarFilaCentralizada(c, numeroCv, numeroNota, fechaEnvio, checklist) {
+/** Abre la validación del mes; si no existe, la crea (OC + efector) y la abre en el paso de remitos. */
+async function abrirValidacionCentralizada(oc, efector, celda) {
   limpiarAvisos();
-  estado.recargar = cargarCentralizadas;
-  let exp = await api("PUT", "/api/expedientes/" + c.id + "/centralizada", {
-    version: c.version, centralizada: { numero_cv: numeroCv, numero_nota: numeroNota, fecha_envio: fechaEnvio },
-  });
-  if (!exp) return;
-  const marcadas = {};
-  for (const casilla of checklist.querySelectorAll("input[type=checkbox]")) marcadas[casilla.dataset.documento] = casilla.checked;
-  const antes = JSON.stringify(c.documentos.map((d) => !!c.checklist[d]));
-  const ahora = JSON.stringify(c.documentos.map((d) => !!marcadas[d]));
-  if (antes !== ahora) {
-    exp = await api("PUT", "/api/expedientes/" + c.id, { version: exp.version, cambios: { datos: { checklist: marcadas } } });
-    if (!exp) return;
+  if (celda.expediente_id) {
+    Object.assign(expEstado, { exp: { id: celda.expediente_id }, ficha: null, paso: 2, sugerido: null, fuera: [], sii: null });
+    mostrarPantalla("pantalla-expedientes");
+    return;
   }
-  await cargarCentralizadas();
-  mostrarAviso("Centralizada de la OC " + c.oc + " (" + c.periodo + ") guardada.", "exito");
+  if (!window.confirm("¿Empezar la validación de " + celda.periodo + " de la OC " + oc + " para " + efector + "?")) return;
+  await nuevaValidacionCentralizada(oc, efector, celda.periodo);
+}
+
+async function nuevaValidacionCentralizada(oc, efector, periodo) {
+  const datos = { tipo: "CENTRALIZADA", oc, efector };
+  if (periodo) datos.periodo = periodo;
+  const exp = await api("POST", "/api/expedientes", datos);
+  if (!exp) return;
+  Object.assign(expEstado, { exp, ficha: null, paso: 2, sugerido: null, fuera: [], sii: null });
+  mostrarPantalla("pantalla-expedientes");
+  mostrarAviso("Validación " + exp.id + " de la OC " + oc + " (" + efector + ") creada. Cargá los remitos.", "exito");
 }
 
 // --- Ayuda: el instructivo tal cual ------------------------------------------------

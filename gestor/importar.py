@@ -67,15 +67,16 @@ CAMPOS_CAMBIO_OC = ("vig_desde", "vig_hasta")
 
 
 def _con_subrenglones_guardados(actual, renglon):
-    """El crudo nuevo (fila del z_compras2) conserva los subrenglones tomados del PDF de la OC."""
+    """El crudo nuevo (fila del z_compras2) conserva lo cargado en el gestor: subrenglones y cantidades por efector."""
     try:
         anterior = json.loads(actual.get("crudo") or "{}")
     except (TypeError, ValueError):
         return renglon
-    guardados = anterior.get("_subrenglones") if isinstance(anterior, dict) else None
+    # Lo cargado a mano en el gestor va con «_» (_subrenglones, _por_efector): se conserva.
+    guardados = {k: v for k, v in anterior.items() if k.startswith("_")} if isinstance(anterior, dict) else {}
     if not guardados or not isinstance(renglon.get("crudo"), dict):
         return renglon
-    return dict(renglon, crudo=dict(renglon["crudo"], _subrenglones=guardados))
+    return dict(renglon, crudo=dict(renglon["crudo"], **guardados))
 
 
 class ErrorImportacion(Exception):

@@ -601,3 +601,19 @@ button.secundario.boton-peligro { color: var(--error); border-color: var(--error
 button.secundario.boton-peligro:hover { background: var(--error-fondo); color: var(--error); }
 .boton-peligro-lleno { background: var(--error); border-color: var(--error); color: var(--primario-texto); }
 .boton-peligro-lleno:hover { background: var(--error); filter: brightness(0.92); }
+
+/* Tablero de centralizadas: letra + color por mes */
+.tablero-centralizadas td, .tablero-centralizadas th { text-align: center; }
+.tablero-centralizadas th.izq { text-align: left; white-space: nowrap; }
+.celda-tablero { font-weight: 700; min-width: 40px; }
+.boton-celda { min-width: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; box-shadow: none; font-weight: 700;
+  color: inherit; cursor: pointer; }
+.boton-celda:hover { background: transparent; text-decoration: underline; }
+.tono-exito { background: var(--exito-fondo); color: var(--exito); }
+.tono-violeta { background: var(--violeta-fondo); color: var(--violeta); }
+.tono-info { background: var(--info-fondo); color: var(--info); }
+.tono-aviso { background: var(--pendiente-plazo); color: var(--texto); }
+.tono-error { background: var(--error-fondo); color: var(--error); }
+.tono-neutra { background: var(--neutro-fondo); color: var(--texto-suave); }
+.leyenda-tablero { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.leyenda-tablero .celda-tablero { display: inline-block; min-width: 24px; padding: 2px 6px; border-radius: 6px; text-align: center; }

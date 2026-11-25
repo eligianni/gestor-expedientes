@@ -346,7 +346,7 @@ def oc_ficha(h, m, cuerpo):
 
 
 def oc_consumo(h, m, cuerpo):
-    return 200, _ok(negocio.consumo_oc(h.conexion(), m.group("numero")))
+    return 200, _ok(negocio.consumo_oc(h.conexion(), m.group("numero"), _consulta(h).get("efector")))
 
 
 def oc_editar(h, m, cuerpo):
@@ -410,6 +410,12 @@ def oc_nueva_crear(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.crear_oc_desde_pdf(h.conexion(), datos.get("oc"), datos.get("archivo") or "", datos.get("leido"),
                                                datos.get("subrenglones")))
+
+
+def renglon_por_efector(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.guardar_por_efector(h.conexion(), m.group("numero"), m.group("pos"), datos.get("version"),
+                                                datos.get("por_efector")))
 
 
 def renglon_subrenglones(h, m, cuerpo):
@@ -572,6 +578,15 @@ def centralizadas(h, m, cuerpo):
     return 200, _ok(negocio.centralizadas_por_periodo(h.conexion(), q.get("anio") or "", _efector_filtro(q.get("efector"))))
 
 
+def centralizadas_tablero(h, m, cuerpo):
+    q = _consulta(h)
+    return 200, _ok(negocio.tablero_centralizadas(h.conexion(), q.get("anio") or "", _efector_filtro(q.get("efector"))))
+
+
+def expediente_nota_central(h, m, cuerpo):
+    return 200, _ok(negocio.nota_central_del_expediente(h.conexion(), m.group("id")))
+
+
 def expediente_centralizada(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.guardar_centralizada(h.conexion(), m.group("id"), datos.get("version"), datos.get("centralizada")))
@@ -718,6 +733,7 @@ RUTAS = [
     ("GET", re.compile(r"/api/oc/(?P<numero>\d+)/consumo"), oc_consumo),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/renglones"), renglon_agregar),
     ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)/subrenglones"), renglon_subrenglones),
+    ("PUT", re.compile(r"/api/oc/(?P<numero>\d+)/renglones/(?P<pos>\d+)/efectores"), renglon_por_efector),
     ("POST", re.compile(r"/api/oc/pdf"), oc_nueva_leer),
     ("POST", re.compile(r"/api/oc/desde-pdf"), oc_nueva_crear),
     ("POST", re.compile(r"/api/oc/(?P<numero>\d+)/pdf"), oc_pdf_leer),
@@ -745,6 +761,8 @@ RUTAS = [
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/consumo-manual"), expediente_consumo_manual),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/centralizada"), expediente_centralizada),
+    ("GET", re.compile(r"/api/centralizadas/tablero"), centralizadas_tablero),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/nota-central"), expediente_nota_central),
     ("GET", re.compile(r"/api/centralizadas"), centralizadas),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/correctivo"), expediente_correctivo),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/eventual"), expediente_eventual),
