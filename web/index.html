@@ -143,13 +143,8 @@
 
       <section id="pantalla-centralizadas" aria-labelledby="titulo-centralizadas" hidden>
         <h1 id="titulo-centralizadas">Centralizadas</h1>
-        <form id="centralizadas-exporte" class="panel formulario filtros" novalidate>
-          <div class="campo">
-            <label for="central-periodo">Período (AAAA-MM, vacío = todos)</label>
-            <input id="central-periodo" type="text" inputmode="numeric" class="entrada-corta" autocomplete="off">
-          </div>
-          <div id="centralizadas-botones"></div>
-        </form>
+        <p class="texto-suave">Validación de los servicios centralizados, por OC, efector y mes: remitos, certificado de validación,
+          IF del certificado firmado y Nota a Central. La factura y el SII los hace Nivel Central.</p>
         <form id="centralizadas-filtros" class="panel formulario filtros" novalidate>
           <div class="campo">
             <label for="central-anio">Año</label>
@@ -158,6 +153,13 @@
           <div class="acciones"><button type="submit">Ver centralizadas</button></div>
         </form>
         <div id="centralizadas-tabla"></div>
+        <form id="centralizadas-exporte" class="panel formulario filtros" novalidate>
+          <div class="campo">
+            <label for="central-periodo">Exportar las validaciones del período (AAAA-MM, vacío = todos)</label>
+            <input id="central-periodo" type="text" inputmode="numeric" class="entrada-corta" autocomplete="off">
+          </div>
+          <div id="centralizadas-botones"></div>
+        </form>
       </section>
 
       <section id="pantalla-entregas" aria-labelledby="titulo-entregas" hidden>

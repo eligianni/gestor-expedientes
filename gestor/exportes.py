@@ -121,7 +121,8 @@ def exporte_consumo_oc(con, parametros):
         raise negocio.ErrorValidacion("Indicá la OC (?oc=) para exportar su consumo.")
     ficha = negocio.ficha_oc(con, numero)
     oc, proveedor = ficha["oc"], ficha["proveedor"] or {}
-    consumo = negocio.consumo_oc(con, numero)
+    efector = parametros.get("efector") if parametros.get("efector") in negocio.EFECTORES else None
+    consumo = negocio.consumo_oc(con, numero, efector)
     periodos = [p for p in consumo["grilla"]["periodos"]]
     precios = {}
     for r in ficha["renglones"]:
@@ -129,7 +130,7 @@ def exporte_consumo_oc(con, parametros):
         precios[r["pos"]] = int((r.get("desglose_precio_centavos") if con_desglose else r.get("precio_centavos")) or 0)
     expedientes_por_pos = {}
     for resumen in ficha["expedientes"]:
-        if resumen["estado"] == "ANULADO":
+        if resumen["estado"] == "ANULADO" or (efector and resumen.get("efector") != efector):
             continue
         exp = negocio.obtener_expediente(con, resumen["id"])
         for pos in negocio.cantidades_del_expediente(exp):

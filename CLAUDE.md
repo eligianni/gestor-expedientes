@@ -209,6 +209,14 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`importar._con_subrenglones_guardados`). En el CV va una fila por subrenglón y lo entregado se asigna en orden según
   lo consumido antes (`negocio._consumido_antes`). Consumo: `agotado` cuando el saldo llega a 0. La ficha no muestra
   «Consumo previo».
+- Centralizadas: no son expedientes de pago (la factura y el SII los hace Nivel Central). Cada «validación» es un
+  expediente tipo CENTRALIZADA por OC + efector + período (se crea desde el tablero o la ficha; `crear_expediente` acepta
+  otro efector y el período fijo), con 4 pasos en el asistente (`PASOS_CENTRALIZADA`): remitos y CV → N° de IF del CV
+  firmado → Nota a Central (`GET .../nota-central`) + N° de nota y fecha de envío. `guardar_centralizada` mueve el estado:
+  IF → FIRMADO («CV firmado»), nota + fecha → ENVIADO («Validado»). No aparecen en «Expedientes» (`listar_expedientes`
+  sin `tipo`). Reparto por efector en `renglon.crudo["_por_efector"]` (`guardar_por_efector`, `PUT .../renglones/<pos>/
+  efectores`): consumo (`consumo_oc(efector=)`), CV y lo consumido antes van por efector; la OC aparece en la lista de cada
+  efector que la valida (`efectores_de_oc`). Tablero: `GET /api/centralizadas/tablero` (`negocio.tablero_centralizadas`).
 - Los expedientes no se borran: «Anular expediente» (arriba del asistente, `abrirDialogoAnular`) pide un motivo y llama a
   `POST /api/expedientes/<id>/anular`; queda ANULADO y deja de contar para consumo y controles.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente

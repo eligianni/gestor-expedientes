@@ -217,7 +217,8 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
     )
     condiciones, parametros = [], []
     if efector in EFECTORES:
-        condiciones.append("oc.efector = ?")
+        # Las centralizadas se validan por efector: aparecen en la lista de cada uno que las valida (se filtra abajo).
+        condiciones.append("(oc.efector = ? OR oc.centralizada = 1)")
         parametros.append(efector)
     if not incluir_excluidas:
         condiciones.append("oc.excluida = 0")
@@ -232,6 +233,15 @@ def listar_oc(con, efector=None, texto="", incluir_excluidas=False):
         centro = centro_de_renglon({"crudo": r["crudo"]})
         if centro and centro not in CENTROS_CENTRALES and centro not in centros_propios(parametros_base, r["efector"]):
             otros[r["oc"]] = otros.get(r["oc"], 0) + 1
+    repartos = {}
+    for r in con.execute("SELECT r.oc, r.crudo FROM renglon r JOIN oc ON oc.numero = r.oc WHERE oc.centralizada = 1"):
+        for e, c in por_efector_de({"crudo": r["crudo"]}).items():
+            if _cantidad(c) > 0:
+                repartos.setdefault(r["oc"], set()).add(e)
+    for f in filas:
+        f["efectores"] = [e for e in EFECTORES if e == f["efector"] or e in repartos.get(f["numero"], set())]
+    if efector in EFECTORES:
+        filas = [f for f in filas if efector in f["efectores"]]
     con_pdf = ocs_con_pdf(con)
     for f in filas:
         f["renglones_otro_centro"] = otros.get(f["numero"], 0)
@@ -293,13 +303,16 @@ def ficha_oc(con, numero):
     ], centros_propios(db.leer_parametros(con), oc["efector"]))
     for r in renglones:
         r["subrenglones"] = subrenglones_de(r)
+        r["por_efector"] = por_efector_de(r)
     expedientes = [
         _resumen_expediente_oc(dict(fila))
         for fila in con.execute(
-            "SELECT id, tipo, periodo, estado, factura, version, datos FROM expediente WHERE oc = ? ORDER BY periodo, id",
+            "SELECT id, tipo, efector, periodo, estado, factura, version, datos FROM expediente WHERE oc = ? "
+            "ORDER BY periodo, id",
             (oc["numero"],),
         )
     ]
+    oc["efectores"] = efectores_de_oc(con, oc)
     return {"oc": oc, "proveedor": proveedor, "renglones": renglones, "expedientes": expedientes,
             "pdf_oc": ultimo_pdf_oc(con, oc["numero"])}
 
@@ -314,6 +327,9 @@ def _resumen_expediente_oc(fila):
     fila["consumo_remitos"] = bool(_cantidades_de_remitos(datos))
     manual = datos.get("consumo_manual") if isinstance(datos.get("consumo_manual"), dict) else {}
     fila["consumo_manual"] = {str(k): str(v) for k, v in manual.items()}
+    central = datos.get("centralizada") if isinstance(datos.get("centralizada"), dict) else {}
+    fila["numero_cv"] = central.get("numero_cv") or ""
+    fila["numero_nota"] = central.get("numero_nota") or ""
     return fila
 
 
@@ -560,6 +576,68 @@ def subrenglones_de(renglon):
             crudo = {}
     lista = (crudo or {}).get(CLAVE_SUBRENGLONES) if isinstance(crudo, dict) else None
     return list(lista) if isinstance(lista, list) else []
+
+
+# Cantidades por efector de una OC centralizada (Líderes: cada renglón es de un efector; Aqualine: el mismo renglón con
+# la cantidad de cada uno según el pliego). Van en `renglon.crudo["_por_efector"]` = {"HBI": "8", "CASPH": "4"}.
+CLAVE_POR_EFECTOR = "_por_efector"
+
+
+def por_efector_de(renglon):
+    crudo = renglon.get("crudo")
+    if isinstance(crudo, str):
+        try:
+            crudo = json.loads(crudo or "{}")
+        except ValueError:
+            crudo = {}
+    valor = (crudo or {}).get(CLAVE_POR_EFECTOR) if isinstance(crudo, dict) else None
+    return {k: str(v) for k, v in valor.items() if k in EFECTORES} if isinstance(valor, dict) else {}
+
+
+def cantidad_de_efector(renglon, efector, cantidad_oc):
+    """Cantidad del renglón que le toca al efector; sin reparto cargado, toda la del renglón."""
+    reparto = por_efector_de(renglon)
+    if not reparto:
+        return cantidad_oc
+    return _cantidad(reparto.get(efector))
+
+
+def efectores_de_oc(con, oc):
+    """Efectores que validan la OC: el suyo y, en una centralizada, los que tienen cantidad en algún renglón."""
+    efectores = {oc["efector"]}
+    if oc.get("centralizada"):
+        for fila in con.execute("SELECT crudo FROM renglon WHERE oc = ?", (oc["numero"],)):
+            efectores.update(e for e, c in por_efector_de({"crudo": fila["crudo"]}).items() if _cantidad(c) > 0)
+    return [e for e in EFECTORES if e in efectores]
+
+
+def guardar_por_efector(con, numero, pos, version, reparto):
+    """Cantidad de cada efector en un renglón de una OC centralizada ({} = sin reparto: toda la cantidad)."""
+    version = _version(version)
+    pos = _entero(pos, "renglón", minimo=1)
+    if not isinstance(reparto, dict):
+        raise ErrorValidacion("Faltan las cantidades por efector.")
+    limpio = {}
+    for efector, valor in reparto.items():
+        if efector not in EFECTORES:
+            raise ErrorValidacion("Efector desconocido: %s." % efector)
+        if str(valor if valor is not None else "").strip() == "":
+            continue
+        limpio[efector] = _decimal_texto(valor, "cantidad de %s" % efector)
+    with db.transaccion(con):
+        oc = _leer_oc(con, numero)
+        if not oc.get("centralizada"):
+            raise ErrorNegocio("La OC %s no es centralizada: no se reparte entre efectores." % oc["numero"])
+        fila = db.leer_fila(con, "renglon", {"oc": oc["numero"], "pos": pos})
+        if fila is None:
+            raise NoEncontrado("La OC %s no tiene el renglón %d." % (oc["numero"], pos))
+        crudo = json.loads(fila.get("crudo") or "{}")
+        if limpio:
+            crudo[CLAVE_POR_EFECTOR] = limpio
+        else:
+            crudo.pop(CLAVE_POR_EFECTOR, None)
+        db.actualizar_con_version(con, "renglon", {"oc": oc["numero"], "pos": pos}, version, {"crudo": crudo})
+    return ficha_oc(con, numero)
 
 
 def _validar_subrenglones(lista, pos_renglon):
@@ -949,7 +1027,7 @@ def crear_expediente(con, datos):
         oc = _leer_oc(con, numero_oc)
         if efector is None:
             efector = oc["efector"]
-        elif efector != oc["efector"]:
+        elif efector != oc["efector"] and not (tipo == "CENTRALIZADA" and oc.get("centralizada")):
             raise ErrorValidacion("La OC %s es de %s, no de %s." % (numero_oc, oc["efector"], efector))
         sap = oc["sap"]
     elif tipo != "EVENTUAL":
@@ -979,6 +1057,10 @@ def crear_expediente(con, datos):
     for campo in CAMPOS_EDITABLES_EXPEDIENTE:
         if campo in datos:
             fila[campo] = _validar_campo_expediente(campo, datos[campo])
+    if fila.get("periodo") and numero_oc and not (fila.get("periodo_desde") and fila.get("periodo_hasta")):
+        # Período elegido al crear (por ejemplo desde el tablero de centralizadas): queda fijo, con sus fechas.
+        limites = limites_de_periodo(fila["periodo"], int(oc.get("dia_inicio_periodo") or 1))
+        fila.update(periodo_desde=util.iso(limites.desde), periodo_hasta=util.iso(limites.hasta), periodo_manual=1)
     with db.transaccion(con):
         nuevo_id = db.insertar(con, "expediente", fila)
     return obtener_expediente(con, nuevo_id)
@@ -1229,6 +1311,9 @@ def listar_expedientes(con, estado=None, tipo=None, periodo=None, sap=None, entr
     if entrega not in (None, ""):
         condiciones.append("e.entrega_id = ?")
         parametros.append(_entero(entrega, "entrega"))
+    if not tipo:
+        # Las validaciones centralizadas no son expedientes de pago: se ven en «Centralizadas» y en la ficha de la OC.
+        condiciones.append("e.tipo <> 'CENTRALIZADA'")
     if condiciones:
         sql += " WHERE " + " AND ".join(condiciones)
     sql += " ORDER BY e.periodo DESC, e.id DESC"
@@ -1322,12 +1407,15 @@ def periodos_de_vigencia(oc):
     return periodos
 
 
-def _validado_por_renglon(con, numero):
-    """{pos: {período: cantidad}} de los expedientes no anulados de la OC."""
+def _validado_por_renglon(con, numero, efector=None):
+    """{pos: {período: cantidad}} de los expedientes no anulados de la OC (de un efector, si se indica)."""
     resultado = {}
-    filas = con.execute(
-        "SELECT periodo, datos FROM expediente WHERE oc = ? AND estado <> 'ANULADO' ORDER BY periodo, id", (numero,),
-    )
+    sql = "SELECT periodo, datos FROM expediente WHERE oc = ? AND estado <> 'ANULADO'"
+    valores = [numero]
+    if efector:
+        sql += " AND efector = ?"
+        valores.append(efector)
+    filas = con.execute(sql + " ORDER BY periodo, id", valores)
     for fila in filas:
         periodo = fila["periodo"] or SIN_PERIODO
         for pos, cantidad in cantidades_del_expediente({"datos": fila["datos"]}).items():
@@ -1336,17 +1424,22 @@ def _validado_por_renglon(con, numero):
     return resultado
 
 
-def _consumo(con, oc):
+def _consumo(con, oc, efector=None):
+    """Consumo por renglón; con `efector` (OC centralizada), solo sus validaciones y su cantidad de cada renglón."""
     renglones = [dict(f) for f in con.execute("SELECT * FROM renglon WHERE oc = ? ORDER BY pos", (oc["numero"],))]
-    validados = _validado_por_renglon(con, oc["numero"])
+    validados = _validado_por_renglon(con, oc["numero"], efector)
     umbral = Decimal(str(db.leer_parametros(con).get("umbral_por_agotarse_pct", 85)))
     meses_vigencia = len(periodos_de_vigencia(oc)) or 1
     filas = []
     for r in renglones:
         con_desglose = r.get("desglose_cantidad") not in (None, "")
         cantidad_oc = _cantidad(r["desglose_cantidad"] if con_desglose else r["cantidad"])
+        if efector:
+            cantidad_oc = cantidad_de_efector(r, efector, cantidad_oc)
+            if cantidad_oc == 0 and not validados.get(r["pos"]):
+                continue  # renglón de otro efector (por ejemplo, Líderes)
         unidad = (r.get("desglose_unidad") if con_desglose else r.get("unidad")) or ""
-        previo = _cantidad(r.get("consumo_previo"))
+        previo = Decimal(0) if efector else _cantidad(r.get("consumo_previo"))
         por_periodo = validados.get(r["pos"], {})
         validado = sum(por_periodo.values(), Decimal(0))
         saldo = cantidad_oc - previo - validado
@@ -1412,11 +1505,12 @@ def grilla(con, oc):
     return _grilla_desde(oc, _consumo(con, oc))
 
 
-def consumo_oc(con, numero):
-    """Renglones con su consumo y la grilla, para GET /api/oc/<numero>/consumo."""
+def consumo_oc(con, numero, efector=None):
+    """Renglones con su consumo y la grilla, para GET /api/oc/<numero>/consumo (?efector= en las centralizadas)."""
     oc = _leer_oc(con, numero)
-    filas = _consumo(con, oc)
-    return {"renglones": filas, "grilla": _grilla_desde(oc, filas)}
+    efector = efector if efector in EFECTORES else None
+    filas = _consumo(con, oc, efector)
+    return {"renglones": filas, "grilla": _grilla_desde(oc, filas), "efector": efector}
 
 
 # --- Contexto de controles -------------------------------------------------
@@ -1621,8 +1715,12 @@ def _texto_periodo_cv(ctx):
 def _consumido_antes(con, exp):
     """{pos: cantidad} de los expedientes de la misma OC anteriores a éste (por período; a igual período, por número)."""
     total = {}
-    for fila in con.execute("SELECT id, periodo, datos FROM expediente WHERE oc = ? AND id <> ? AND estado <> 'ANULADO'",
-                            (exp["oc"], exp["id"])):
+    sql = "SELECT id, periodo, datos FROM expediente WHERE oc = ? AND id <> ? AND estado <> 'ANULADO'"
+    valores = [exp["oc"], exp["id"]]
+    if exp.get("tipo") == "CENTRALIZADA":
+        sql += " AND efector = ?"  # cada efector consume lo suyo de la OC centralizada
+        valores.append(exp["efector"])
+    for fila in con.execute(sql, valores):
         if fila["periodo"] and exp.get("periodo"):
             anterior = (fila["periodo"], fila["id"]) < (exp["periodo"], exp["id"])
         else:
@@ -1676,11 +1774,17 @@ def datos_cv(con, id_expediente):
             if fecha not in fechas.setdefault(pos, []):
                 fechas[pos].append(fecha)
     previos = _consumido_antes(con, exp)
+    # Centralizada: el certificado es del efector, con su cantidad de cada renglón (y sin los renglones de otro efector).
+    del_efector = exp["efector"] if oc.get("centralizada") else None
     filas, completa = [], True
     for pos, renglon in sorted(renglones.items()):
         con_desglose = renglon.get("desglose_cantidad") not in (None, "")
         cantidad_oc = _cantidad(renglon["desglose_cantidad"] if con_desglose else renglon["cantidad"])
         entregada = cantidades.get(pos, Decimal(0))
+        if del_efector:
+            cantidad_oc = cantidad_de_efector(renglon, del_efector, cantidad_oc)
+            if cantidad_oc == 0 and entregada == 0:
+                continue
         if entregada != cantidad_oc:
             completa = False
         fecha = ", ".join(fechas.get(pos, []))
@@ -2484,6 +2588,8 @@ def pendientes(con, hoy=None):
 # --- Centralizadas (paso 27) --------------------------------------------------
 
 CLAVES_CENTRALIZADA = ("numero_cv", "numero_nota", "fecha_envio")
+# Estados de una validación centralizada: en curso (remitos y CV), CV firmado (IF cargado), validado (nota enviada).
+ESTADOS_CENTRALIZADA = ("BORRADOR", "CONTROLADO", "EN_FIRMA", "FIRMADO", "ENVIADO")
 
 
 def _lista_json(valor):
@@ -2522,8 +2628,19 @@ def guardar_centralizada(con, id_expediente, version, centralizada):
             raise ErrorNegocio("El expediente %d no es una centralizada." % actual["id"])
         contenido = _datos_de(actual)
         contenido["centralizada"] = nuevos
-        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version,
-                                  {"datos": contenido, "actualizado": db.ahora_utc()})
+        columnas = {"datos": contenido, "actualizado": db.ahora_utc()}
+        # Circuito de la validación centralizada: IF del CV firmado → «CV firmado»; N° de nota y fecha de envío → «Validado».
+        if actual["estado"] in ESTADOS_CENTRALIZADA:
+            if nuevos["numero_nota"] and nuevos["fecha_envio"]:
+                nuevo_estado = "ENVIADO"
+            elif nuevos["numero_cv"]:
+                nuevo_estado = "FIRMADO"
+            else:
+                nuevo_estado = "BORRADOR"
+            if nuevo_estado != actual["estado"]:
+                columnas["estado"] = nuevo_estado
+                contenido["historial"].append(dict(_entrada_historial("ESTADO", nuevo_estado), desde=actual["estado"]))
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, columnas)
     return obtener_expediente(con, id_expediente)
 
 
@@ -2554,6 +2671,60 @@ def centralizadas_por_periodo(con, anio, efector=None):
             "documentos": _lista_json(fila["doc_requerida_central"]),
         })
     return {"anio": anio, "expedientes": expedientes}
+
+
+ESTADO_TABLERO = {"BORRADOR": "en_curso", "CONTROLADO": "en_curso", "EN_FIRMA": "en_curso", "FIRMADO": "cv_firmado",
+                  "ENVIADO": "validado"}
+
+
+def tablero_centralizadas(con, anio, efector=None, hoy=None):
+    """Una fila por OC centralizada y efector que la valida, con el estado de la validación de cada mes del año."""
+    try:
+        anio = int(anio)
+    except (TypeError, ValueError):
+        raise ErrorValidacion("El año no es válido.") from None
+    hoy = hoy or util.fecha_desde_texto(db.ahora_utc()[:10])
+    validaciones = {}
+    for fila in con.execute("SELECT id, oc, efector, periodo, estado, datos FROM expediente "
+                            "WHERE tipo = 'CENTRALIZADA' AND estado <> 'ANULADO' ORDER BY id"):
+        clave = (fila["oc"], fila["efector"], fila["periodo"])
+        validaciones.setdefault(clave, dict(fila))
+    filas = []
+    for oc in con.execute("SELECT o.*, p.razon_social FROM oc o LEFT JOIN proveedor p ON p.sap = o.sap "
+                          "WHERE o.centralizada = 1 AND o.excluida = 0 ORDER BY p.razon_social, o.numero"):
+        oc = dict(oc)
+        periodos = [p for p in periodos_de_vigencia(oc) if p.startswith("%04d-" % anio)]
+        sueltas = [k for k in validaciones if k[0] == oc["numero"] and (k[2] or "").startswith("%04d-" % anio)]
+        if not periodos and not sueltas:
+            continue
+        dia = int(oc.get("dia_inicio_periodo") or 1)
+        for ef in efectores_de_oc(con, oc):
+            if efector in EFECTORES and ef != efector:
+                continue
+            celdas = []
+            for mes in range(1, 13):
+                periodo = "%04d-%02d" % (anio, mes)
+                exp = validaciones.get((oc["numero"], ef, periodo))
+                if exp is not None:
+                    estado = ESTADO_TABLERO.get(exp["estado"], "en_curso")
+                elif periodo not in periodos:
+                    estado = "fuera"
+                else:
+                    limites = limites_de_periodo(periodo, dia)
+                    estado = "sin_iniciar" if hoy < limites.desde else ("pendiente" if hoy <= limites.hasta else "atrasado")
+                central = (_datos_de(exp).get("centralizada") or {}) if exp else {}
+                celdas.append({"periodo": periodo, "estado": estado, "expediente_id": exp["id"] if exp else None,
+                               "numero_cv": central.get("numero_cv") or "", "numero_nota": central.get("numero_nota") or "",
+                               "fecha_envio": central.get("fecha_envio") or ""})
+            filas.append({"oc": oc["numero"], "efector": ef, "razon_social": oc.get("razon_social") or "",
+                          "objeto": oc.get("objeto") or "", "celdas": celdas})
+    return {"anio": anio, "filas": filas}
+
+
+def nota_central_del_expediente(con, id_expediente):
+    """Texto de la Nota a Central de una validación centralizada (para copiar)."""
+    ctx = contexto_textos(con, id_expediente)
+    return textos.nota_central(ctx)
 
 
 # --- Mantenimiento correctivo (paso 28) -------------------------------------------
