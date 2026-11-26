@@ -2133,7 +2133,7 @@ async function pintarPaso1() {
   partes.push(el("p", { texto: exp.periodo
     ? "Período: " + exp.periodo + " (del " + exp.periodo_desde + " al " + exp.periodo_hasta + ")"
       + (exp.periodo_manual ? " — corregido a mano" : " — sugerido por los remitos")
-    : "Todavía no hay período: se sugiere solo al pegar los remitos (paso 2), o cargalo a mano." }));
+    : "Todavía no hay período: se sugiere con la fecha de los remitos (paso 2), y ahí lo confirmás o lo cambiás." }));
   if (expEstado.sugerido && expEstado.sugerido.periodo !== exp.periodo) {
     partes.push(el("div", { clase: "mensaje mensaje-aviso" },
       el("p", { texto: "Según los remitos, el período sugerido es " + expEstado.sugerido.periodo + "." }),
@@ -2207,11 +2207,8 @@ function pintarPaso2() {
         el("span", { id: "remitos-cupo", clase: "texto-suave", "data-cargados": String(cargados) })),
       el("p", { clase: "nota-pie", texto: "Si cargás un número que ya está, se actualizan sus fechas y se conservan sus cantidades." })),
   ];
-  if (expEstado.fuera.length) {
-    partes.push(el("div", { clase: "mensaje mensaje-aviso" },
-      el("p", { texto: "Fuera del período: " + expEstado.fuera.join(", ") + ". Si el remito lo aclara, marcá «Aclara el período»." })));
-  }
   const remitos = exp.datos.remitos;
+  if (remitos.length) partes.push(panelPeriodo(exp));
   if (!remitos.length) {
     partes.push(el("p", { clase: "texto-suave", texto: "Todavía no hay remitos cargados." }));
     vaciar(contenedor, ...partes);
@@ -2267,6 +2264,49 @@ function pintarPaso2() {
 }
 
 const MAX_REMITOS = 20;
+const MESES_NOMBRE = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+  "noviembre", "diciembre"];
+
+function fechaCorta(iso) {
+  return iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : "";
+}
+
+/** Período del expediente: sugerido por la fecha de los remitos (bienes: el mes del remito; servicios: según la OC),
+ * para confirmarlo o cambiarlo, y aviso de los remitos que no caen en él (ni por fecha ni por firma). */
+function panelPeriodo(exp) {
+  const partes = [];
+  if (!exp.periodo) {
+    partes.push(el("p", { texto: "Todavía no hay período: se sugiere con la fecha de los remitos." }));
+  } else {
+    const [anio, mes] = exp.periodo.split("-").map(Number);
+    partes.push(el("p", {},
+      el("strong", { texto: "Período: " + MESES_NOMBRE[mes - 1] + " " + anio }),
+      " (" + fechaCorta(exp.periodo_desde) + " al " + fechaCorta(exp.periodo_hasta) + ") ",
+      el("span", { clase: "pastilla pastilla-" + (exp.periodo_manual ? "exito" : "aviso"),
+        texto: exp.periodo_manual ? "Confirmado" : "Sugerido por los remitos" })));
+  }
+  const cambiar = entrada(exp.periodo || "", { id: "periodo-rapido", inputmode: "numeric", clase: "entrada-corta",
+    placeholder: "AAAA-MM", "aria-label": "Período (AAAA-MM)" });
+  partes.push(el("div", { clase: "acciones" },
+    exp.periodo && !exp.periodo_manual ? el("button", { type: "button", texto: "Confirmar período", onclick: async () => {
+      limpiarAvisos();
+      if (await guardarExpediente({ periodo: exp.periodo }, "Período " + exp.periodo + " confirmado.")) pintarPaso2();
+    } }) : null,
+    cambiar,
+    el("button", { type: "button", clase: "secundario", texto: "Cambiar período", onclick: async () => {
+      limpiarAvisos();
+      const periodo = cambiar.value.trim();
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodo)) { mostrarAviso("El período debe tener la forma AAAA-MM (por ejemplo 2026-09).", "error"); return; }
+      if (await guardarExpediente({ periodo }, "Período " + periodo + " guardado.")) pintarPaso2();
+    } })));
+  const fuera = exp.remitos_fuera_de_periodo || [];
+  if (fuera.length) {
+    partes.push(el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto: (fuera.length === 1 ? "El remito " : "Los remitos ")
+      + fuera.join(", ") + (fuera.length === 1 ? " no cae" : " no caen") + " en el período, ni por su fecha ni por la de firma. "
+      + "Revisá el período o, si el remito lo aclara, marcá «Aclara el período»." })));
+  }
+  return el("section", { clase: "panel panel-periodo", "aria-label": "Período del expediente" }, ...partes);
+}
 
 /** Fila del formulario para cargar un remito nuevo. */
 function filaRemitoNuevo() {

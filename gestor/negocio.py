@@ -1007,6 +1007,7 @@ def obtener_expediente(con, id_expediente):
     proveedor = db.leer_fila(con, "proveedor", {"sap": fila["sap"]}) if fila["sap"] else None
     fila["razon_social"] = proveedor["razon_social"] if proveedor else ""
     fila["destinos"] = list(_transiciones(fila["tipo"]).get(fila["estado"], []))
+    fila["remitos_fuera_de_periodo"] = remitos_fuera_de_periodo(_periodo_del_expediente(fila), fila["datos"].get("remitos") or [])
     return fila
 
 
@@ -1062,7 +1063,7 @@ def crear_expediente(con, datos):
         if tipo == "CENTRALIZADA":
             desde, hasta = limites_centralizada(oc, fila["periodo"])
         else:
-            limites = limites_de_periodo(fila["periodo"], int(oc.get("dia_inicio_periodo") or 1))
+            limites = limites_de_periodo(fila["periodo"], dia_inicio_de(oc))
             desde, hasta = limites.desde, limites.hasta
         fila.update(periodo_desde=util.iso(desde), periodo_hasta=util.iso(hasta), periodo_manual=1)
     with db.transaccion(con):
@@ -1151,18 +1152,20 @@ def periodo_sugerido(oc, remitos):
     if not candidatos:
         return None
     mas_reciente = max(fecha_base(r) for r in candidatos)
-    dia = int((oc or {}).get("dia_inicio_periodo") or 1)
+    dia = dia_inicio_de(oc)
     return util.periodo_de_fecha(util.fecha_desde_texto(mas_reciente), dia)
 
 
 def remitos_fuera_de_periodo(periodo, remitos):
-    """Números de remito (no de equipo, sin aclaración de período) con fecha base fuera del período."""
+    """Números de remito (no de equipo, sin aclaración de período) que no caen en el período ni por fecha ni por firma."""
     if periodo is None:
         return []
     desde, hasta = util.iso(periodo.desde), util.iso(periodo.hasta)
+    # Está bien si la fecha del remito o la de firma caen en el período.
     return [
         r["numero"] for r in _remitos_de_periodo(remitos)
-        if not r.get("aclara_periodo") and not desde <= fecha_base(r) <= hasta
+        if not r.get("aclara_periodo")
+        and not any(f and desde <= f <= hasta for f in (r.get("fecha"), r.get("fecha_firma")))
     ]
 
 
@@ -1175,11 +1178,18 @@ def limites_de_periodo(periodo, dia_inicio=1):
     return util.periodo_de_fecha(util.fecha_desde_texto("%04d-%02d-%02d" % (anio, mes, dia_inicio - 1)), dia_inicio)
 
 
+def dia_inicio_de(oc):
+    """Día en que arranca cada período: en bienes (adquisición por única vez) siempre el mes calendario del remito;
+    en servicios, el de la OC (por ejemplo 15 → del 15 al 14 del mes siguiente)."""
+    if not oc or oc.get("tipo") == "BIEN":
+        return 1
+    return int(oc.get("dia_inicio_periodo") or 1)
+
+
 def _dia_inicio(con, expediente):
     if not expediente.get("oc"):
         return 1
-    oc = db.leer_fila(con, "oc", {"numero": expediente["oc"]})
-    return int(oc["dia_inicio_periodo"]) if oc else 1
+    return dia_inicio_de(db.leer_fila(con, "oc", {"numero": expediente["oc"]}))
 
 
 def _periodo_dict(periodo):
@@ -1627,7 +1637,7 @@ def contexto_textos(con, id_expediente):
         "periodo": exp.get("periodo"),
         "periodo_desde": exp.get("periodo_desde"),
         "periodo_hasta": exp.get("periodo_hasta"),
-        "dia_inicio": int(oc["dia_inicio_periodo"]) if oc else 1,
+        "dia_inicio": dia_inicio_de(oc) if oc else 1,
         "remitos": [r["numero"] for r in remitos if not r.get("es_equipo_comodato")],
         "remito_equipo": equipo,
         "fecha_base_remitos": max(
@@ -1823,13 +1833,16 @@ def datos_cv(con, id_expediente):
     hasta = util.fecha_desde_texto(ctx["periodo_hasta"]) if ctx.get("periodo_hasta") else None
     hoy = util.fecha_desde_texto(db.ahora_utc()[:10])
     fin_vigencia = _fin_vigencia(oc)
-    vigencia = "%s a %s" % (
-        util.ddmmaaaa(util.fecha_desde_texto(oc["vig_desde"])) if oc.get("vig_desde") else "—",
-        util.ddmmaaaa(util.fecha_desde_texto(fin_vigencia)) if fin_vigencia else "sin fin")
+    if oc["tipo"] == "BIEN":
+        vigencia = "-"  # adquisición por única vez: la OC no tiene vigencia
+    else:
+        vigencia = "%s a %s" % (
+            util.ddmmaaaa(util.fecha_desde_texto(oc["vig_desde"])) if oc.get("vig_desde") else "—",
+            util.ddmmaaaa(util.fecha_desde_texto(fin_vigencia)) if fin_vigencia else "sin fin")
     if oc["tipo"] == "SERVICIO":
         entrega = "Mensual"
     else:
-        entrega = "Única" if completa else "Parcial"
+        entrega = "Total" if completa else "Parcial"  # Total: este remito entrega toda la OC
     referencia = textos.referencia_cv(ctx)
     datos = {
         "fecha": max(hoy, hasta) if hasta else hoy,
