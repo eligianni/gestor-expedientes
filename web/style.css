@@ -635,3 +635,15 @@ button.secundario.boton-peligro:hover { background: var(--error-fondo); color: v
 .referencia-gde .mono { overflow-wrap: anywhere; }
 .detalle-controles { margin: 0 0 16px; }
 .detalle-controles summary { cursor: pointer; color: var(--primario); font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+
+/* Paso 2: cada remito nuevo con sus cantidades; ventana de remitos por páginas */
+.remito-nuevo { margin: 0 0 16px; }
+.remito-nuevo legend { font-weight: 650; padding: 0 4px; }
+.etiqueta-cantidades { margin: 4px 0 8px; color: var(--texto-suave); font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; }
+.tabla-cantidades .entrada-corta { width: 120px; }
+.paginador { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 16px 0 8px; }
+.datos-remito { margin-top: 8px; }
+.boton-lapiz-texto { display: inline-flex; align-items: center; gap: 8px; }
+.boton-lapiz-texto svg { width: 18px; height: 18px; }
+.grilla-dialogo input[type="checkbox"], .grilla-remito input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--primario); }

@@ -1236,12 +1236,35 @@ def remitos_del_formulario(remitos):
             fecha_firma = util.iso(util.fecha_desde_texto(firma)) if firma else None
         except ValueError:
             raise ErrorValidacion("Remito %s: la fecha de firma no es válida." % numero) from None
+        comodato = _bandera(remito.get("es_equipo_comodato") or 0, "es_equipo_comodato") == 1
         nuevos.append({
-            "numero": numero, "fecha": fecha, "fecha_firma": fecha_firma,
-            "es_equipo_comodato": _bandera(remito.get("es_equipo_comodato") or 0, "es_equipo_comodato") == 1,
-            "aclara_periodo": False, "items": [],
+            "numero": numero, "fecha": fecha, "fecha_firma": fecha_firma, "es_equipo_comodato": comodato,
+            "aclara_periodo": False, "items": [] if comodato else _items_del_formulario(numero, remito.get("items")),
         })
     return nuevos
+
+
+def _items_del_formulario(numero, items):
+    """Cantidades por renglón cargadas junto con el remito: [{pos, cantidad}] (coma o punto decimal; vacío = nada)."""
+    if items in (None, ""):
+        return []
+    if not isinstance(items, list):
+        raise ErrorValidacion("Remito %s: las cantidades deben ser una lista." % numero)
+    limpios = []
+    for item in items:
+        texto = str((item or {}).get("cantidad") or "").strip().replace(",", ".") if isinstance(item, dict) else ""
+        if not texto:
+            continue
+        try:
+            pos = int(item.get("pos"))
+            cantidad = Decimal(texto)
+            if not cantidad.is_finite() or cantidad < 0:
+                raise InvalidOperation
+        except (TypeError, ValueError, InvalidOperation):
+            raise ErrorValidacion("Remito %s: la cantidad «%s» no es válida." % (numero, item.get("cantidad"))) from None
+        if cantidad:
+            limpios.append({"pos": pos, "cantidad": _cantidad_texto(cantidad), "codigo": ""})
+    return limpios
 
 
 def pegar_remitos(con, id_expediente, version, texto, es_equipo_comodato=False, remitos=None):
@@ -1268,7 +1291,7 @@ def pegar_remitos(con, id_expediente, version, texto, es_equipo_comodato=False, 
             if remito["numero"] in por_numero:
                 anterior = contenido["remitos"][por_numero[remito["numero"]]]
                 if not remito["es_equipo_comodato"] and not anterior.get("es_equipo_comodato"):
-                    remito["items"] = anterior.get("items") or []
+                    remito["items"] = remito["items"] or anterior.get("items") or []
                     remito["aclara_periodo"] = bool(anterior.get("aclara_periodo"))
                 contenido["remitos"][por_numero[remito["numero"]]] = remito
             else:

@@ -51,3 +51,30 @@ class PruebaRemitosFormulario(ayudas.CasoConServidor):
         resp = self._agregar([{"numero": "R-99", "fecha": "2026-08-31"}], version=exp["version"])
         self.assertEqual(resp.estado, 400)
         self.assertIn("20", resp.json()["error"]["mensaje"])
+
+
+class PruebaRemitoConCantidades(ayudas.CasoConServidor):
+    """Las cantidades se cargan junto con el remito, en el mismo envío."""
+
+    def setUp(self):
+        super().setUp()
+        con = db.conectar(self.entorno.ruta_base)
+        try:
+            datos_prueba.cargar_efia(con)
+            self.exp = negocio.crear_expediente(con, {"tipo": "COMUN", "oc": datos_prueba.OC_EFIA_MANUAL["numero"]})
+        finally:
+            con.close()
+
+    def _agregar(self, remitos, version=None):
+        return self.servidor.post("/api/expedientes/%d/remitos/pegar" % self.exp["id"],
+                                  {"version": version or self.exp["version"], "remitos": remitos})
+
+    def test_remito_con_sus_cantidades(self):
+        resp = self._agregar([{"numero": "R-1", "fecha": "2026-08-31", "items": [{"pos": 1, "cantidad": "1,5"}]}])
+        self.assertEqual(resp.estado, 200, resp.texto())
+        self.assertEqual(resp.json()["datos"]["datos"]["remitos"][0]["items"], [{"pos": 1, "cantidad": "1.5", "codigo": ""}])
+
+    def test_cantidad_invalida(self):
+        resp = self._agregar([{"numero": "R-1", "fecha": "2026-08-31", "items": [{"pos": 1, "cantidad": "uno"}]}])
+        self.assertEqual(resp.estado, 400)
+        self.assertIn("R-1", resp.json()["error"]["mensaje"])

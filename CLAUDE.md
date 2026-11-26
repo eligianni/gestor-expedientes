@@ -191,11 +191,12 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 - OC «Acciones pendientes» (`faltantesOC` en `app.js`): falta el PDF (`negocio.ocs_con_pdf`, `listar_oc.pdf_cargado`) o el
   concepto corto; ambos llevan (*) en la ventana de edición (que también tiene la carga del PDF) y sin ellos «Nuevo
   expediente» de la ficha está deshabilitado. La ficha no muestra GDE del PDF, concepto corto ni día de inicio (solo al editar).
-- Paso 2 (remitos): formulario fila por fila (N°, fecha, fecha de firma, casilla de equipo en comodato por remito), hasta
-  `negocio.MAX_REMITOS` (20) por expediente; va por `POST .../remitos/pegar` con `remitos: [...]` (el texto pegado sigue
-  aceptado). Un número repetido actualiza fechas y conserva cantidades. Las cantidades se cargan después, por remito y renglón.
-  Los remitos ya cargados (también los migrados, que vienen sin fecha ni cantidades) se editan en el mismo paso: número,
-  fechas, comodato y cantidades, y se guardan juntos con `PUT /api/expedientes/<id>` (`datos.remitos`).
+- Paso 2 (remitos): una tarjeta por remito nuevo (`tarjetaRemitoNuevo`: N°, fecha, fecha de firma, equipo en comodato y,
+  ahí mismo, la cantidad de cada renglón), hasta `negocio.MAX_REMITOS` (20); va por `POST .../remitos/pegar` con
+  `remitos: [{..., items: [{pos, cantidad}]}]` (`negocio._items_del_formulario`; el texto pegado sigue aceptado). Un número
+  repetido actualiza fechas y, si vienen, las cantidades. Los ya cargados se ven en una tabla resumen y se editan en la
+  ventana `#dialogo-remitos` (`abrirDialogoRemitos`): un remito por página, lápiz para editar y «Guardar», que manda todos
+  con `PUT /api/expedientes/<id>` (`datos.remitos`); también «Quitar este remito».
 - Paso 3: «Leer y controlar» sube el PDF de la factura (`POST /api/comprobantes/factura-pdf`) y/o el del SII
   (`/api/comprobantes/sii-pdf`, mismo parser que el texto pegado) y controla enseguida con
   `POST /api/expedientes/<id>/comprobantes/revisar` → `negocio.revisar_comprobantes`: los controles de ámbito factura/sii
