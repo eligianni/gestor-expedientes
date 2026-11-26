@@ -229,8 +229,14 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   «pendiente» hasta `dias_gracia` (10) días después de terminar. El SEGUIMIENTO_CENTRALIZADAS en Excel se carga desde la
   pantalla («NOTAS ENVIADAS» y «ENTREGAS ÚNICAS», HUR = CASPH): `migracion.planificar_centralizadas` / `migrar_centralizadas`
   (`/api/importar/centralizadas/{vista-previa,confirmar}`), idempotente por OC + efector + mes; marca las OC como centralizadas.
-- Entregas: clic en la fila abre la ventana `#dialogo-entrega` (`abrirEntrega`) con todas sus facturas (proveedor, OC,
-  período, N°, importe de `datos.factura.centavos`, estado) y el total; clic en una factura abre su expediente.
+- Entregas: clic en la fila abre la tramitación de la entrega (pantalla, no ventana: `abrirEntrega` en `#entrega-detalle`,
+  `GET /api/entregas/<id>/tramitacion` → `negocio.tramitacion_entrega`) con dos solapas: «Expedientes» (IF por fila con
+  el lápiz → `editorIf`, acción `gde_fila` de `negocio.tramitar`, que con la autorización pasa a FIRMADO; casilla de pase
+  → `pase`/`sin_pase`, habilitada solo sin `faltan_if`) y «Factura (SAP)» (datos de `textos.factura_sap` para copiar,
+  N° de documento → `factura_doc` = PRELIMINAR, botón → `factura_estado` DEFINITIVA, en `datos.tramite`). Se agrega todo
+  expediente `listo_para_entrega`: firmado, o común/correctivo con remito, factura y EX (`firmados_sin_entrega` guarda el
+  nombre viejo). Una entrega abierta y vacía se anula (`POST .../anular`, motivo en `observaciones` con «ANULADA: »;
+  no se borra). El pase (también desde el asistente) pide todos los IF (`negocio.IF_DEL_PASE`).
 - Expediente COMÚN = trámite en el orden real (`PASOS_TRAMITE` en `app.js`, contenedores 1, 2, 8, 9, 3, 10–14): OC y
   período → remitos → CV (en firma + N° GDE) → ingreso en SAP (MIGO por remito / ML81N con el período validado y centro
   HBI/HUR, `textos.entrada_sap`) → factura y SII → caratulación (controles en orden + datos de `parametros.caratulacion`

@@ -647,3 +647,28 @@ button.secundario.boton-peligro:hover { background: var(--error-fondo); color: v
 .boton-lapiz-texto { display: inline-flex; align-items: center; gap: 8px; }
 .boton-lapiz-texto svg { width: 18px; height: 18px; }
 .grilla-dialogo input[type="checkbox"], .grilla-remito input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--primario); }
+
+/* Entregas: tramitación con solapas, IF por fila y factura en SAP */
+.cabecera-entrega h2 { margin: 0 0 4px; }
+.cabecera-entrega p { margin: 0 0 8px; }
+.solapas { display: flex; flex-wrap: wrap; gap: 4px; margin: 24px 0 0; padding: 4px; border-radius: var(--radio-panel) var(--radio-panel) 0 0;
+  background: var(--neutro-fondo); }
+.solapas button { min-height: 44px; padding: 8px 16px; border: 0; border-radius: 6px; background: transparent; color: var(--texto-suave);
+  font-weight: 600; box-shadow: none; }
+.solapas button:hover { background: var(--superficie); color: var(--texto); }
+.solapas button[aria-selected="true"] { background: var(--superficie); color: var(--primario); box-shadow: var(--sombra-panel); }
+.solapas + .panel { border-top-left-radius: 0; border-top-right-radius: 0; margin-top: 0; }
+.tabla-tramitacion td, .tabla-tramitacion th { white-space: nowrap; }
+.tabla-tramitacion td.izq { white-space: normal; min-width: 160px; }
+.tabla-tramitacion td .secundario { min-height: 36px; padding: 4px 10px; }
+.fila-editando td { background: var(--primario-suave); }
+.fila-edicion > td { padding: 16px 20px; background: var(--superficie-hundida); white-space: normal; text-align: left; }
+.grilla-if { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px 16px; }
+.grilla-if .campo { max-width: none; }
+.editor-fila .acciones { margin-top: 8px; }
+.celda-pase { display: inline-flex; align-items: center; gap: 8px; }
+.celda-pase input { width: 22px; height: 22px; accent-color: var(--primario); }
+.boton-chico { margin-left: 8px; }
+.boton-quitar-fila { margin-left: 8px; }
+.entrada-media { width: 240px; }
+.fila-edicion .editor-fila, .fila-edicion .tabla-desplazable { position: sticky; left: 0; max-width: min(1100px, calc(100vw - 340px)); }

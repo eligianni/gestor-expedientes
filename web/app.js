@@ -3827,7 +3827,7 @@ function iniciarCalendario() {
 
 // --- Entregas -----------------------------------------------------------------
 
-const entEstado = { abierta: null };
+const entEstado = { abierta: null, solapa: "expedientes", editando: null, abiertos: new Set(), verAnuladas: false };
 
 function hoyIso() {
   const d = new Date();
@@ -3841,7 +3841,11 @@ function descripcionExpediente(x) {
 
 async function cargarEntregas() {
   const contenedor = document.getElementById("entregas-contenido");
+  const detalle = document.getElementById("entrega-detalle");
   estado.recargar = cargarEntregas;
+  if (entEstado.abierta) { contenedor.hidden = true; await abrirEntrega(entEstado.abierta); return; }
+  contenedor.hidden = false;
+  vaciar(detalle);
   cargando(contenedor);
   const parametros = new URLSearchParams();
   if (estado.efector !== "Ambos") parametros.set("efector", estado.efector);
@@ -3853,27 +3857,40 @@ async function cargarEntregas() {
     campoFormulario("entrega-efector", "Efector", selector(efectorInicial, [["HBI", "HBI"], ["CASPH", "CASPH"]])),
     campoFormulario("entrega-nombre", "Nombre (opcional)", entrada("", { autocomplete: "off", placeholder: "Entrega N" })),
     el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Crear entrega" })));
-  const partes = [alta];
-  partes.push(el("p", { clase: "texto-suave", texto: datos.firmados_sin_entrega.length
-    ? (datos.firmados_sin_entrega.length === 1 ? "1 expediente firmado espera entrega."
-      : datos.firmados_sin_entrega.length + " expedientes firmados esperan entrega.")
-    : "No hay expedientes firmados sin entrega." }));
-  if (!datos.entregas.length) {
+  const listos = datos.firmados_sin_entrega.length;
+  const partes = [alta, el("p", { clase: "texto-suave", texto: listos
+    ? (listos === 1 ? "1 expediente" : listos + " expedientes") + " con remito, factura y EX " + (listos === 1 ? "espera" : "esperan") + " entrega."
+    : "No hay expedientes listos para agregar a una entrega (hace falta remito, factura y el N° de expediente caratulado)." })];
+  const anuladas = datos.entregas.filter((e) => e.anulada).length;
+  const visibles = datos.entregas.filter((e) => entEstado.verAnuladas || !e.anulada);
+  if (anuladas) {
+    const casillaAnuladas = el("input", { type: "checkbox", id: "entregas-ver-anuladas", checked: entEstado.verAnuladas });
+    casillaAnuladas.addEventListener("change", () => { entEstado.verAnuladas = casillaAnuladas.checked; cargarEntregas(); });
+    partes.push(el("div", { clase: "campo campo-casilla" }, casillaAnuladas,
+      el("label", { for: "entregas-ver-anuladas", texto: "Ver las entregas anuladas (" + anuladas + ")" })));
+  }
+  if (!visibles.length) {
     partes.push(el("p", { clase: "texto-suave", texto: "Todavía no hay entregas." }));
   } else {
-    const filas = datos.entregas.map((e) => el("tr", { clase: "fila-clic", title: "Ver las facturas de la entrega", onclick: () => abrirEntrega(e.id) },
+    const filas = visibles.map((e) => el("tr", { clase: "fila-clic", title: "Tramitar la entrega", onclick: () => abrirEntrega(e.id) },
       el("td", {}, el("button", { type: "button", clase: "secundario", texto: e.efector + " " + e.numero,
         "aria-label": "Abrir la entrega " + e.efector + " " + e.numero, onclick: (ev) => { ev.stopPropagation(); abrirEntrega(e.id); } })),
-      el("td", { texto: e.nombre }),
-      el("td", { texto: e.estado === "ENVIADA" ? "Enviada" : "Abierta" }),
-      el("td", { texto: e.fecha_envio || "—" }),
+      el("td", { clase: "izq", texto: e.nombre }),
+      el("td", {}, pastillaEntrega(e)),
+      el("td", { texto: e.fecha_envio ? fechaCorta(e.fecha_envio) : "—" }),
       el("td", { clase: "numero", texto: String(e.expedientes) })));
     partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...["Entrega", "Nombre", "Estado", "Enviada el", "Expedientes"].map((t) => el("th", { scope: "col", texto: t })))),
+      el("thead", {}, el("tr", {}, ...["Entrega", "Nombre", "Estado", "Enviada el", "Expedientes"]
+        .map((t) => el("th", { scope: "col", clase: t === "Nombre" ? "izq" : null, texto: t })))),
       el("tbody", {}, ...filas))));
   }
   vaciar(contenedor, ...partes);
-  if (entEstado.abierta) abrirEntrega(entEstado.abierta);
+}
+
+function pastillaEntrega(e) {
+  if (e.anulada) return el("span", { clase: "pastilla pastilla-error", texto: "Anulada" });
+  return e.estado === "ENVIADA" ? el("span", { clase: "pastilla pastilla-exito", texto: "Enviada" })
+    : el("span", { clase: "pastilla pastilla-info", texto: "Abierta" });
 }
 
 async function crearEntrega(evento) {
@@ -3884,102 +3901,277 @@ async function crearEntrega(evento) {
   });
   if (!entrega) return;
   mostrarAviso("Entrega " + entrega.efector + " " + entrega.numero + " creada.", "exito");
-  entEstado.abierta = entrega.id;
+  abrirEntrega(entrega.id);
+}
+
+function volverAEntregas() {
+  limpiarAvisos();
+  Object.assign(entEstado, { abierta: null, editando: null, abiertos: new Set() });
   cargarEntregas();
 }
 
-/** La entrega en una ventana: todas sus facturas (proveedor, OC, período, N° e importe) con el total. */
+/** Número corto de un IF para la tabla: «IF-2026-33334444-INSSJP-GESP#INSSJP» → «33334444» (el completo, al pasar el mouse). */
+function ifCorto(numero) {
+  if (!numero) return el("span", { clase: "texto-suave", texto: "—" });
+  const partes = numero.split("-");
+  return el("span", { clase: "mono", title: numero, texto: partes.length > 2 ? partes[2] : numero });
+}
+
+const COLUMNAS_IF = [["factura", "IF factura"], ["sii", "IF SII"], ["remitos", "IF remitos"], ["cv", "IF CV"], ["vale_hoja", "IF vale / hoja"],
+  ["autorizacion", "IF autoriz."], ["contabilizacion", "IF contab."]];
+const NOMBRES_IF = { factura: "factura", sii: "carga en SII", remitos: "remitos", remito_equipo: "remito del equipo",
+  cv: "certificado de validación", vale_hoja: "vale / hoja de entrada", autorizacion: "autorización de pago",
+  contabilizacion: "constancia de contabilización" };
+
+/** La entrega como pantalla de tramitación: solapas «Expedientes» (IF por fila y pase) y «Factura (SAP)». */
 async function abrirEntrega(id) {
+  const contenedor = document.getElementById("entregas-contenido");
+  const detalle = document.getElementById("entrega-detalle");
+  if (entEstado.abierta !== id) Object.assign(entEstado, { editando: null, abiertos: new Set() });
   entEstado.abierta = id;
-  const entrega = await api("GET", "/api/entregas/" + id);
-  if (!entrega) { entEstado.abierta = null; return; }
+  estado.recargar = () => abrirEntrega(id);
+  const entrega = await api("GET", "/api/entregas/" + id + "/tramitacion");
+  if (!entrega) { entEstado.abierta = null; contenedor.hidden = false; return; }
+  contenedor.hidden = true;
   const lista = await api("GET", "/api/entregas?efector=" + encodeURIComponent(entrega.efector));
   const candidatos = lista ? lista.firmados_sin_entrega : [];
-  const abierta = entrega.estado === "ABIERTA";
-  const anterior = document.getElementById("dialogo-entrega");
-  if (anterior) { anterior.dataset.recargando = "1"; anterior.close(); }
-  const dialogo = el("dialog", { id: "dialogo-entrega", clase: "dialogo", "aria-labelledby": "entrega-titulo" });
-  const partes = [el("div", { clase: "dialogo-encabezado" },
-    el("h2", { id: "entrega-titulo", texto: "Entrega " + entrega.efector + " " + entrega.numero + " — " + entrega.nombre }),
-    el("p", { clase: "texto-suave", texto: (abierta ? "Abierta: todavía se pueden agregar o quitar expedientes." : "Enviada el " + entrega.fecha_envio + ".")
-      + " " + entrega.expedientes.length + (entrega.expedientes.length === 1 ? " factura." : " facturas.") }))];
-  if (entrega.expedientes.length) {
-    const total = entrega.expedientes.reduce((t, x) => t + (x.importe_centavos || 0), 0);
-    const filas = entrega.expedientes.map((x) => el("tr", { clase: "fila-clic", title: "Abrir el expediente " + x.id,
-      onclick: () => { dialogo.close(); abrirExpedienteDesdeOC(x.id, 1); } },
-      el("td", { clase: "numero", texto: String(x.id) }),
-      el("td", { clase: "izq", texto: x.razon_social || "" }),
-      el("td", { texto: x.oc || "—" }),
-      el("td", { texto: x.periodo || "—" }),
-      el("td", { clase: "mono sin-corte", texto: x.factura || "—" }),
-      el("td", { clase: "numero sin-corte", texto: x.importe_centavos === null || x.importe_centavos === undefined ? "—" : formatoPesos(x.importe_centavos) }),
-      el("td", {}, el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[x.estado] || "neutra"), texto: ESTADOS_TEXTO[x.estado] || x.estado })),
-      el("td", {}, abierta ? el("button", { type: "button", clase: "secundario", texto: "Quitar",
-        "aria-label": "Quitar el expediente " + x.id + " de la entrega",
-        onclick: (ev) => { ev.stopPropagation(); cambiarEntrega(entrega, "/quitar", [x.id], "Expediente quitado."); } }) : null)));
-    partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...["N°", "Proveedor", "OC", "Período", "Factura", "Importe $", "Estado", ""]
-        .map((t) => el("th", { scope: "col", clase: t === "Proveedor" ? "izq" : null, texto: t })))),
-      el("tbody", {}, ...filas),
-      el("tfoot", {}, el("tr", {}, el("th", { scope: "row", clase: "izq", colspan: "5", texto: "Total" }),
-        el("td", { clase: "numero sin-corte", texto: formatoPesos(total) }), el("td", {}), el("td", {}))))),
+  const abierta = entrega.estado === "ABIERTA" && !entrega.anulada;
+  const total = entrega.expedientes.reduce((t, x) => t + (x.importe_centavos || 0), 0);
+  const conPase = entrega.expedientes.filter((x) => (x.tramite || {}).pase).length;
+  const partes = [
+    el("div", { clase: "acciones" }, el("button", { type: "button", clase: "secundario", texto: "Volver a entregas", onclick: volverAEntregas })),
+    el("div", { clase: "panel cabecera-entrega" },
+      el("h2", { texto: "Entrega " + entrega.efector + " " + entrega.numero + " — " + entrega.nombre }),
+      el("p", {}, pastillaEntrega(entrega), " " + entrega.expedientes.length + (entrega.expedientes.length === 1 ? " factura" : " facturas")
+        + " · total " + formatoPesos(total) + " · con pase " + conPase + " de " + entrega.expedientes.length
+        + (entrega.fecha_envio ? " · enviada el " + fechaCorta(entrega.fecha_envio) : "")),
+      entrega.anulada ? el("p", { clase: "texto-suave", texto: entrega.observaciones }) : null,
       el("div", { clase: "acciones" },
-        el("a", { clase: "boton secundario", href: "/api/entregas/" + entrega.id + "/numeracion.csv", download: "",
-          texto: "Descargar CSV NUMERACIÓN" })),
-      botonesExporte("entrega", { id: entrega.id }, "de la entrega " + entrega.efector + " " + entrega.numero));
+        entrega.expedientes.length ? el("a", { clase: "boton secundario", href: "/api/entregas/" + entrega.id + "/numeracion.csv", download: "",
+          texto: "Descargar CSV NUMERACIÓN" }) : null,
+        abierta && !entrega.expedientes.length ? el("button", { type: "button", clase: "secundario boton-peligro", texto: "Anular entrega",
+          onclick: () => anularEntrega(entrega) }) : null),
+      entrega.expedientes.length ? botonesExporte("entrega", { id: entrega.id }, "de la entrega " + entrega.efector + " " + entrega.numero) : null),
+  ];
+  if (abierta && candidatos.length) partes.push(formularioAgregar(entrega, candidatos));
+  if (entrega.expedientes.length) {
+    const solapas = [["expedientes", "Expedientes (IF y pase)"], ["factura", "Factura (SAP)"]];
+    partes.push(el("div", { clase: "solapas", role: "tablist", "aria-label": "Tramitación de la entrega" },
+      ...solapas.map(([clave, texto]) => el("button", { type: "button", role: "tab", texto,
+        "aria-selected": entEstado.solapa === clave ? "true" : "false",
+        onclick: () => { entEstado.solapa = clave; entEstado.editando = null; abrirEntrega(id); } }))),
+    el("div", { clase: "panel", role: "tabpanel" },
+      entEstado.solapa === "factura" ? tablaFacturaSap(entrega, abierta) : tablaIfEntrega(entrega, abierta)));
   } else {
     partes.push(el("p", { clase: "texto-suave", texto: "La entrega no tiene expedientes." }));
   }
-  if (abierta && candidatos.length) {
-    const casillas = candidatos.map((x) => el("div", { clase: "campo campo-casilla" },
-      el("input", { type: "checkbox", id: "asignar-" + x.id, value: String(x.id) }),
-      el("label", { for: "asignar-" + x.id, texto: descripcionExpediente(x) })));
-    partes.push(el("form", { clase: "formulario", novalidate: true, onsubmit: (e) => {
-      e.preventDefault();
-      const ids = casillas.map((c) => c.querySelector("input")).filter((i) => i.checked).map((i) => Number(i.value));
-      if (!ids.length) { avisoEnDialogo(dialogo, "Marcá al menos un expediente."); return; }
-      cambiarEntrega(entrega, "/asignar", ids, ids.length === 1 ? "Expediente agregado." : ids.length + " expedientes agregados.");
-    } },
-    el("fieldset", {}, el("legend", { texto: "Expedientes firmados sin entrega (" + entrega.efector + ")" }), ...casillas),
-    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Agregar a la entrega" }))));
-  }
   if (abierta && entrega.expedientes.length) {
-    partes.push(el("form", { clase: "formulario filtros", novalidate: true, onsubmit: (e) => { e.preventDefault(); enviarEntrega(entrega); } },
+    partes.push(el("form", { clase: "panel formulario filtros", novalidate: true, onsubmit: (e) => { e.preventDefault(); enviarEntrega(entrega); } },
+      el("h3", { clase: "titulo-chico", texto: "Enviar la entrega" }),
       campoFormulario("entrega-fecha", "Fecha de envío", entrada(hoyIso(), { type: "date" })),
       el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Marcar como enviada" }))));
   }
-  partes.push(el("div", { clase: "acciones dialogo-acciones" },
-    el("button", { type: "button", texto: "Cerrar", onclick: () => dialogo.close() })));
-  vaciar(dialogo, ...partes);
-  dialogo.addEventListener("close", () => {
-    if (!dialogo.dataset.recargando) entEstado.abierta = null;
-    dialogo.remove();
-  });
-  document.body.append(dialogo);
-  dialogo.showModal();
+  vaciar(detalle, ...partes);
+}
+
+function formularioAgregar(entrega, candidatos) {
+  const casillas = candidatos.map((x) => el("div", { clase: "campo campo-casilla" },
+    el("input", { type: "checkbox", id: "asignar-" + x.id, value: String(x.id) }),
+    el("label", { for: "asignar-" + x.id, texto: descripcionExpediente(x) })));
+  return el("form", { clase: "panel formulario", novalidate: true, onsubmit: (e) => {
+    e.preventDefault();
+    const ids = casillas.map((c) => c.querySelector("input")).filter((i) => i.checked).map((i) => Number(i.value));
+    if (!ids.length) { limpiarAvisos(); mostrarAviso("Marcá al menos un expediente.", "error"); return; }
+    cambiarEntrega(entrega, "/asignar", ids, ids.length === 1 ? "Expediente agregado." : ids.length + " expedientes agregados.");
+  } },
+  el("details", {}, el("summary", { texto: "Agregar expedientes (" + candidatos.length + " con remito, factura y EX)" }),
+    el("fieldset", {}, el("legend", { clase: "solo-lectores", texto: "Expedientes para agregar" }), ...casillas),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Agregar a la entrega" }))));
+}
+
+/** Guarda un paso del trámite de un expediente de la entrega y vuelve a pintar la entrega. */
+async function tramitarDesdeEntrega(fila, accion, valores, mensaje) {
+  limpiarAvisos();
+  const id = entEstado.abierta;
+  estado.recargar = () => abrirEntrega(id);
+  const actualizado = await api("POST", "/api/expedientes/" + fila.id + "/tramite",
+    Object.assign({ version: fila.version, accion }, valores || {}));
+  if (!actualizado) return false;
+  entEstado.editando = null;
+  await abrirEntrega(id);
+  mostrarAviso(mensaje, "exito");
+  return true;
+}
+
+function celdaPase(fila) {
+  const dado = Boolean((fila.tramite || {}).pase);
+  const faltan = (fila.faltan_if || []).map((c) => NOMBRES_IF[c] || c);
+  const firmado = ["FIRMADO", "COMPLETO"].includes(fila.estado);
+  const control = el("input", { type: "checkbox", id: "pase-" + fila.id, checked: dado,
+    disabled: !dado && (faltan.length > 0 || !firmado) });
+  control.addEventListener("click", (e) => e.stopPropagation());
+  control.addEventListener("change", () => (control.checked
+    ? tramitarDesdeEntrega(fila, "pase", { gde: fila.gde.contabilizacion }, "Pase a Contable dado: expediente " + fila.id + " completo.")
+    : tramitarDesdeEntrega(fila, "sin_pase", {}, "Pase quitado del expediente " + fila.id + ".")));
+  const motivo = dado ? "Pase dado el " + fechaCorta(fila.tramite.pase)
+    : faltan.length ? "Faltan: " + faltan.join(", ") : (!firmado ? "Falta la autorización firmada" : "Listo para el pase");
+  return el("div", { clase: "celda-pase", title: motivo }, control,
+    el("label", { for: "pase-" + fila.id, clase: "solo-lectores", texto: "Pase a Contable del expediente " + fila.id + ": " + motivo }),
+    dado ? el("span", { clase: "texto-suave", texto: fechaCorta(fila.tramite.pase) }) : null);
+}
+
+function tablaIfEntrega(entrega, abierta) {
+  const columnas = ["N°", "Proveedor y factura", "EX", ...COLUMNAS_IF.map(([, t]) => t), "Estado", "Pase", ""];
+  const cuerpo = el("tbody", {});
+  for (const x of entrega.expedientes) {
+    const gde = x.gde || {};
+    const remitosIf = x.remitos.filter((n) => (gde.remitos || {})[n]).length;
+    const editando = entEstado.editando === x.id;
+    cuerpo.append(el("tr", { clase: editando ? "fila-editando" : null },
+      el("td", { clase: "numero" }, el("button", { type: "button", clase: "boton-celda", texto: String(x.id),
+        "aria-label": "Abrir el expediente " + x.id, onclick: () => abrirExpedienteDesdeOC(x.id, null) })),
+      el("td", { clase: "izq" }, x.razon_social || "", el("br"), el("span", { clase: "mono texto-suave", texto: "FC " + (x.factura || "—") })),
+      el("td", {}, ifCorto(gde.expediente)),
+      ...COLUMNAS_IF.map(([clave]) => el("td", {}, clave === "remitos"
+        ? el("span", { clase: remitosIf === x.remitos.length ? "" : "texto-suave", texto: remitosIf + " / " + x.remitos.length })
+        : ifCorto(gde[clave]))),
+      el("td", {}, el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[x.estado] || "neutra"), texto: ESTADOS_TEXTO[x.estado] || x.estado })),
+      el("td", {}, celdaPase(x)),
+      el("td", {}, botonLapiz("Cargar los IF del expediente " + x.id, () => { entEstado.editando = editando ? null : x.id; abrirEntrega(entEstado.abierta); }),
+        abierta ? el("button", { type: "button", clase: "secundario boton-quitar-fila", texto: "Quitar",
+          "aria-label": "Quitar el expediente " + x.id + " de la entrega",
+          onclick: () => cambiarEntrega(entrega, "/quitar", [x.id], "Expediente quitado.") }) : null)));
+    if (editando) cuerpo.append(el("tr", { clase: "fila-edicion" }, el("td", { colspan: String(columnas.length) }, editorIf(x))));
+  }
+  return el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-tramitacion" },
+    el("thead", {}, el("tr", {}, ...columnas.map((t) => el("th", { scope: "col", clase: t.startsWith("Proveedor") ? "izq" : null, texto: t })))),
+    cuerpo));
+}
+
+/** Los IF de un expediente (solo ese): se guardan juntos; con la autorización queda «Firmado». */
+function editorIf(x) {
+  const gde = x.gde || {};
+  const id = (clave) => "eif-" + x.id + "-" + clave;
+  const campos = [
+    entradaGde(id("factura"), "Factura", gde.factura),
+    entradaGde(id("sii"), "Carga en SII", gde.sii),
+    ...x.remitos.map((n, i) => entradaGde(id("remito-" + i), "Remito " + n, (gde.remitos || {})[n])),
+    x.remito_equipo ? entradaGde(id("remito_equipo"), "Remito del equipo " + x.remito_equipo, gde.remito_equipo) : null,
+    entradaGde(id("cv"), "Certificado de validación", gde.cv),
+    entradaGde(id("vale_hoja"), "Vale / hoja de entrada", gde.vale_hoja),
+    entradaGde(id("autorizacion"), "Autorización de pago", gde.autorizacion),
+    entradaGde(id("contabilizacion"), "Constancia de contabilización", gde.contabilizacion),
+  ];
+  return el("form", { clase: "formulario editor-fila", novalidate: true, onsubmit: (e) => {
+    e.preventDefault();
+    const valor = (clave) => (document.getElementById(id(clave)) || { value: "" }).value.trim();
+    const nuevo = {};
+    for (const clave of ["factura", "sii", "cv", "vale_hoja", "autorizacion", "contabilizacion"]) nuevo[clave] = valor(clave);
+    if (x.remito_equipo) nuevo.remito_equipo = valor("remito_equipo");
+    nuevo.remitos = {};
+    x.remitos.forEach((n, i) => { const v = valor("remito-" + i); if (v) nuevo.remitos[n] = v; });
+    tramitarDesdeEntrega(x, "gde_fila", { gde: nuevo }, "IF del expediente " + x.id + " guardados.");
+  } },
+  el("p", { clase: "texto-suave", texto: "Expediente " + x.id + " · " + (x.razon_social || "") + " · EX " + ((x.gde || {}).expediente || "—")
+    + ". Con el N° de la autorización firmada queda «Firmado»." }),
+  el("div", { clase: "grilla-if" }, ...campos),
+  el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar" }),
+    el("button", { type: "button", clase: "secundario", texto: "Cancelar", onclick: () => { entEstado.editando = null; abrirEntrega(entEstado.abierta); } })));
+}
+
+function pastillaFacturaSap(tramite) {
+  if (!tramite.factura_sap_doc) return el("span", { clase: "pastilla pastilla-neutra", texto: "Sin ingresar" });
+  return tramite.factura_sap_estado === "DEFINITIVA" ? el("span", { clase: "pastilla pastilla-exito", texto: "Definitiva" })
+    : el("span", { clase: "pastilla pastilla-aviso", texto: "Preliminar" });
+}
+
+function tablaFacturaSap(entrega) {
+  const columnas = ["N°", "Proveedor", "Factura", "Importe $", "N° de documento SAP", "Estado", ""];
+  const cuerpo = el("tbody", {});
+  for (const x of entrega.expedientes) {
+    const tramite = x.tramite || {};
+    const abierto = entEstado.abiertos.has(x.id);
+    const editando = entEstado.editando === x.id;
+    const alternar = () => { if (abierto) entEstado.abiertos.delete(x.id); else entEstado.abiertos.add(x.id); abrirEntrega(entEstado.abierta); };
+    cuerpo.append(el("tr", {},
+      el("td", { clase: "numero" }, el("button", { type: "button", clase: "boton-celda", texto: String(x.id),
+        "aria-label": "Abrir el expediente " + x.id, onclick: () => abrirExpedienteDesdeOC(x.id, null) })),
+      el("td", { clase: "izq", texto: x.razon_social || "" }),
+      el("td", { clase: "mono sin-corte", texto: x.factura || "—" }),
+      el("td", { clase: "numero sin-corte", texto: x.importe_centavos == null ? "—" : formatoPesos(x.importe_centavos) }),
+      el("td", { clase: "mono", texto: tramite.factura_sap_doc || "—" }),
+      el("td", {}, pastillaFacturaSap(tramite),
+        tramite.factura_sap_doc ? el("button", { type: "button", clase: "secundario boton-chico",
+          texto: tramite.factura_sap_estado === "DEFINITIVA" ? "Volver a preliminar" : "Pasar a definitiva",
+          onclick: () => tramitarDesdeEntrega(x, "factura_estado",
+            { estado: tramite.factura_sap_estado === "DEFINITIVA" ? "PRELIMINAR" : "DEFINITIVA" }, "Estado de la factura en SAP guardado.") }) : null),
+      el("td", { clase: "sin-corte" },
+        el("button", { type: "button", clase: "secundario", texto: abierto ? "Ocultar datos" : "Datos para SAP",
+          "aria-expanded": abierto ? "true" : "false", onclick: alternar }),
+        botonLapiz("Cargar el N° de documento SAP del expediente " + x.id, () => { entEstado.editando = editando ? null : x.id; abrirEntrega(entEstado.abierta); }))));
+    if (editando) {
+      const campo = entrada(tramite.factura_sap_doc || "", { id: "fsap-" + x.id, clase: "mono entrada-media", inputmode: "numeric", autocomplete: "off" });
+      cuerpo.append(el("tr", { clase: "fila-edicion" }, el("td", { colspan: String(columnas.length) },
+        el("form", { clase: "formulario editor-fila", novalidate: true, onsubmit: (e) => {
+          e.preventDefault();
+          tramitarDesdeEntrega(x, "factura_doc", { documento: campo.value.trim() }, "N° de documento guardado: factura preliminar.");
+        } },
+        campoFormulario("fsap-" + x.id, "N° de documento de la factura en SAP (expediente " + x.id + ")", campo,
+          "Al guardarlo, la factura queda «Preliminar»; después se pasa a «Definitiva»."),
+        el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar" }),
+          el("button", { type: "button", clase: "secundario", texto: "Cancelar", onclick: () => { entEstado.editando = null; abrirEntrega(entEstado.abierta); } }))))));
+    }
+    if (abierto) {
+      const f = x.factura_sap;
+      cuerpo.append(el("tr", { clase: "fila-edicion" }, el("td", { colspan: String(columnas.length) }, f
+        ? tablaCopiar([filaCopiar("Expediente", f.expediente), filaCopiar("Fecha de documento", f.fecha_documento),
+          filaCopiar("Fecha de contabilización", f.fecha_contabilizacion), filaCopiar("Importe", f.importe),
+          filaCopiar("Texto (" + f.largo_texto + " caracteres)", f.texto), filaCopiar("Asignación", f.asignacion),
+          filaCopiar("Txt. cabecera (al ingresar)", f.txt_cabecera_ingreso),
+          filaCopiar("Txt. cabecera (después, en lugar de los ceros)", f.txt_cabecera),
+          filaCopiar("Clase", f.clase), filaCopiar("Texto breve", f.texto_breve)])
+        : avisoFalta(x.factura_sap_error || "Faltan datos para la factura en SAP."))));
+    }
+  }
+  return el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-tramitacion" },
+    el("thead", {}, el("tr", {}, ...columnas.map((t) => el("th", { scope: "col", clase: t === "Proveedor" ? "izq" : null, texto: t })))),
+    cuerpo));
+}
+
+async function anularEntrega(entrega) {
+  limpiarAvisos();
+  const motivo = window.prompt("Motivo para anular la entrega " + entrega.efector + " " + entrega.numero
+    + " (no se borra: queda anulada):", "");
+  if (motivo === null) return;
+  if (!motivo.trim()) { mostrarAviso("Escribí el motivo de la anulación.", "error"); return; }
+  estado.recargar = cargarEntregas;
+  const anulada = await api("POST", "/api/entregas/" + entrega.id + "/anular", { version: entrega.version, motivo: motivo.trim() });
+  if (!anulada) return;
+  volverAEntregas();
+  mostrarAviso("Entrega " + anulada.efector + " " + anulada.numero + " anulada.", "exito");
 }
 
 async function cambiarEntrega(entrega, accion, ids, mensaje) {
   limpiarAvisos();
-  estado.recargar = cargarEntregas;
+  estado.recargar = () => abrirEntrega(entrega.id);
   const actualizada = await api("POST", "/api/entregas/" + entrega.id + accion, { version: entrega.version, expedientes: ids });
-  const ventana = document.getElementById("dialogo-entrega");
-  if (!actualizada) { if (ventana) avisoEnDialogo(ventana, ultimoError()); return; }
+  if (!actualizada) return;
+  await abrirEntrega(entrega.id);
   mostrarAviso(mensaje, "exito");
-  await cargarEntregas();
 }
 
 async function enviarEntrega(entrega) {
   limpiarAvisos();
   const fecha = document.getElementById("entrega-fecha").value;
-  if (!fecha) { avisoEnDialogo(document.getElementById("dialogo-entrega"), "Indicá la fecha de envío."); return; }
-  if (!window.confirm("¿Marcar la entrega como enviada? Sus " + entrega.expedientes.length + " expedientes pasan a ENVIADO.")) return;
-  estado.recargar = cargarEntregas;
+  if (!fecha) { mostrarAviso("Indicá la fecha de envío.", "error"); return; }
+  const sinPase = entrega.expedientes.filter((x) => !(x.tramite || {}).pase).length;
+  if (!window.confirm((sinPase ? "Ojo: " + sinPase + (sinPase === 1 ? " expediente no tiene" : " expedientes no tienen") + " el pase a Contable. " : "")
+    + "¿Marcar la entrega como enviada? Sus " + entrega.expedientes.length + " expedientes pasan a ENVIADO.")) return;
+  estado.recargar = () => abrirEntrega(entrega.id);
   const enviada = await api("POST", "/api/entregas/" + entrega.id + "/enviar", { version: entrega.version, fecha });
-  const ventana = document.getElementById("dialogo-entrega");
-  if (!enviada) { if (ventana) avisoEnDialogo(ventana, ultimoError()); return; }
-  mostrarAviso("Entrega " + enviada.efector + " " + enviada.numero + " enviada el " + enviada.fecha_envio + ".", "exito");
-  await cargarEntregas();
+  if (!enviada) return;
+  await abrirEntrega(entrega.id);
+  mostrarAviso("Entrega " + enviada.efector + " " + enviada.numero + " enviada el " + fechaCorta(enviada.fecha_envio) + ".", "exito");
 }
 
 // --- Pendientes (lista dentro de Expedientes) ----------------------------------

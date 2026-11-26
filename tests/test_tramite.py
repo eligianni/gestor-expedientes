@@ -37,6 +37,10 @@ class PruebaTramite(ayudas.CasoConServidor):
         self.assertEqual(self.exp["datos"]["gde"]["cv"], IF_CV)
         # La carga en GDE suma números sin borrar los otros.
         self._tramitar("gde", gde={"factura": "IF-2026-10000001-INSSJP-GESP#INSSJP"})
+        # El pase pide todos los IF: se cargan los que faltan.
+        remito = self.exp["datos"]["remitos"][0]["numero"]
+        self._tramitar("gde", gde={"sii": "IF-2026-10000002-INSSJP-GESP#INSSJP", "vale_hoja": "IF-2026-10000003-INSSJP-GESP#INSSJP",
+                                   "remitos": {remito: "IF-2026-10000004-INSSJP-GESP#INSSJP"}})
         self.assertEqual((self.exp["datos"]["gde"]["factura"], self.exp["datos"]["gde"]["expediente"]),
                          ("IF-2026-10000001-INSSJP-GESP#INSSJP", EX))
         self._tramitar("factura_sap", hecho=True)

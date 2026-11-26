@@ -50,7 +50,7 @@ class PruebaEntregas(ayudas.CasoConServidor):
         resp = self.servidor.post("/api/entregas/%d/asignar" % entrega["id"],
                                   {"version": entrega["version"], "expedientes": [exp["id"]]})
         self.assertEqual(resp.estado, 422)
-        self.assertEqual(resp.json()["error"]["mensaje"], "Solo se asignan expedientes FIRMADO del mismo efector.")
+        self.assertEqual(resp.json()["error"]["mensaje"], negocio.MENSAJE_ASIGNAR)
         # FIRMADO pero de otro efector
         con = db.conectar(self.entorno.ruta_base)
         try:
@@ -60,7 +60,7 @@ class PruebaEntregas(ayudas.CasoConServidor):
             con.close()
         casph = self._nueva("CASPH")
         otra = self.servidor.post("/api/entregas/%d/asignar" % casph["id"], {"version": casph["version"], "expedientes": [exp["id"]]})
-        self.assertEqual(otra.json()["error"]["mensaje"], "Solo se asignan expedientes FIRMADO del mismo efector.")
+        self.assertEqual(otra.json()["error"]["mensaje"], negocio.MENSAJE_ASIGNAR)
         # el rechazo no dejó nada a medias
         self.assertEqual(self._ok(self.servidor.get("/api/entregas/%d" % entrega["id"]))["expedientes"], [])
         sin_entrega = self._ok(self.servidor.get("/api/entregas?efector=HBI"))["firmados_sin_entrega"]
