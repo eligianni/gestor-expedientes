@@ -151,6 +151,9 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`negocio.dia_inicio_de` ignora el «día de inicio» de la OC); en servicios, según la división de la OC. Se sugiere al
   cargar remitos y se confirma o cambia en el paso 2 (`panelPeriodo`); un remito está en el período si su fecha o su fecha
   de firma caen adentro (`remitos_fuera_de_periodo`, también en `obtener_expediente`).
+  `obtener_expediente` marca `periodo_desactualizado` (fechas calculadas con una regla anterior) y el paso 2 las recalcula
+  solo; en mes calendario (`periodo_mes_calendario`) no se muestran las fechas. En el CV el mes va en mayúsculas
+  («SEPTIEMBRE 2026»). La ficha muestra el objeto como «Corresponde a la …».
 - En Word un rótulo puede estar partido en varios `w:r`: unir el texto del párrafo antes de buscar; registrar namespaces antes de serializar.
 - ElementTree: comparar `elem is not None`, nunca `if elem:` (DeprecationWarning en ≥ 3.12, error con `-W error::DeprecationWarning`).
 - La carga del PDF de la OC no tiene columna propia: queda como `evento` `IMPORTACION` de la OC con `despues.fuente = "pdf_oc"`

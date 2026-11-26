@@ -1216,7 +1216,7 @@ function resumenDatosOC(oc, pdf) {
   const fecha = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : "");
   const dato = (etiqueta, valor, clase) => el("div", { clase: "dato" + (clase ? " " + clase : "") },
     el("dt", { texto: etiqueta }), el("dd", { texto: valor === null || valor === undefined || valor === "" ? "—" : String(valor) }));
-  const datos = [dato("Objeto", oc.objeto ? oc.objeto_articulo + " " + oc.objeto : "", "dato-ancho")];
+  const datos = [dato("Objeto", oc.objeto ? "Corresponde " + oc.objeto_articulo + " " + oc.objeto : "", "dato-ancho")];
   if (oc.tipo !== "BIEN") {
     datos.push(dato("Vigencia", oc.vig_desde || oc.vig_hasta
       ? (oc.vig_desde ? fecha(oc.vig_desde) : "") + (oc.vig_hasta ? " al " + fecha(oc.vig_hasta) : " (sin fin)") : ""));
@@ -2275,13 +2275,20 @@ function fechaCorta(iso) {
  * para confirmarlo o cambiarlo, y aviso de los remitos que no caen en él (ni por fecha ni por firma). */
 function panelPeriodo(exp) {
   const partes = [];
+  if (exp.periodo_desactualizado && !panelPeriodo.corrigiendo) {
+    // Las fechas quedaron calculadas con una regla anterior: se vuelven a calcular con el mismo período.
+    panelPeriodo.corrigiendo = true;
+    guardarExpediente({ periodo: exp.periodo }, "Se corrigieron las fechas del período " + exp.periodo + ".")
+      .then((ok) => { panelPeriodo.corrigiendo = false; if (ok) pintarPaso2(); });
+  }
   if (!exp.periodo) {
     partes.push(el("p", { texto: "Todavía no hay período: se sugiere con la fecha de los remitos." }));
   } else {
     const [anio, mes] = exp.periodo.split("-").map(Number);
     partes.push(el("p", {},
       el("strong", { texto: "Período: " + MESES_NOMBRE[mes - 1] + " " + anio }),
-      " (" + fechaCorta(exp.periodo_desde) + " al " + fechaCorta(exp.periodo_hasta) + ") ",
+      // Mes calendario (bienes, o servicios que van por mes): no hace falta mostrar las fechas.
+      exp.periodo_mes_calendario ? " " : " (" + fechaCorta(exp.periodo_desde) + " al " + fechaCorta(exp.periodo_hasta) + ") ",
       el("span", { clase: "pastilla pastilla-" + (exp.periodo_manual ? "exito" : "aviso"),
         texto: exp.periodo_manual ? "Confirmado" : "Sugerido por los remitos" })));
   }

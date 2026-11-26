@@ -35,7 +35,7 @@ class PruebaPeriodoPorRemito(ayudas.CasoConServidor):
         exp = self._con_remito("4500595494", "2026-09-10")
         self.assertEqual((exp["periodo"], exp["periodo_desde"], exp["periodo_hasta"]), ("2026-09", "2026-09-01", "2026-09-30"))
         cv = negocio.datos_cv(self.con, exp["id"])["datos"]
-        self.assertEqual((cv["vigencia"], cv["periodo_texto"], cv["entrega"]), ("-", "septiembre 2026", "Total"))
+        self.assertEqual((cv["vigencia"], cv["periodo_texto"], cv["entrega"]), ("-", "SEPTIEMBRE 2026", "Total"))
         self.assertEqual((cv["renglones"][0]["cantidad_entregada"], cv["renglones"][0]["fecha_entrega"]), ("1400", "10/09/2026"))
 
     def test_bien_entrega_parcial(self):

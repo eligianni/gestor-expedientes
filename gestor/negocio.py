@@ -1008,6 +1008,14 @@ def obtener_expediente(con, id_expediente):
     fila["razon_social"] = proveedor["razon_social"] if proveedor else ""
     fila["destinos"] = list(_transiciones(fila["tipo"]).get(fila["estado"], []))
     fila["remitos_fuera_de_periodo"] = remitos_fuera_de_periodo(_periodo_del_expediente(fila), fila["datos"].get("remitos") or [])
+    # Fechas del período calculadas con una regla anterior (p. ej. un bien con «día de inicio» de la OC): la pantalla las corrige.
+    fila["periodo_desactualizado"] = False
+    fila["periodo_mes_calendario"] = False
+    if fila.get("periodo") and fila.get("oc") and fila["tipo"] != "CENTRALIZADA":
+        limites = limites_de_periodo(fila["periodo"], _dia_inicio(con, fila))
+        fila["periodo_desactualizado"] = (util.iso(limites.desde), util.iso(limites.hasta)) != (
+            fila.get("periodo_desde"), fila.get("periodo_hasta"))
+        fila["periodo_mes_calendario"] = _dia_inicio(con, fila) == 1
     return fila
 
 
@@ -1721,7 +1729,7 @@ def _texto_periodo_cv(ctx):
     """"agosto 2026" (mes calendario) o "17/10/2026 al 16/11/2026" (período específico)."""
     if int(ctx.get("dia_inicio") or 1) == 1:
         anio, mes = (int(p) for p in ctx["periodo"].split("-"))
-        return "%s %04d" % (util.MESES[mes - 1], anio)
+        return ("%s %04d" % (util.MESES[mes - 1], anio)).upper()  # en el CV el mes va en mayúsculas: «SEPTIEMBRE 2026»
     return "%s al %s" % (util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_desde"])),
                          util.ddmmaaaa(util.fecha_desde_texto(ctx["periodo_hasta"])))
 

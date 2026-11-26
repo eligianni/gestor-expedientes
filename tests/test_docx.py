@@ -75,7 +75,7 @@ class PruebaDocx(ayudas.CasoConServidor):
         for esperado in ("GRUPO EFIA S.R.L.", "4500555861", "77170", "195-2025", "Servicios", "Mensual",
                          "01/10/2025 a 30/09/2026",
                          "Objeto de Contratación: Servicio de control integral de plagas",
-                         "Se valida con remito 00001-00029461 correspondiente al período agosto 2026."):
+                         "Se valida con remito 00001-00029461 correspondiente al período AGOSTO 2026."):
             self.assertIn(esperado, texto)
         self.assertNotIn("_____", texto)
         self.assertEqual(_filas_de_renglones(resp.cuerpo),
@@ -144,7 +144,7 @@ class PruebaDocx(ayudas.CasoConServidor):
         texto = _texto(resp.cuerpo)
         self.assertIn("31 de Marzo del 2027", texto)
         self.assertNotIn("del 2026", texto)
-        self.assertIn("correspondiente al período marzo 2027.", texto)
+        self.assertIn("correspondiente al período MARZO 2027.", texto)
 
     def test_autorizacion_docx_justificada(self):
         exp = self._efia()
