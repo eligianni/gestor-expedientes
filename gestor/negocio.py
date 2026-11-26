@@ -2418,10 +2418,18 @@ def _leer_entrega(con, entrega_id):
 
 def _expedientes_de_entrega(con, entrega_id):
     filas = con.execute(
-        "SELECT e.id, e.tipo, e.oc, e.sap, p.razon_social, e.periodo, e.factura, e.estado, e.version "
+        "SELECT e.id, e.tipo, e.oc, e.sap, p.razon_social, e.periodo, e.factura, e.estado, e.version, e.datos "
         "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.entrega_id = ? ORDER BY e.id", (entrega_id,),
     )
-    return [dict(f) for f in filas]
+    resultado = []
+    for fila in filas:
+        fila = dict(fila)
+        factura = _datos_de(fila).get("factura") or {}
+        centavos = factura.get("centavos") if isinstance(factura, dict) else None
+        fila.pop("datos", None)
+        fila["importe_centavos"] = centavos if isinstance(centavos, int) and not isinstance(centavos, bool) else None
+        resultado.append(fila)
+    return resultado
 
 
 def obtener_entrega(con, entrega_id):
