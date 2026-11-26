@@ -2126,7 +2126,34 @@ def guardar_gde(con, id_expediente, version, gde):
 # --- Trámite del expediente común (orden real) ------------------------------------
 
 ACCIONES_TRAMITE = ("cv_en_firma", "cv_firmado", "ingreso_sap", "caratular", "gde", "factura_sap",
-                    "autorizacion_en_firma", "autorizacion_firmada", "pase")
+                    "autorizacion_en_firma", "autorizacion_firmada", "pase",
+                    # desde la tramitación de la entrega
+                    "gde_fila", "sin_pase", "factura_doc", "factura_estado")
+# Lo que se tramita desde la entrega vale también para los correctivos (que después de facturar siguen el flujo común).
+_ACCIONES_ENTREGA = ("gde_fila", "pase", "sin_pase", "factura_doc", "factura_estado")
+ESTADOS_FACTURA_SAP = ("PRELIMINAR", "DEFINITIVA")
+# IF que tiene que tener el expediente para dar el pase a Contable (en este orden se muestran los que faltan).
+IF_DEL_PASE = (("factura", "factura"), ("sii", "carga en SII"), ("remitos", "remitos"), ("remito_equipo", "remito del equipo"),
+               ("cv", "certificado de validación"), ("vale_hoja", "vale / hoja de entrada"),
+               ("autorizacion", "autorización de pago"), ("contabilizacion", "constancia de contabilización"))
+
+
+def faltan_if(datos):
+    """Claves de `IF_DEL_PASE` que todavía no tienen su N° GDE (los remitos, uno por remito; el del equipo, si hay)."""
+    gde = datos.get("gde") or {}
+    remitos = datos.get("remitos") or []
+    faltan = []
+    for clave, _ in IF_DEL_PASE:
+        if clave == "remitos":
+            por_remito = gde.get("remitos") or {}
+            if any(not por_remito.get(r["numero"]) for r in remitos if not r.get("es_equipo_comodato")):
+                faltan.append(clave)
+        elif clave == "remito_equipo":
+            if any(r.get("es_equipo_comodato") for r in remitos) and not gde.get(clave):
+                faltan.append(clave)
+        elif not gde.get(clave):
+            faltan.append(clave)
+    return faltan
 _MARCAS_TRAMITE = {"cv_en_firma": "cv_en_firma", "ingreso_sap": "ingreso_sap", "factura_sap": "factura_sap"}
 _GDE_DE_ACCION = {"cv_firmado": "cv", "autorizacion_firmada": "autorizacion", "pase": "contabilizacion"}
 _NOMBRE_GDE = {"cv": "del certificado de validación firmado", "autorizacion": "de la autorización de pago firmada",
@@ -2177,11 +2204,18 @@ def tramitar(con, id_expediente, version, accion, valores=None):
         numero = _gde_valido(valores.get("expediente"))
         if not numero or not numero.startswith("EX-"):
             raise ErrorValidacion("Cargá el N° de expediente (EX-…).")
-    parcial = _gde_parcial(valores.get("gde")) if accion == "gde" else None
+    parcial = _gde_parcial(valores.get("gde")) if accion in ("gde", "gde_fila") else None
+    documento = None
+    if accion == "factura_doc":
+        documento = str(valores.get("documento") or "").strip()
+        if not re.fullmatch(r"[0-9A-Za-z-]{1,20}", documento):
+            raise ErrorValidacion("Cargá el N° de documento de la factura en SAP (solo números).")
+    if accion == "factura_estado" and valores.get("estado") not in ESTADOS_FACTURA_SAP:
+        raise ErrorValidacion("El estado de la factura en SAP es PRELIMINAR o DEFINITIVA.")
     with db.transaccion(con):
         actual = _leer_expediente(con, id_expediente)
         _no_anulado(actual)
-        if actual["tipo"] != "COMUN":
+        if actual["tipo"] != "COMUN" and not (actual["tipo"] == "CORRECTIVO" and accion in _ACCIONES_ENTREGA):
             raise ErrorNegocio("Este trámite es el de los expedientes comunes.")
         contenido = _datos_de(actual)
         tramite = contenido.setdefault("tramite", {})
@@ -2199,7 +2233,7 @@ def tramitar(con, id_expediente, version, accion, valores=None):
                     raise ErrorNegocio(mensaje.replace("No se puede pasar a CONTROLADO", "Todavía no se puede caratular"))
                 estado = "CONTROLADO"
             gde["expediente"] = numero
-        elif accion == "gde":
+        elif accion in ("gde", "gde_fila"):
             if "remitos" in parcial:
                 parcial["remitos"] = dict(gde.get("remitos") or {}, **parcial["remitos"])
             if "oc_pdf" in parcial and not parcial["oc_pdf"] and actual.get("oc"):
@@ -2207,6 +2241,22 @@ def tramitar(con, id_expediente, version, accion, valores=None):
                 if oc is not None and oc.get("gde_pdf_oc"):
                     parcial["oc_pdf"] = util.normalizar_gde(oc["gde_pdf_oc"])  # vacío = el PDF de la OC
             gde.update(parcial)
+            if accion == "gde_fila" and gde.get("autorizacion") and estado in ("CONTROLADO", "EN_FIRMA"):
+                estado = "FIRMADO"  # con el N° de la autorización firmada
+        elif accion == "sin_pase":
+            if estado != "COMPLETO":
+                raise ErrorNegocio("El expediente no tiene el pase dado.")
+            tramite["pase"] = None
+            estado = "FIRMADO"
+        elif accion == "factura_doc":
+            if tramite.get("factura_sap_doc") != documento:
+                tramite["factura_sap_estado"] = "PRELIMINAR"
+            tramite["factura_sap_doc"] = documento
+            tramite["factura_sap"] = tramite.get("factura_sap") or hoy
+        elif accion == "factura_estado":
+            if not tramite.get("factura_sap_doc"):
+                raise ErrorNegocio("Primero cargá el N° de documento de la factura en SAP.")
+            tramite["factura_sap_estado"] = valores["estado"]
         elif accion == "autorizacion_en_firma":
             if not gde.get("expediente"):
                 raise ErrorNegocio("Primero cargá el N° de expediente en la caratulación.")
@@ -2223,6 +2273,10 @@ def tramitar(con, id_expediente, version, accion, valores=None):
             if estado not in ("FIRMADO", "COMPLETO"):
                 raise ErrorNegocio("El pase se da con la autorización de pago firmada (estado actual: %s)." % estado)
             gde["contabilizacion"] = numero
+            faltan = faltan_if(contenido)
+            if faltan:
+                nombres = dict(IF_DEL_PASE)
+                raise ErrorNegocio("Para dar el pase faltan los N° GDE de: %s." % ", ".join(nombres[c] for c in faltan))
             tramite["pase"] = tramite.get("pase") or hoy
             estado = "COMPLETO"
         entrada = _entrada_historial(accion.upper(), estado)
@@ -2608,7 +2662,25 @@ def alertas(con, hoy=None, integridad_ok=True):
 
 # Firmado (autorización firmada) o completo (con el pase): la entrega se envía cuando todos tienen el pase.
 ESTADOS_PARA_ENTREGA = ("FIRMADO", "COMPLETO")
-MENSAJE_ASIGNAR = "Solo se asignan expedientes FIRMADO del mismo efector."
+MENSAJE_ASIGNAR = ("Solo se agregan expedientes del mismo efector con remito, factura y N° de expediente (EX) "
+                   "caratulado (o ya firmados).")
+_ESTADOS_FUERA_DE_ENTREGA = ("ANULADO", "PENDIENTE", "ENVIADO", "CONTABILIZADO", "CERRADO", "FINALIZADO")
+PREFIJO_ENTREGA_ANULADA = "ANULADA: "
+
+
+def listo_para_entrega(exp):
+    """Se puede agregar a una entrega: firmado, o con remito, factura y EX caratulado (común o correctivo)."""
+    if exp["estado"] in ESTADOS_PARA_ENTREGA:
+        return True
+    if exp["estado"] in _ESTADOS_FUERA_DE_ENTREGA or exp["tipo"] not in ("COMUN", "CORRECTIVO"):
+        return False
+    datos = _datos_de(exp)
+    return bool(datos.get("remitos")) and bool((datos.get("factura") or {}).get("numero")) \
+        and bool((datos.get("gde") or {}).get("expediente"))
+
+
+def _entrega_anulada(entrega):
+    return (entrega.get("observaciones") or "").startswith(PREFIJO_ENTREGA_ANULADA)
 
 
 def _leer_entrega(con, entrega_id):
@@ -2641,6 +2713,46 @@ def _expedientes_de_entrega(con, entrega_id):
 def obtener_entrega(con, entrega_id):
     entrega = _leer_entrega(con, entrega_id)
     entrega["expedientes"] = _expedientes_de_entrega(con, entrega["id"])
+    entrega["anulada"] = _entrega_anulada(entrega)
+    return entrega
+
+
+def anular_entrega(con, entrega_id, version, motivo):
+    """Una entrega abierta y vacía no se borra: queda anulada con su motivo (en `observaciones`) y deja de usarse."""
+    version = _version(version)
+    motivo = motivo.strip() if isinstance(motivo, str) else ""
+    if not motivo:
+        raise ErrorValidacion("Escribí el motivo de la anulación.")
+    with db.transaccion(con):
+        entrega = _leer_entrega(con, entrega_id)
+        if entrega["estado"] != "ABIERTA" or _entrega_anulada(entrega):
+            raise ErrorNegocio("Solo se anula una entrega abierta.")
+        if _expedientes_de_entrega(con, entrega["id"]):
+            raise ErrorNegocio("Para anular la entrega, primero quitale los expedientes.")
+        db.actualizar_con_version(con, "entrega", {"id": entrega["id"]}, version,
+                                  {"observaciones": PREFIJO_ENTREGA_ANULADA + motivo})
+    return obtener_entrega(con, entrega_id)
+
+
+def tramitacion_entrega(con, entrega_id):
+    """La entrega con cada expediente listo para tramitar: IF cargados y faltantes, y los datos de la factura en SAP."""
+    entrega = obtener_entrega(con, entrega_id)
+    parametros = db.leer_parametros(con)
+    limite = int(parametros.get("limite_texto_sap", 50))
+    filas = []
+    for resumen in entrega["expedientes"]:
+        exp = obtener_expediente(con, resumen["id"])
+        datos = exp["datos"]
+        fila = dict(resumen, gde=datos.get("gde") or {}, tramite=datos.get("tramite") or {},
+                    remitos=[r["numero"] for r in datos.get("remitos") or [] if not r.get("es_equipo_comodato")],
+                    remito_equipo=next((r["numero"] for r in datos.get("remitos") or [] if r.get("es_equipo_comodato")), None),
+                    faltan_if=faltan_if(datos), version=exp["version"])
+        try:
+            fila["factura_sap"] = textos.factura_sap(contexto_textos(con, exp["id"]), limite)
+        except textos.TextoIncompleto as error:
+            fila["factura_sap_error"] = str(error)
+        filas.append(fila)
+    entrega["expedientes"] = filas
     return entrega
 
 
@@ -2666,19 +2778,24 @@ def listar_entregas(con, efector=None):
         sql += " WHERE en.efector = ?"
         parametros.append(efector)
     sql += " ORDER BY en.efector, en.numero DESC"
-    return [dict(f) for f in con.execute(sql, parametros)]
+    return [dict(f, anulada=_entrega_anulada(dict(f))) for f in con.execute(sql, parametros)]
 
 
 def firmados_sin_entrega(con, efector=None):
-    """Expedientes FIRMADO que todavía no están en ninguna entrega (candidatos a asignar)."""
-    sql = ("SELECT e.id, e.tipo, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.factura, e.version "
-           "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.estado IN ('FIRMADO', 'COMPLETO') "
-           "AND e.entrega_id IS NULL")
+    """Expedientes sin entrega que ya se pueden agregar a una (`listo_para_entrega`): candidatos a asignar."""
+    sql = ("SELECT e.id, e.tipo, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.factura, e.estado, e.version, e.datos "
+           "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.entrega_id IS NULL AND e.tipo <> 'CENTRALIZADA'")
     parametros = []
     if efector in EFECTORES:
         sql += " AND e.efector = ?"
         parametros.append(efector)
-    return [dict(f) for f in con.execute(sql + " ORDER BY e.id", parametros)]
+    resultado = []
+    for fila in con.execute(sql + " ORDER BY e.id", parametros):
+        fila = dict(fila)
+        if listo_para_entrega(fila):
+            fila.pop("datos")
+            resultado.append(fila)
+    return resultado
 
 
 def _ids_expedientes(ids):
@@ -2707,10 +2824,12 @@ def asignar_a_entrega(con, entrega_id, version, ids):
         entrega = _leer_entrega(con, entrega_id)
         if entrega["estado"] != "ABIERTA":
             raise ErrorNegocio("La entrega %d ya se envió: no se le pueden agregar expedientes." % entrega["numero"])
+        if _entrega_anulada(entrega):
+            raise ErrorNegocio("La entrega %d está anulada." % entrega["numero"])
         db.actualizar_con_version(con, "entrega", {"id": entrega["id"]}, version, {"estado": "ABIERTA"})
         for id_expediente in ids:
             actual = _leer_expediente(con, id_expediente)
-            if actual["estado"] not in ESTADOS_PARA_ENTREGA or actual["efector"] != entrega["efector"]:
+            if not listo_para_entrega(actual) or actual["efector"] != entrega["efector"]:
                 raise ErrorNegocio(MENSAJE_ASIGNAR)
             if actual["entrega_id"] not in (None, entrega["id"]):
                 raise ErrorNegocio("El expediente %d ya está en otra entrega." % actual["id"])

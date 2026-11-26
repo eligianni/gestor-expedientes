@@ -585,6 +585,15 @@ def entrega_enviar(h, m, cuerpo):
     return 200, _ok(negocio.enviar_entrega(h.conexion(), m.group("id"), datos.get("version"), datos.get("fecha")))
 
 
+def entrega_anular(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    return 200, _ok(negocio.anular_entrega(h.conexion(), m.group("id"), datos.get("version"), datos.get("motivo")))
+
+
+def entrega_tramitacion(h, m, cuerpo):
+    return 200, _ok(negocio.tramitacion_entrega(h.conexion(), m.group("id")))
+
+
 def entrega_numeracion_csv(h, m, cuerpo):
     con = h.conexion()
     entrega = negocio.obtener_entrega(con, m.group("id"))
@@ -817,6 +826,8 @@ RUTAS = [
     ("POST", re.compile(r"/api/entregas/(?P<id>\d+)/asignar"), entrega_asignar),
     ("POST", re.compile(r"/api/entregas/(?P<id>\d+)/quitar"), entrega_quitar),
     ("POST", re.compile(r"/api/entregas/(?P<id>\d+)/enviar"), entrega_enviar),
+    ("POST", re.compile(r"/api/entregas/(?P<id>\d+)/anular"), entrega_anular),
+    ("GET", re.compile(r"/api/entregas/(?P<id>\d+)/tramitacion"), entrega_tramitacion),
     ("GET", re.compile(r"/api/entregas/(?P<id>\d+)/numeracion\.csv"), entrega_numeracion_csv),
     ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/autorizacion\.docx"), expediente_autorizacion_docx),
 ]
