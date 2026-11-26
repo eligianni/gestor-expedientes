@@ -837,7 +837,7 @@ function pintarFichaOC(ficha) {
 }
 
 // Estados en los que el expediente ya está terminado: se puede ver, no tramitar.
-const ESTADOS_TERMINADOS = new Set(["ENVIADO", "CONTABILIZADO", "CERRADO", "FINALIZADO", "ANULADO"]);
+const ESTADOS_TERMINADOS = new Set(["COMPLETO", "ENVIADO", "CONTABILIZADO", "CERRADO", "FINALIZADO", "ANULADO"]);
 
 /** «Expedientes de esta OC»: cada fila abre el expediente («Tramitar» si sigue en curso, «Visualizar» si terminó). */
 function tablaExpedientesOC(expedientes, origenConsumo, central) {
@@ -847,7 +847,9 @@ function tablaExpedientesOC(expedientes, origenConsumo, central) {
     const terminado = ESTADOS_TERMINADOS.has(x.estado);
     // En curso, se abre en el primer paso que le falta: remitos, factura o controles.
     const sinConsumo = !x.consumo_remitos && !Object.keys(x.consumo_manual || {}).length;
-    const paso = terminado ? 1 : (sinConsumo ? 2 : (central ? (x.numero_cv ? 4 : 3) : (!x.factura ? 3 : 4)));
+    // El expediente común se abre en el paso que le corresponde según su estado (pasoSegunEstado).
+    const paso = !central && x.tipo === "COMUN" ? null
+      : terminado ? 1 : (sinConsumo ? 2 : (central ? (x.numero_cv ? 4 : 3) : (!x.factura ? 3 : 4)));
     const abrir = () => abrirExpedienteDesdeOC(x.id, paso);
     const boton = el("button", { type: "button", clase: terminado ? "secundario" : null, texto: terminado ? "Visualizar" : "Tramitar",
       "aria-label": (terminado ? "Visualizar" : "Tramitar") + " el expediente " + x.id,
@@ -1827,14 +1829,14 @@ function avisoEnDialogo(dialogo, texto) {
 // --- Expedientes: lista ------------------------------------------------------
 
 const ESTADOS_TEXTO = {
-  BORRADOR: "Borrador", CONTROLADO: "Controlado", EN_FIRMA: "En firma", FIRMADO: "Firmado", ENVIADO: "Enviado",
+  BORRADOR: "Borrador", CONTROLADO: "Controlado", EN_FIRMA: "En firma", FIRMADO: "Firmado", COMPLETO: "Completo", ENVIADO: "Enviado",
   CONTABILIZADO: "Contabilizado", CERRADO: "Cerrado", PENDIENTE: "Pendiente", ANULADO: "Anulado",
   RECIBIDO_MANTENIMIENTO: "Recibido de Mantenimiento", INFORME_ECONOMICO: "Informe económico", DEVUELTO: "Devuelto",
   PARA_FACTURAR: "Para facturar", ARMADO: "Armado", EN_DTO_ECONOMICO_CONTABLE: "En Dto. Económico Contable",
   FINALIZADO: "Finalizado",
 };
 const TONO_ESTADO = {
-  BORRADOR: "", CONTROLADO: "info", EN_FIRMA: "violeta", FIRMADO: "violeta", ENVIADO: "info", CONTABILIZADO: "exito",
+  BORRADOR: "", CONTROLADO: "info", EN_FIRMA: "violeta", FIRMADO: "violeta", COMPLETO: "exito", ENVIADO: "info", CONTABILIZADO: "exito",
   CERRADO: "exito", FINALIZADO: "exito", PENDIENTE: "aviso", ANULADO: "error", DEVUELTO: "aviso",
   RECIBIDO_MANTENIMIENTO: "info", INFORME_ECONOMICO: "info", PARA_FACTURAR: "info", ARMADO: "info",
   EN_DTO_ECONOMICO_CONTABLE: "violeta",
@@ -1888,7 +1890,7 @@ async function listarExpedientes() {
   const encabezados = ["N°", "Tipo", "OC", "Proveedor", "Período", "Factura", "Estado"];
   const filas = expedientes.map((x) => el("tr", {},
     el("td", {}, el("button", { type: "button", clase: "secundario boton-celda", texto: String(x.id),
-      "aria-label": "Abrir el expediente " + x.id, onclick: () => abrirExpediente(x.id, 1) })),
+      "aria-label": "Abrir el expediente " + x.id, onclick: () => abrirExpediente(x.id, null) })),
     el("td", { texto: (TIPOS_EXPEDIENTE.find(([v]) => v === x.tipo) || [null, x.tipo])[1] }),
     el("td", { texto: x.oc || "—" }),
     el("td", { clase: "izq", texto: (x.razon_social || "") + (x.sap ? " (SAP " + x.sap + ")" : "") }),
@@ -1975,23 +1977,75 @@ function esCentralizada() {
   return Boolean(expEstado.exp && expEstado.exp.tipo === "CENTRALIZADA");
 }
 
+// Pasos del asistente: [contenedor, título]. El expediente común sigue el orden real del trámite; los demás tipos,
+// el asistente clásico. Los contenedores 8 a 14 son los pasos nuevos del trámite (los 4 a 7 quedan para los clásicos).
+const PASOS_TRAMITE = [
+  [1, "1. OC y período"], [2, "2. Remitos"], [8, "3. Certificado de validación"], [9, "4. Ingreso en SAP"],
+  [3, "5. Factura y SII"], [10, "6. Caratulación"], [11, "7. Carga en GDE"], [12, "8. Factura en SAP"],
+  [13, "9. Autorización de pago"], [14, "10. Cierre"],
+];
+const PASOS_CLASICOS = [[1, "1. OC y período"], [2, "2. Remitos"], [3, "3. Factura y SII"], [4, "4. Controles"],
+  [5, "5. Textos"], [6, "6. Documentos"], [7, "7. Estado"]];
+// Pasos del asistente clásico que en el trámite viven en otro lado (controles → caratulación, GDE, estado → cierre).
+const PASO_CLASICO_EN_TRAMITE = { 4: 10, 5: 10, 6: 11, 7: 14 };
+
+function esTramite() {
+  return Boolean(expEstado.exp && expEstado.exp.tipo === "COMUN");
+}
+
+function pasosDelAsistente() {
+  if (esCentralizada()) return Object.entries(PASOS_CENTRALIZADA).map(([n, t]) => [Number(n), t]);
+  return esTramite() ? PASOS_TRAMITE : PASOS_CLASICOS;
+}
+
+function tituloPaso(n, porDefecto) {
+  const paso = pasosDelAsistente().find(([m]) => m === n);
+  return paso ? paso[1] : porDefecto;
+}
+
+/** Botón para seguir al paso que viene en el orden del asistente. */
+function botonSiguiente(clase) {
+  const pasos = pasosDelAsistente();
+  const i = pasos.findIndex(([n]) => n === expEstado.paso);
+  const siguiente = i >= 0 ? pasos[i + 1] : null;
+  if (!siguiente) return null;
+  return el("button", { type: "button", clase: clase === undefined ? "secundario" : clase, texto: "Seguir: " + siguiente[1],
+    onclick: () => { limpiarAvisos(); mostrarPaso(siguiente[0]); } });
+}
+
+/** Paso en el que conviene abrir un expediente común según lo que ya tiene hecho. */
+function pasoSegunEstado(exp) {
+  if (!exp || exp.tipo !== "COMUN") return 1;
+  const tramite = exp.datos.tramite || {};
+  const gde = exp.datos.gde || {};
+  if (exp.estado === "BORRADOR") {
+    if (!(exp.datos.remitos || []).length) return 2;
+    if (!gde.cv) return 8;
+    if (!tramite.ingreso_sap) return 9;
+    if (!(exp.datos.factura || {}).numero) return 3;
+    return 10;
+  }
+  if (exp.estado === "CONTROLADO") return tramite.factura_sap ? 13 : (gde.factura ? 12 : 11);
+  if (exp.estado === "EN_FIRMA") return 13;
+  return 14;
+}
+
 function mostrarPaso(paso) {
   if (!expEstado.exp && paso !== 1) paso = 1;
-  const central = esCentralizada();
-  if (central && paso > 4) paso = 1;
+  const pasos = pasosDelAsistente();
+  if (esTramite() && PASO_CLASICO_EN_TRAMITE[paso]) paso = PASO_CLASICO_EN_TRAMITE[paso];
+  if (!pasos.some(([n]) => n === paso)) paso = 1;
   expEstado.paso = paso;
-  for (let n = 1; n <= 7; n++) document.getElementById("asistente-paso-" + n).hidden = n !== paso;
-  for (const boton of document.querySelectorAll(".pasos button[data-paso]")) {
-    const n = Number(boton.dataset.paso);
-    if (!boton.dataset.original) boton.dataset.original = boton.textContent;
-    boton.textContent = central ? (PASOS_CENTRALIZADA[n] || boton.dataset.original) : boton.dataset.original;
-    boton.parentElement.hidden = central && n > 4;
-    if (n === paso) boton.setAttribute("aria-current", "step"); else boton.removeAttribute("aria-current");
-    boton.disabled = !expEstado.exp && n !== 1;
-  }
-  const pintores = central
+  for (let n = 1; n <= 14; n++) document.getElementById("asistente-paso-" + n).hidden = n !== paso;
+  vaciar(document.getElementById("asistente-pasos"), ...pasos.map(([n, texto]) => el("li", {},
+    el("button", { type: "button", texto, disabled: !expEstado.exp && n !== 1,
+      "aria-current": n === paso ? "step" : null,
+      onclick: () => { limpiarAvisos(); mostrarPaso(n); } }))));
+  const pintores = esCentralizada()
     ? { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPasoCvFirmado, 4: pintarPasoNotaCentral }
-    : { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4, 5: pintarPaso5, 6: pintarPaso6, 7: pintarPaso7 };
+    : { 1: pintarPaso1, 2: pintarPaso2, 3: pintarPaso3, 4: pintarPaso4, 5: pintarPaso5, 6: pintarPaso6, 7: pintarPaso7,
+      8: pintarPasoCertificado, 9: pintarPasoIngresoSap, 10: pintarPasoCaratulacion, 11: pintarPasoGde,
+      12: pintarPasoFacturaSap, 13: pintarPasoAutorizacion, 14: pintarPasoCierre };
   if (pintores[paso]) pintores[paso]();
 }
 
@@ -2083,7 +2137,7 @@ async function abrirExpediente(id, paso) {
   expEstado.exp = exp;
   expEstado.ficha = exp.oc ? await api("GET", "/api/oc/" + encodeURIComponent(exp.oc)) : null;
   pintarEncabezadoAsistente();
-  mostrarPaso(paso || 1);
+  mostrarPaso(paso || pasoSegunEstado(exp));
 }
 
 /** Guarda cambios del expediente con su versión; devuelve el expediente actualizado o null. */
@@ -2121,7 +2175,7 @@ async function pintarPaso1() {
     vaciar(contenedor, formulario);
     return;
   }
-  const partes = [el("h3", { texto: "1. OC y período" })];
+  const partes = [el("h3", { texto: tituloPaso(1, "1. OC y período") })];
   const oc = expEstado.ficha ? expEstado.ficha.oc : null;
   partes.push(el("p", { texto: "Tipo " + exp.tipo + (oc ? " · OC " + oc.numero + " · " + (oc.objeto || "sin objeto cargado")
     + " · día de inicio del período " + oc.dia_inicio_periodo : "") }));
@@ -2149,7 +2203,7 @@ async function pintarPaso1() {
       "Al corregirlo a mano queda fijo: pegar más remitos ya no lo cambia."),
     el("div", { clase: "acciones" },
       el("button", { type: "submit", texto: "Guardar período" }),
-      el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 2", onclick: () => mostrarPaso(2) }))));
+      botonSiguiente())));
   vaciar(contenedor, ...partes);
 }
 
@@ -2191,7 +2245,7 @@ function pintarPaso2() {
     onclick: () => { filasNuevas.append(filaRemitoNuevo()); actualizarFilasRemito(); filasNuevas.lastElementChild.querySelector("input").focus(); } });
   filasNuevas.append(filaRemitoNuevo());
   const partes = [
-    el("h3", { texto: "2. Remitos" }),
+    el("h3", { texto: tituloPaso(2, "2. Remitos") }),
     el("form", { clase: "formulario", id: "remitos-form", novalidate: true, onsubmit: pegarRemitos },
       el("p", { clase: "texto-suave", texto: "Cargá cada remito en su fila (hasta " + MAX_REMITOS + " por expediente). Después de "
         + "agregarlos, más abajo vas a cargar la cantidad de cada renglón de la OC en cada remito." }),
@@ -2254,9 +2308,9 @@ function pintarPaso2() {
   });
   formulario.append(el("div", { clase: "acciones" },
     el("button", { type: "submit", texto: "Guardar remitos y cantidades" }),
-    botonCertificado("secundario"),
-    el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 3", onclick: () => mostrarPaso(3) })),
-    el("p", { clase: "nota-pie", texto: "El certificado de validación sale con el período y las cantidades guardadas: "
+    esTramite() ? null : botonCertificado("secundario"),
+    botonSiguiente()),
+    esTramite() ? null : el("p", { clase: "nota-pie", texto: "El certificado de validación sale con el período y las cantidades guardadas: "
       + "no hace falta la factura ni la carga en el SII." }));
   partes.push(formulario);
   vaciar(contenedor, ...partes);
@@ -2539,7 +2593,7 @@ async function pintarPaso3() {
     el("tbody", {}, ...filas));
   tablaDatos.addEventListener("input", actualizarComparacion);
   vaciar(contenedor,
-    el("h3", { texto: "3. Factura y SII" }),
+    el("h3", { texto: tituloPaso(3, "3. Factura y SII") }),
     el("section", { clase: "panel seccion-pdf-oc", "aria-labelledby": "comprobantes-pdf-titulo" },
       el("h4", { id: "comprobantes-pdf-titulo", texto: "Cargar desde los PDF" }),
       el("p", { clase: "texto-suave", texto: "Subí el PDF de la factura y el de su carga en el SII: se completan los datos y se controlan "
@@ -2565,7 +2619,7 @@ async function pintarPaso3() {
       el("div", { clase: "acciones" },
         el("button", { type: "submit", texto: "Guardar factura y SII" }),
         el("button", { type: "button", clase: "secundario", texto: "Volver a controlar", onclick: () => revisarComprobantes() }),
-        el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 4", onclick: () => mostrarPaso(4) }))));
+        botonSiguiente())));
   actualizarComparacion();
   const siiGuardado = expEstado.exp.datos.sii || {};
   if (factura.numero || Object.entries(siiGuardado).some(([k, v]) => k !== "faltantes" && v)) revisarComprobantes(true);
@@ -2750,11 +2804,11 @@ async function pintarPaso4() {
   pintarControles(informe);
 }
 
-function pintarControles(informe) {
-  const contenedor = document.getElementById("asistente-paso-4");
+function pintarControles(informe, contenedor, titulo) {
+  contenedor = contenedor || document.getElementById("asistente-paso-4");
   const r = informe.resumen;
   const partes = [
-    el("h3", { texto: "4. Controles" }),
+    titulo === null ? null : el("h3", { texto: titulo || "4. Controles" }),
     el("ul", { clase: "resumen-controles", "aria-label": "Resumen de controles" },
       el("li", { texto: "Errores: " + r.error }),
       el("li", { texto: "Salvables: " + r.salvable + " (con nota: " + r.salvable_con_nota + ")" }),
@@ -2782,7 +2836,8 @@ function pintarControles(informe) {
     partes.push(bloque);
   });
   partes.push(el("div", { clase: "acciones" },
-    el("button", { type: "button", clase: "secundario", texto: "Volver a controlar", onclick: pintarPaso4 })));
+    el("button", { type: "button", clase: "secundario", texto: "Volver a controlar",
+      onclick: () => (esTramite() ? mostrarPaso(expEstado.paso) : pintarPaso4()) })));
   vaciar(contenedor, ...partes);
 }
 
@@ -2790,14 +2845,14 @@ async function guardarNota(resultado, texto) {
   limpiarAvisos();
   if (!texto.trim()) { mostrarAviso("Escribí el texto de la nota aclaratoria.", "error"); return; }
   const exp = expEstado.exp;
-  estado.recargar = () => abrirExpediente(exp.id, 4);
+  estado.recargar = () => abrirExpediente(exp.id, expEstado.paso);
   const datos = await api("POST", "/api/expedientes/" + exp.id + "/notas", {
     version: exp.version, codigo: resultado.codigo, referencia: resultado.referencia, texto,
   });
   if (!datos) return;
   expEstado.exp = datos.expediente;
   pintarEncabezadoAsistente();
-  pintarControles(datos);
+  if (esTramite()) mostrarPaso(expEstado.paso); else pintarControles(datos);
   mostrarAviso("Nota aclaratoria guardada.", "exito");
 }
 
@@ -2985,7 +3040,7 @@ function pintarPaso6() {
       orden,
       el("div", { clase: "acciones" },
         el("button", { type: "submit", texto: "Guardar números GDE" }),
-        el("button", { type: "button", clase: "secundario", texto: "Seguir al paso 7", onclick: () => mostrarPaso(7) }))));
+        botonSiguiente())));
 }
 
 async function guardarGde(evento) {
@@ -3170,19 +3225,365 @@ async function guardarEventual(evento) {
   mostrarAviso("Solicitud de pago eventual guardada.", "exito");
 }
 
+// --- Trámite del expediente común (orden real) ----------------------------------------------
+
+/** Textos del trámite (no fallan si falta algo: cada parte trae su motivo en <clave>_error). */
+function textosTramite() {
+  return api("GET", "/api/expedientes/" + expEstado.exp.id + "/tramite");
+}
+
+/** Guarda un paso del trámite (con la versión) y vuelve a pintar el paso actual. */
+async function tramitar(accion, valores, mensaje) {
+  limpiarAvisos();
+  const exp = expEstado.exp;
+  estado.recargar = () => abrirExpediente(exp.id, expEstado.paso);
+  const actualizado = await api("POST", "/api/expedientes/" + exp.id + "/tramite",
+    Object.assign({ version: exp.version, accion }, valores || {}));
+  if (!actualizado) return null;
+  expEstado.exp = actualizado;
+  pintarEncabezadoAsistente();
+  mostrarPaso(expEstado.paso);
+  mostrarAviso(mensaje, "exito");
+  return actualizado;
+}
+
+function filaCopiar(etiqueta, valor) {
+  return el("tr", {},
+    el("th", { scope: "row", texto: etiqueta }),
+    el("td", { clase: "mono", texto: valor }),
+    el("td", {}, el("button", { type: "button", clase: "secundario", texto: "Copiar",
+      "aria-label": "Copiar " + etiqueta, onclick: () => copiarTexto(valor) })));
+}
+
+function tablaCopiar(filas) {
+  return el("div", { clase: "tabla-desplazable" }, el("table", { clase: "tabla-copiar" }, el("tbody", {}, ...filas)));
+}
+
+function avisoFalta(texto) {
+  return el("div", { clase: "mensaje mensaje-aviso" }, el("p", { texto }));
+}
+
+function fechaCorta(iso) {
+  return iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : "";
+}
+
+/** Pastilla de un documento que se firma en GDE: sin enviar, en firma (con fecha) o firmado (con su número). */
+function estadoFirma(numero, enFirma) {
+  if (numero) return el("p", {}, el("span", { clase: "pastilla pastilla-exito", texto: "Firmado" }), " " + numero);
+  if (enFirma) return el("p", {}, el("span", { clase: "pastilla pastilla-violeta", texto: "En proceso de firma" }),
+    " desde el " + fechaCorta(enFirma));
+  return el("p", {}, el("span", { clase: "pastilla pastilla-neutra", texto: "Sin enviar a firma" }));
+}
+
+/** Marca «hecho» de un paso (ingreso en SAP, factura en SAP): botón para marcarlo o, si ya está, la fecha y deshacer. */
+function marcaHecho(accion, fecha, textoHacer, textoHecho) {
+  if (fecha) {
+    return el("div", { clase: "acciones" },
+      el("span", { clase: "pastilla pastilla-exito", texto: textoHecho + " el " + fechaCorta(fecha) }),
+      el("button", { type: "button", clase: "secundario", texto: "Desmarcar",
+        onclick: () => tramitar(accion, { hecho: false }, "Marca quitada.") }), botonSiguiente());
+  }
+  return el("div", { clase: "acciones" }, el("button", { type: "button", texto: textoHacer,
+    onclick: () => tramitar(accion, { hecho: true }, textoHecho + ".") }), botonSiguiente());
+}
+
+// 3. Certificado de validación: descarga, referencia, «en firma» y N° GDE del firmado (tarda ~1 día en firmarse).
+async function pintarPasoCertificado() {
+  const contenedor = document.getElementById("asistente-paso-8");
+  cargando(contenedor);
+  const textos = await textosTramite();
+  if (!textos) { vaciar(contenedor); return; }
+  const exp = expEstado.exp;
+  const tramite = exp.datos.tramite || {};
+  const gde = exp.datos.gde || {};
+  vaciar(contenedor,
+    el("h3", { texto: tituloPaso(8) }),
+    el("p", { clase: "texto-suave", texto: "Sale con el período y las cantidades de los remitos: no necesita la factura." }),
+    el("div", { clase: "acciones" }, botonCertificado()),
+    textos.referencia_cv ? bloqueTexto("Referencia GDE del certificado", textos.referencia_cv, false)
+      : avisoFalta("Referencia: " + textos.referencia_cv_error),
+    el("h4", { texto: "Firma" }),
+    estadoFirma(gde.cv, tramite.cv_en_firma),
+    gde.cv ? null : el("div", { clase: "acciones" }, tramite.cv_en_firma
+      ? el("button", { type: "button", clase: "secundario", texto: "Quitar «en proceso de firma»",
+        onclick: () => tramitar("cv_en_firma", { hecho: false }, "Marca quitada.") })
+      : el("button", { type: "button", texto: "Marcar en proceso de firma",
+        onclick: () => tramitar("cv_en_firma", { hecho: true }, "Certificado en proceso de firma.") })),
+    el("form", { clase: "formulario", novalidate: true, onsubmit: (e) => {
+      e.preventDefault();
+      tramitar("cv_firmado", { gde: document.getElementById("tr-cv").value.trim() }, "N° GDE del certificado guardado.");
+    } },
+      entradaGde("tr-cv", "N° GDE del certificado firmado", gde.cv),
+      el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar N° del certificado firmado" }), botonSiguiente())));
+}
+
+// 4. Ingreso en SAP del bien (vale de entrada, un bloque por remito) o del servicio (hoja de entrada).
+async function pintarPasoIngresoSap() {
+  const contenedor = document.getElementById("asistente-paso-9");
+  cargando(contenedor);
+  const textos = await textosTramite();
+  if (!textos) { vaciar(contenedor); return; }
+  const tramite = expEstado.exp.datos.tramite || {};
+  const e = textos.entrada_sap;
+  const partes = [el("h3", { texto: tituloPaso(9) })];
+  if (!e) {
+    partes.push(avisoFalta(textos.entrada_sap_error));
+  } else if (e.tipo === "BIEN") {
+    partes.push(el("p", { clase: "texto-suave", texto: "Ingreso de material (vale de entrada): un ingreso por remito." }),
+      tablaCopiar([filaCopiar("OC", e.oc), filaCopiar("Fecha de documento", e.fecha_documento)]));
+    for (const r of e.remitos) {
+      partes.push(el("h4", { texto: "Remito " + r.numero }), tablaCopiar([
+        filaCopiar("N° de remito (nota de entrega)", r.numero),
+        filaCopiar("Fecha de entrega (del remito)", r.fecha),
+        ...r.renglones.map((x) => filaCopiar("Cantidad renglón " + x.pos, x.cantidad))]),
+      r.renglones.length ? null : avisoFalta("Este remito no tiene cantidades cargadas (paso 2)."));
+    }
+  } else {
+    partes.push(el("p", { clase: "texto-suave", texto: "Hoja de entrada de servicios: período validado, no el de toda la OC." }),
+      tablaCopiar([
+        filaCopiar("OC", e.oc),
+        filaCopiar("Texto breve", e.texto_breve),
+        filaCopiar("Fecha desde", e.desde),
+        filaCopiar("Fecha hasta", e.hasta),
+        filaCopiar("Centro (lugar de servicio)", e.centro),
+        ...e.renglones.map((x) => filaCopiar("Cantidad renglón " + x.pos, x.cantidad))]));
+  }
+  partes.push(marcaHecho("ingreso_sap", tramite.ingreso_sap, "Marcar como ingresado en SAP", "Ingresado en SAP"));
+  vaciar(contenedor, ...partes);
+}
+
+// 6. Caratulación: controles en orden, datos para caratular, motivo y N° de expediente (EX).
+async function pintarPasoCaratulacion() {
+  const contenedor = document.getElementById("asistente-paso-10");
+  cargando(contenedor);
+  const [textos, informe] = [await textosTramite(), await api("GET", "/api/expedientes/" + expEstado.exp.id + "/controles")];
+  if (!textos || !informe) { vaciar(contenedor); return; }
+  const exp = expEstado.exp;
+  const gde = exp.datos.gde || {};
+  const r = informe.resumen;
+  const bloquea = r.error > 0 || r.salvable > r.salvable_con_nota;
+  const controlesDiv = el("div", {});
+  pintarControles(informe, controlesDiv, null);
+  const c = textos.caratulacion;
+  const partes = [el("h3", { texto: tituloPaso(10) })];
+  if (bloquea) {
+    partes.push(el("div", { clase: "mensaje mensaje-error" }, el("p", { texto: "Todavía no se puede caratular: hay " + r.error
+      + " errores y " + (r.salvable - r.salvable_con_nota) + " salvables sin nota. Resolvelos abajo." })), controlesDiv);
+  } else {
+    partes.push(el("div", { clase: "mensaje mensaje-exito" }, el("p", { texto: "Controles en orden"
+      + (r.aviso || r.verificar ? " (" + r.aviso + " avisos y " + r.verificar + " para verificar)" : "") + ": ya se puede caratular." })),
+    el("details", { clase: "detalle-controles" }, el("summary", { texto: "Ver los controles" }), controlesDiv));
+  }
+  partes.push(el("h4", { texto: "Datos para caratular" }), tablaCopiar([
+    filaCopiar("Código de trámite", c.codigo_tramite),
+    filaCopiar("Mail", c.mail),
+    filaCopiar("N°", c.numero),
+    filaCopiar("Oficina", c.oficina),
+    textos.caratula ? filaCopiar("Motivo", textos.caratula) : null]));
+  if (!textos.caratula) partes.push(avisoFalta("Motivo: " + textos.caratula_error));
+  partes.push(el("form", { clase: "formulario panel", novalidate: true, onsubmit: (e) => {
+    e.preventDefault();
+    tramitar("caratular", { expediente: document.getElementById("tr-ex").value.trim() }, "N° de expediente guardado.");
+  } },
+    entradaGde("tr-ex", "N° de expediente (EX)", gde.expediente),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar N° de expediente" }), botonSiguiente())));
+  vaciar(contenedor, ...partes);
+}
+
+// Documentos de la carga en GDE (la autorización y la constancia de contabilización van en sus propios pasos).
+const GDE_DE_REFERENCIA = { factura: "factura", sii: "sii", remito_equipo: "remito_equipo", vale_hoja: "vale_hoja" };
+
+function tarjetaGde(titulo, referencia, campo) {
+  return el("div", { clase: "tarjeta-gde" },
+    el("h4", { texto: titulo }),
+    referencia ? el("div", { clase: "referencia-gde" }, el("span", { clase: "mono", texto: referencia }),
+      el("button", { type: "button", clase: "secundario", texto: "Copiar", "aria-label": "Copiar la referencia " + referencia,
+        onclick: () => copiarTexto(referencia) })) : null,
+    campo);
+}
+
+// 7. Carga en GDE: cada documento con su referencia (Copiar) y su N° GDE al lado; se guarda todo junto.
+async function pintarPasoGde() {
+  const contenedor = document.getElementById("asistente-paso-11");
+  cargando(contenedor);
+  const textos = await textosTramite();
+  if (!textos) { vaciar(contenedor); return; }
+  const exp = expEstado.exp;
+  const gde = exp.datos.gde || {};
+  const referencias = Object.fromEntries((textos.referencias || []).map((x) => [x.clave, x.referencia]));
+  const remitos = exp.datos.remitos.filter((x) => !x.es_equipo_comodato);
+  const tarjetas = [
+    tarjetaGde("Carátula", null, entradaGde("gde-caratula", "N° GDE de la carátula", gde.caratula)),
+    tarjetaGde("Factura", referencias.factura, entradaGde("gde-factura", "N° GDE", gde.factura)),
+    tarjetaGde("Carga en SII", referencias.sii, entradaGde("gde-sii", "N° GDE", gde.sii)),
+    tarjetaGde("PDF de la OC", null, entradaGde("gde-oc_pdf", "N° GDE (vacío = el de la OC)", gde.oc_pdf)),
+    tarjetaGde(remitos.length > 1 ? "Remitos" : "Remito", referencias.remitos,
+      el("div", {}, ...remitos.map((x, i) => entradaGde("gde-remito-" + i, "N° GDE del remito " + x.numero, (gde.remitos || {})[x.numero])))),
+  ];
+  if (referencias.remito_equipo) {
+    tarjetas.push(tarjetaGde("Remito del equipo en comodato", referencias.remito_equipo,
+      el("div", {}, entradaGde("gde-remito_equipo", "N° GDE", gde.remito_equipo),
+        campoFormulario("gde-orden", "Orden del remito del equipo en el expediente",
+          entrada(gde.orden_remito_equipo ?? "", { type: "number", min: "1", inputmode: "numeric", clase: "entrada-corta" })))));
+  }
+  tarjetas.push(tarjetaGde("Certificado de validación", referencias.cv,
+    el("p", { clase: "texto-suave", texto: gde.cv ? "N° GDE: " + gde.cv + " (cargado en el paso 3)." : "Falta el N° GDE del certificado firmado (paso 3)." })));
+  tarjetas.push(tarjetaGde(referencias.vale_hoja && referencias.vale_hoja.includes("VALE") ? "Vale de entrada" : "Hoja de entrada",
+    referencias.vale_hoja, entradaGde("gde-vale_hoja", "N° GDE", gde.vale_hoja)));
+  if (textos.constancia_comodato) {
+    tarjetas.push(tarjetaGde("Constancia de recepción de comodato", textos.constancia_comodato.referencia,
+      el("div", {}, bloqueTexto("Constancia de recepción de comodato", textos.constancia_comodato.cuerpo, true),
+        entradaGde("gde-constancia", "N° GDE", gde.constancia))));
+  }
+  const guardar = (e) => {
+    e.preventDefault();
+    const nuevo = {};
+    for (const clave of ["caratula", "factura", "sii", "oc_pdf", "remito_equipo", "vale_hoja", "constancia"]) {
+      const campo = document.getElementById("gde-" + clave);
+      if (campo) nuevo[clave] = campo.value.trim();
+    }
+    nuevo.remitos = {};
+    remitos.forEach((x, i) => {
+      const valor = document.getElementById("gde-remito-" + i).value.trim();
+      if (valor) nuevo.remitos[x.numero] = valor;
+    });
+    const orden = document.getElementById("gde-orden");
+    if (orden) nuevo.orden_remito_equipo = orden.value.trim() || null;
+    tramitar("gde", { gde: nuevo }, "Números GDE guardados.");
+  };
+  vaciar(contenedor,
+    el("h3", { texto: tituloPaso(11) }),
+    el("p", { clase: "texto-suave", texto: "Copiá la referencia de cada documento al subirlo a GDE y anotá su número. "
+      + "Se puede guardar a medias y seguir después." }),
+    textos.referencias_error ? avisoFalta("Referencias: " + textos.referencias_error) : null,
+    el("form", { clase: "formulario", novalidate: true, onsubmit: guardar }, ...tarjetas,
+      el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar números GDE" }), botonSiguiente())));
+}
+
+// 8. Ingreso de la factura en SAP (sin transacción): con el N° de expediente y la fecha de la factura.
+async function pintarPasoFacturaSap() {
+  const contenedor = document.getElementById("asistente-paso-12");
+  cargando(contenedor);
+  const textos = await textosTramite();
+  if (!textos) { vaciar(contenedor); return; }
+  const tramite = expEstado.exp.datos.tramite || {};
+  const f = textos.factura_sap;
+  const partes = [el("h3", { texto: tituloPaso(12) })];
+  if (!f) {
+    partes.push(avisoFalta(textos.factura_sap_error));
+  } else {
+    if (f.aviso_largo) partes.push(avisoFalta(f.aviso_largo));
+    partes.push(tablaCopiar([
+      filaCopiar("Expediente", f.expediente),
+      filaCopiar("Fecha de documento", f.fecha_documento),
+      filaCopiar("Fecha de contabilización", f.fecha_contabilizacion),
+      filaCopiar("Importe", f.importe),
+      filaCopiar("Texto (" + f.largo_texto + " caracteres)", f.texto),
+      filaCopiar("Asignación", f.asignacion),
+      filaCopiar("Txt. cabecera (al ingresar)", f.txt_cabecera_ingreso),
+      filaCopiar("Txt. cabecera (después, en lugar de los ceros)", f.txt_cabecera),
+      filaCopiar("Clase", f.clase),
+      filaCopiar("Texto breve", f.texto_breve)]));
+  }
+  partes.push(marcaHecho("factura_sap", tramite.factura_sap, "Marcar factura ingresada en SAP", "Factura ingresada en SAP"));
+  vaciar(contenedor, ...partes);
+}
+
+// 9. Autorización de pago: descarga, en firma (~1 día) y N° GDE de la firmada (queda FIRMADO).
+async function pintarPasoAutorizacion() {
+  const contenedor = document.getElementById("asistente-paso-13");
+  cargando(contenedor);
+  const textos = await textosTramite();
+  if (!textos) { vaciar(contenedor); return; }
+  const exp = expEstado.exp;
+  const gde = exp.datos.gde || {};
+  const base = "/api/expedientes/" + exp.id;
+  const partes = [el("h3", { texto: tituloPaso(13) })];
+  if (!gde.expediente) partes.push(avisoFalta("Primero cargá el N° de expediente en la caratulación (paso 6)."));
+  if (textos.autorizacion) {
+    partes.push(el("div", { clase: "acciones" },
+      el("a", { clase: "boton", href: base + "/autorizacion.docx", download: "", texto: "Descargar autorización (.docx)" })),
+    bloqueTexto("Referencia de la autorización", textos.autorizacion.referencia, false),
+    bloqueTexto("Autorización de pago", textos.autorizacion.cuerpo, true));
+  } else {
+    partes.push(avisoFalta("Autorización: " + textos.autorizacion_error));
+  }
+  const enFirma = exp.estado === "EN_FIRMA" ? (exp.datos.historial || []).slice().reverse()
+    .find((h) => h.estado === "EN_FIRMA") : null;
+  partes.push(el("h4", { texto: "Firma" }),
+    estadoFirma(gde.autorizacion, enFirma ? enFirma.fecha.slice(0, 10) : null));
+  if (exp.estado === "CONTROLADO") {
+    partes.push(el("div", { clase: "acciones" }, el("button", { type: "button", texto: "Marcar en proceso de firma",
+      onclick: () => tramitar("autorizacion_en_firma", {}, "Autorización en proceso de firma.") })));
+  }
+  partes.push(el("form", { clase: "formulario", novalidate: true, onsubmit: (e) => {
+    e.preventDefault();
+    tramitar("autorizacion_firmada", { gde: document.getElementById("tr-autorizacion").value.trim() },
+      "Autorización firmada: el expediente quedó «Firmado».");
+  } },
+    entradaGde("tr-autorizacion", "N° GDE de la autorización firmada", gde.autorizacion),
+    el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Guardar N° de la autorización firmada" }), botonSiguiente())));
+  vaciar(contenedor, ...partes);
+}
+
+// 10. Cierre: constancia de contabilización al expediente y pase al buzón de Contable (queda COMPLETO).
+async function pintarPasoCierre() {
+  const contenedor = document.getElementById("asistente-paso-14");
+  cargando(contenedor);
+  const textos = await textosTramite();
+  if (!textos) { vaciar(contenedor); return; }
+  const exp = expEstado.exp;
+  const gde = exp.datos.gde || {};
+  const tramite = exp.datos.tramite || {};
+  const constancia = (textos.referencias || []).find((x) => x.clave === "constancia");
+  const partes = [el("h3", { texto: tituloPaso(14) }),
+    el("p", {}, "Estado: ", el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[exp.estado] || "neutra"),
+      texto: ESTADOS_TEXTO[exp.estado] || exp.estado }))];
+  if (exp.estado === "COMPLETO" || tramite.pase && exp.estado !== "FIRMADO") {
+    partes.push(el("div", { clase: "mensaje mensaje-exito" }, el("p", { texto: "Pase al buzón de Contable dado el "
+      + fechaCorta(tramite.pase) + "." + (exp.estado === "COMPLETO" ? " Va en la próxima entrega (pantalla Entregas)." : "") })));
+  }
+  if (constancia) partes.push(bloqueTexto("Referencia de la constancia de contabilización", constancia.referencia, false));
+  if (["FIRMADO", "COMPLETO"].includes(exp.estado)) {
+    partes.push(el("form", { clase: "formulario panel", novalidate: true, onsubmit: (e) => {
+      e.preventDefault();
+      tramitar("pase", { gde: document.getElementById("tr-contabilizacion").value.trim() },
+        "Pase dado: el expediente quedó «Completo».");
+    } },
+      entradaGde("tr-contabilizacion", "N° GDE de la constancia de contabilización", gde.contabilizacion),
+      el("div", { clase: "acciones" }, el("button", { type: "submit",
+        texto: exp.estado === "COMPLETO" ? "Guardar N° de la constancia" : "Guardar y dar el pase al buzón de Contable" }))));
+  } else if (!["ENVIADO", "CONTABILIZADO", "CERRADO", "ANULADO"].includes(exp.estado)) {
+    partes.push(avisoFalta("El pase se da con la autorización de pago firmada (paso 9)."));
+  }
+  partes.push(...partesEstado(exp, true));
+  vaciar(contenedor, ...partes);
+}
+
 // Paso 7: estado.
 
 const TRANSICIONES_COMUN = {
   BORRADOR: ["CONTROLADO"], CONTROLADO: ["EN_FIRMA", "BORRADOR"], EN_FIRMA: ["FIRMADO", "CONTROLADO"],
-  FIRMADO: [], ENVIADO: ["CONTABILIZADO"], CONTABILIZADO: ["CERRADO"],
+  FIRMADO: ["COMPLETO"], COMPLETO: ["FIRMADO"], ENVIADO: ["CONTABILIZADO"], CONTABILIZADO: ["CERRADO"],
 };
 const ESTADOS_FINALES = ["CERRADO", "ANULADO", "FINALIZADO"];
 
 function pintarPaso7() {
-  const contenedor = document.getElementById("asistente-paso-7");
   const exp = expEstado.exp;
-  const partes = [el("h3", { texto: "7. Estado" }),
-    el("p", { texto: "Estado actual: " + (ESTADOS_TEXTO[exp.estado] || exp.estado) })];
+  vaciar(document.getElementById("asistente-paso-7"), el("h3", { texto: "7. Estado" }),
+    el("p", { texto: "Estado actual: " + (ESTADOS_TEXTO[exp.estado] || exp.estado) }), ...partesEstado(exp, false));
+}
+
+const ACCIONES_HISTORIAL = {
+  CV_EN_FIRMA: "Certificado en firma", CV_FIRMADO: "Certificado firmado", INGRESO_SAP: "Ingreso en SAP",
+  CARATULAR: "Caratulación (EX)", GDE: "Números GDE", FACTURA_SAP: "Factura en SAP",
+  AUTORIZACION_EN_FIRMA: "Autorización en firma", AUTORIZACION_FIRMADA: "Autorización firmada",
+  PASE: "Pase al buzón de Contable",
+};
+
+/** Pendiente / reanudar, cambios de estado (solo en el asistente clásico) e historial. */
+function partesEstado(exp, tramite) {
+  const partes = [];
   if (exp.estado === "PENDIENTE") {
     partes.push(el("div", { clase: "mensaje mensaje-aviso" },
       el("p", { texto: "Pendiente: " + exp.motivo_pendiente + " · seguimiento " + (exp.fecha_seguimiento || "") })),
@@ -3190,12 +3591,15 @@ function pintarPaso7() {
   } else if (!ESTADOS_FINALES.includes(exp.estado)) {
     // los destinos los da el servidor según el tipo (ENVIADO solo por entrega)
     const destinos = (exp.destinos || TRANSICIONES_COMUN[exp.estado] || []).filter((d) => d !== "ENVIADO");
-    if (exp.estado === "FIRMADO") {
+    if (!tramite && exp.estado === "FIRMADO") {
       partes.push(el("p", { clase: "texto-suave", texto: "Para marcarlo como enviado, asignalo a una entrega." }));
     }
-    partes.push(el("div", { clase: "acciones" }, ...destinos.map((destino) => el("button", { type: "button",
-      clase: destino === "BORRADOR" || destino === "CONTROLADO" && exp.estado === "EN_FIRMA" ? "secundario" : null,
-      texto: "Pasar a " + (ESTADOS_TEXTO[destino] || destino), onclick: () => cambiarEstado(destino) }))));
+    // En el trámite el estado avanza solo con cada paso: no hay botones de «Pasar a…».
+    if (!tramite) {
+      partes.push(el("div", { clase: "acciones" }, ...destinos.map((destino) => el("button", { type: "button",
+        clase: destino === "BORRADOR" || destino === "CONTROLADO" && exp.estado === "EN_FIRMA" ? "secundario" : null,
+        texto: "Pasar a " + (ESTADOS_TEXTO[destino] || destino), onclick: () => cambiarEstado(destino) }))));
+    }
     partes.push(el("form", { clase: "formulario panel", novalidate: true, onsubmit: marcarPendiente },
       el("h4", { texto: "Dejar pendiente" }),
       campoFormulario("pend-motivo", "Motivo", entrada("")),
@@ -3205,20 +3609,20 @@ function pintarPaso7() {
   const historial = (exp.datos.historial || []).slice().reverse();
   partes.push(el("h4", { texto: "Historial" }));
   partes.push(tabla(["Fecha", "Usuario", "Acción", "Estado"],
-    historial.map((h) => [formatoFechaHora(h.fecha), h.usuario, h.accion + (h.motivo ? " (" + h.motivo + ")" : ""),
+    historial.map((h) => [formatoFechaHora(h.fecha), h.usuario, (ACCIONES_HISTORIAL[h.accion] || h.accion) + (h.motivo ? " (" + h.motivo + ")" : ""),
       (h.desde ? (ESTADOS_TEXTO[h.desde] || h.desde) + " → " : "") + (ESTADOS_TEXTO[h.estado] || h.estado)])));
-  vaciar(contenedor, ...partes);
+  return partes;
 }
 
 async function enviarEstado(ruta, cuerpo, mensaje) {
   limpiarAvisos();
   const exp = expEstado.exp;
-  estado.recargar = () => abrirExpediente(exp.id, 7);
+  estado.recargar = () => abrirExpediente(exp.id, expEstado.paso);
   const actualizado = await api("POST", "/api/expedientes/" + exp.id + ruta, Object.assign({ version: exp.version }, cuerpo));
   if (!actualizado) return;
   expEstado.exp = actualizado;
   pintarEncabezadoAsistente();
-  pintarPaso7();
+  mostrarPaso(expEstado.paso);
   mostrarAviso(mensaje, "exito");
 }
 
@@ -3247,9 +3651,6 @@ function iniciarExpedientes() {
     mostrarLista();
   });
   document.getElementById("asistente-anular").addEventListener("click", abrirDialogoAnular);
-  for (const boton of document.querySelectorAll(".pasos button[data-paso]")) {
-    boton.addEventListener("click", () => { limpiarAvisos(); mostrarPaso(Number(boton.dataset.paso)); });
-  }
 }
 
 // --- Calendario ---------------------------------------------------------------
@@ -3567,6 +3968,10 @@ const CAMPOS_PARAMETROS = [
   { id: "par-umbral", etiqueta: "Umbral de renglón por agotarse (%)", clave: "umbral_por_agotarse_pct", ruta: [], tipo: "entero" },
   { id: "par-limite-sap", etiqueta: "Límite del Texto SAP (caracteres)", clave: "limite_texto_sap", ruta: [], tipo: "entero" },
   { id: "par-email", etiqueta: "Email de la carátula", clave: "email_caratula", ruta: [], tipo: "texto" },
+  { id: "par-car-codigo", etiqueta: "Caratulación: código de trámite", clave: "caratulacion", ruta: ["codigo_tramite"], tipo: "texto" },
+  { id: "par-car-mail", etiqueta: "Caratulación: mail", clave: "caratulacion", ruta: ["mail"], tipo: "texto" },
+  { id: "par-car-numero", etiqueta: "Caratulación: n°", clave: "caratulacion", ruta: ["numero"], tipo: "texto" },
+  { id: "par-car-oficina", etiqueta: "Caratulación: oficina", clave: "caratulacion", ruta: ["oficina"], tipo: "texto" },
   { id: "par-email-eventual", etiqueta: "Email de la carátula (pago eventual)", clave: "pago_eventual", ruta: ["email_caratula"], tipo: "texto" },
 ];
 
@@ -4091,7 +4496,7 @@ function celdaTabla(columna, fila) {
 function irAExpediente(id) {
   expEstado.exp = null;
   mostrarPantalla("pantalla-expedientes", false);
-  abrirExpediente(id, 1);
+  abrirExpediente(id, null);
 }
 
 function irAOC(numero) {

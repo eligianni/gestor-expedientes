@@ -13,7 +13,7 @@ from gestor import util
 NIVELES = ("error", "salvable", "aviso", "verificar")
 
 # Estados desde los que una OC ya tuvo su "primera validación".
-ESTADOS_VALIDADOS = ("CONTROLADO", "EN_FIRMA", "FIRMADO", "ENVIADO", "CONTABILIZADO", "CERRADO")
+ESTADOS_VALIDADOS = ("CONTROLADO", "EN_FIRMA", "FIRMADO", "COMPLETO", "ENVIADO", "CONTABILIZADO", "CERRADO")
 
 _RE_REMITO = re.compile(r"\d{4,5}-\d{8}")
 

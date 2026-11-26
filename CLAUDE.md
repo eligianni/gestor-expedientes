@@ -230,6 +230,16 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   (`/api/importar/centralizadas/{vista-previa,confirmar}`), idempotente por OC + efector + mes; marca las OC como centralizadas.
 - Entregas: clic en la fila abre la ventana `#dialogo-entrega` (`abrirEntrega`) con todas sus facturas (proveedor, OC,
   período, N°, importe de `datos.factura.centavos`, estado) y el total; clic en una factura abre su expediente.
+- Expediente COMÚN = trámite en el orden real (`PASOS_TRAMITE` en `app.js`, contenedores 1, 2, 8, 9, 3, 10–14): OC y
+  período → remitos → CV (en firma + N° GDE) → ingreso en SAP (MIGO por remito / ML81N con el período validado y centro
+  HBI/HUR, `textos.entrada_sap`) → factura y SII → caratulación (controles en orden + datos de `parametros.caratulacion`
+  + EX; BORRADOR → CONTROLADO) → carga en GDE → factura en SAP (`textos.factura_sap`: fecha de contabilización = emisión
+  de la factura, txt cabecera con ceros y después `MM/AA HBI OC n`, EX) → autorización (en firma → EN_FIRMA, N° GDE →
+  FIRMADO) → cierre (constancia de contabilización + pase → COMPLETO). Todo por `POST /api/expedientes/<id>/tramite`
+  (`negocio.tramitar`, marcas con fecha en `datos.tramite`) y `GET .../tramite` (`negocio.textos_del_tramite`, no falla:
+  `<clave>_error`). Correctivo, eventual y centralizada siguen con su asistente. La entrega acepta FIRMADO o COMPLETO
+  (`ESTADOS_PARA_ENTREGA`) y se envía cuando todos tienen el pase. Los parámetros nuevos se siembran con
+  `negocio.PARAMETROS_POR_DEFECTO` al arrancar (no se toca `config.json`).
 - Los expedientes no se borran: «Anular expediente» (arriba del asistente, `abrirDialogoAnular`) pide un motivo y llama a
   `POST /api/expedientes/<id>/anular`; queda ANULADO y deja de contar para consumo y controles.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente
