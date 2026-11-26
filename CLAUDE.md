@@ -221,6 +221,8 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   «pendiente» hasta `dias_gracia` (10) días después de terminar. El SEGUIMIENTO_CENTRALIZADAS en Excel se carga desde la
   pantalla («NOTAS ENVIADAS» y «ENTREGAS ÚNICAS», HUR = CASPH): `migracion.planificar_centralizadas` / `migrar_centralizadas`
   (`/api/importar/centralizadas/{vista-previa,confirmar}`), idempotente por OC + efector + mes; marca las OC como centralizadas.
+- Entregas: clic en la fila abre la ventana `#dialogo-entrega` (`abrirEntrega`) con todas sus facturas (proveedor, OC,
+  período, N°, importe de `datos.factura.centavos`, estado) y el total; clic en una factura abre su expediente.
 - Los expedientes no se borran: «Anular expediente» (arriba del asistente, `abrirDialogoAnular`) pide un motivo y llama a
   `POST /api/expedientes/<id>/anular`; queda ANULADO y deja de contar para consumo y controles.
 - Consumo a mano: meses ya facturados sin remitos → `datos.consumo_manual` del expediente

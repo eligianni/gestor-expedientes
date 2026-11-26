@@ -3351,9 +3351,9 @@ async function cargarEntregas() {
   if (!datos.entregas.length) {
     partes.push(el("p", { clase: "texto-suave", texto: "Todavía no hay entregas." }));
   } else {
-    const filas = datos.entregas.map((e) => el("tr", {},
+    const filas = datos.entregas.map((e) => el("tr", { clase: "fila-clic", title: "Ver las facturas de la entrega", onclick: () => abrirEntrega(e.id) },
       el("td", {}, el("button", { type: "button", clase: "secundario", texto: e.efector + " " + e.numero,
-        "aria-label": "Abrir la entrega " + e.efector + " " + e.numero, onclick: () => abrirEntrega(e.id) })),
+        "aria-label": "Abrir la entrega " + e.efector + " " + e.numero, onclick: (ev) => { ev.stopPropagation(); abrirEntrega(e.id); } })),
       el("td", { texto: e.nombre }),
       el("td", { texto: e.estado === "ENVIADA" ? "Enviada" : "Abierta" }),
       el("td", { texto: e.fecha_envio || "—" }),
@@ -3378,26 +3378,45 @@ async function crearEntrega(evento) {
   cargarEntregas();
 }
 
+/** La entrega en una ventana: todas sus facturas (proveedor, OC, período, N° e importe) con el total. */
 async function abrirEntrega(id) {
   entEstado.abierta = id;
-  const detalle = document.getElementById("entrega-detalle");
-  cargando(detalle);
   const entrega = await api("GET", "/api/entregas/" + id);
-  if (!entrega) { vaciar(detalle); return; }
+  if (!entrega) { entEstado.abierta = null; return; }
   const lista = await api("GET", "/api/entregas?efector=" + encodeURIComponent(entrega.efector));
   const candidatos = lista ? lista.firmados_sin_entrega : [];
   const abierta = entrega.estado === "ABIERTA";
-  const partes = [el("h2", { id: "entrega-titulo", tabindex: "-1", texto: "Entrega " + entrega.efector + " " + entrega.numero + " — " + entrega.nombre }),
-    el("p", { texto: abierta ? "Abierta: todavía se pueden agregar o quitar expedientes." : "Enviada el " + entrega.fecha_envio + "." })];
+  const anterior = document.getElementById("dialogo-entrega");
+  if (anterior) { anterior.dataset.recargando = "1"; anterior.close(); }
+  const dialogo = el("dialog", { id: "dialogo-entrega", clase: "dialogo", "aria-labelledby": "entrega-titulo" });
+  const partes = [el("div", { clase: "dialogo-encabezado" },
+    el("h2", { id: "entrega-titulo", texto: "Entrega " + entrega.efector + " " + entrega.numero + " — " + entrega.nombre }),
+    el("p", { clase: "texto-suave", texto: (abierta ? "Abierta: todavía se pueden agregar o quitar expedientes." : "Enviada el " + entrega.fecha_envio + ".")
+      + " " + entrega.expedientes.length + (entrega.expedientes.length === 1 ? " factura." : " facturas.") }))];
   if (entrega.expedientes.length) {
-    partes.push(el("ul", { clase: "lista-simple" }, ...entrega.expedientes.map((x) => el("li", {},
-      el("span", { texto: descripcionExpediente(x) + " · " + (ESTADOS_TEXTO[x.estado] || x.estado) + " " }),
-      abierta ? el("button", { type: "button", clase: "secundario", texto: "Quitar",
-        "aria-label": "Quitar el expediente " + x.id + " de la entrega", onclick: () => cambiarEntrega(entrega, "/quitar", [x.id], "Expediente quitado.") }) : null))));
-    partes.push(el("div", { clase: "acciones" },
-      el("a", { clase: "boton secundario", href: "/api/entregas/" + entrega.id + "/numeracion.csv", download: "",
-        texto: "Descargar CSV NUMERACIÓN" })));
-    partes.push(botonesExporte("entrega", { id: entrega.id }, "de la entrega " + entrega.efector + " " + entrega.numero));
+    const total = entrega.expedientes.reduce((t, x) => t + (x.importe_centavos || 0), 0);
+    const filas = entrega.expedientes.map((x) => el("tr", { clase: "fila-clic", title: "Abrir el expediente " + x.id,
+      onclick: () => { dialogo.close(); abrirExpedienteDesdeOC(x.id, 1); } },
+      el("td", { clase: "numero", texto: String(x.id) }),
+      el("td", { clase: "izq", texto: x.razon_social || "" }),
+      el("td", { texto: x.oc || "—" }),
+      el("td", { texto: x.periodo || "—" }),
+      el("td", { clase: "mono sin-corte", texto: x.factura || "—" }),
+      el("td", { clase: "numero sin-corte", texto: x.importe_centavos === null || x.importe_centavos === undefined ? "—" : formatoPesos(x.importe_centavos) }),
+      el("td", {}, el("span", { clase: "pastilla pastilla-" + (TONO_ESTADO[x.estado] || "neutra"), texto: ESTADOS_TEXTO[x.estado] || x.estado })),
+      el("td", {}, abierta ? el("button", { type: "button", clase: "secundario", texto: "Quitar",
+        "aria-label": "Quitar el expediente " + x.id + " de la entrega",
+        onclick: (ev) => { ev.stopPropagation(); cambiarEntrega(entrega, "/quitar", [x.id], "Expediente quitado."); } }) : null)));
+    partes.push(el("div", { clase: "tabla-desplazable" }, el("table", {},
+      el("thead", {}, el("tr", {}, ...["N°", "Proveedor", "OC", "Período", "Factura", "Importe $", "Estado", ""]
+        .map((t) => el("th", { scope: "col", clase: t === "Proveedor" ? "izq" : null, texto: t })))),
+      el("tbody", {}, ...filas),
+      el("tfoot", {}, el("tr", {}, el("th", { scope: "row", clase: "izq", colspan: "5", texto: "Total" }),
+        el("td", { clase: "numero sin-corte", texto: formatoPesos(total) }), el("td", {}), el("td", {}))))),
+      el("div", { clase: "acciones" },
+        el("a", { clase: "boton secundario", href: "/api/entregas/" + entrega.id + "/numeracion.csv", download: "",
+          texto: "Descargar CSV NUMERACIÓN" })),
+      botonesExporte("entrega", { id: entrega.id }, "de la entrega " + entrega.efector + " " + entrega.numero));
   } else {
     partes.push(el("p", { clase: "texto-suave", texto: "La entrega no tiene expedientes." }));
   }
@@ -3408,7 +3427,7 @@ async function abrirEntrega(id) {
     partes.push(el("form", { clase: "formulario", novalidate: true, onsubmit: (e) => {
       e.preventDefault();
       const ids = casillas.map((c) => c.querySelector("input")).filter((i) => i.checked).map((i) => Number(i.value));
-      if (!ids.length) { limpiarAvisos(); mostrarAviso("Marcá al menos un expediente.", "error"); return; }
+      if (!ids.length) { avisoEnDialogo(dialogo, "Marcá al menos un expediente."); return; }
       cambiarEntrega(entrega, "/asignar", ids, ids.length === 1 ? "Expediente agregado." : ids.length + " expedientes agregados.");
     } },
     el("fieldset", {}, el("legend", { texto: "Expedientes firmados sin entrega (" + entrega.efector + ")" }), ...casillas),
@@ -3419,14 +3438,23 @@ async function abrirEntrega(id) {
       campoFormulario("entrega-fecha", "Fecha de envío", entrada(hoyIso(), { type: "date" })),
       el("div", { clase: "acciones" }, el("button", { type: "submit", texto: "Marcar como enviada" }))));
   }
-  vaciar(detalle, el("div", { clase: "panel" }, ...partes));
+  partes.push(el("div", { clase: "acciones dialogo-acciones" },
+    el("button", { type: "button", texto: "Cerrar", onclick: () => dialogo.close() })));
+  vaciar(dialogo, ...partes);
+  dialogo.addEventListener("close", () => {
+    if (!dialogo.dataset.recargando) entEstado.abierta = null;
+    dialogo.remove();
+  });
+  document.body.append(dialogo);
+  dialogo.showModal();
 }
 
 async function cambiarEntrega(entrega, accion, ids, mensaje) {
   limpiarAvisos();
   estado.recargar = cargarEntregas;
   const actualizada = await api("POST", "/api/entregas/" + entrega.id + accion, { version: entrega.version, expedientes: ids });
-  if (!actualizada) return;
+  const ventana = document.getElementById("dialogo-entrega");
+  if (!actualizada) { if (ventana) avisoEnDialogo(ventana, ultimoError()); return; }
   mostrarAviso(mensaje, "exito");
   await cargarEntregas();
 }
@@ -3434,11 +3462,12 @@ async function cambiarEntrega(entrega, accion, ids, mensaje) {
 async function enviarEntrega(entrega) {
   limpiarAvisos();
   const fecha = document.getElementById("entrega-fecha").value;
-  if (!fecha) { mostrarAviso("Indicá la fecha de envío.", "error"); return; }
+  if (!fecha) { avisoEnDialogo(document.getElementById("dialogo-entrega"), "Indicá la fecha de envío."); return; }
   if (!window.confirm("¿Marcar la entrega como enviada? Sus " + entrega.expedientes.length + " expedientes pasan a ENVIADO.")) return;
   estado.recargar = cargarEntregas;
   const enviada = await api("POST", "/api/entregas/" + entrega.id + "/enviar", { version: entrega.version, fecha });
-  if (!enviada) return;
+  const ventana = document.getElementById("dialogo-entrega");
+  if (!enviada) { if (ventana) avisoEnDialogo(ventana, ultimoError()); return; }
   mostrarAviso("Entrega " + enviada.efector + " " + enviada.numero + " enviada el " + enviada.fecha_envio + ".", "exito");
   await cargarEntregas();
 }
