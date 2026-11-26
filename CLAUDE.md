@@ -68,7 +68,7 @@ en `finally`. Textos: `negocio.contexto_textos` → `gestor/textos.py` (puro) �
 | Textos generados | `gestor/textos.py` — una función por texto |
 | Controles | `gestor/controles.py` → `CONTROLES`, `NOTAS` |
 | Tokens visuales | `:root` de `web/style.css` |
-| Texto de un PDF digital | `gestor/pdf_texto.py` → `texto_de_pdf` (sin OCR) |
+| Texto de un PDF digital | `gestor/pdf_texto.py` → `texto_de_pdf` (sin OCR; descifra los PDF que se abren sin contraseña: RC4, AES-128, AES-256 en Python puro) |
 | Datos de la factura desde su PDF | `gestor/factura_pdf.py` → `leer_factura` (varios formatos; sin descripción de ítems) |
 | Datos de la OC desde su PDF | `gestor/oc_pdf.py` → `leer_oc`; comparar/aplicar en `negocio.comparar_oc_pdf` / `aplicar_oc_pdf` |
 | Migración del seguimiento en Excel | `gestor/migracion.py` (NUMERACIÓN + solapa HBI 20252026 → expedientes, entregas) |
