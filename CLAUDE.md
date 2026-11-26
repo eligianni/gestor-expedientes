@@ -147,7 +147,10 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
 
 - `unittest discover` sin tests sale con código 5 en Python ≥ 3.12: el primer gate de tests es el paso 1.
 - `N° O/C` en el Excel usa el signo de grado (U+00B0); los encabezados se comparan normalizados (`util.clave_encabezado`).
-- El período sale del **remito** (fecha de firma si hay), nunca de la factura.
+- El período sale del **remito** (fecha de firma si hay), nunca de la factura. En bienes es el mes calendario del remito
+  (`negocio.dia_inicio_de` ignora el «día de inicio» de la OC); en servicios, según la división de la OC. Se sugiere al
+  cargar remitos y se confirma o cambia en el paso 2 (`panelPeriodo`); un remito está en el período si su fecha o su fecha
+  de firma caen adentro (`remitos_fuera_de_periodo`, también en `obtener_expediente`).
 - En Word un rótulo puede estar partido en varios `w:r`: unir el texto del párrafo antes de buscar; registrar namespaces antes de serializar.
 - ElementTree: comparar `elem is not None`, nunca `if elem:` (DeprecationWarning en ≥ 3.12, error con `-W error::DeprecationWarning`).
 - La carga del PDF de la OC no tiene columna propia: queda como `evento` `IMPORTACION` de la OC con `despues.fuente = "pdf_oc"`
@@ -199,7 +202,8 @@ Procedimientos: `.claude/skills/nuevo-texto-generado/SKILL.md` (texto nuevo con 
   Un SII sin datos no se controla. En el SII va el mes en que termina el período validado
   (`controles.periodo_sii_esperado`). El N° de factura se guarda como figura (punto de venta de 4 o 5 dígitos); el SII
   lo muestra con 4 y se comparan por valor (`util.misma_factura`).
-- Certificado de validación: «Fecha de Entrega» = fin del período en servicios (octubre → 31/10; 9/10 al 8/11 → 8/11);
+- Certificado de validación: en bienes, vigencia «-» y «Entrega» Total (este remito entrega toda la OC) o Parcial;
+  «Fecha de Entrega» = fin del período en servicios (octubre → 31/10; 9/10 al 8/11 → 8/11);
   en bienes, la fecha de firma del remito si la tiene, si no la del remito. Lleva todos los renglones (0 si no hubo entrega), cantidad de la OC sin unidad, objeto con
   mayúscula inicial y la celda de la fecha ensanchada (`docx_gen._ensanchar_fecha`, sin tocar la plantilla). No necesita factura ni SII (`textos.referencia_cv`, solo razón y período). Botón en el paso 2
   y en el 5 (`botonCertificado`): primero `GET .../cv/verificar` (422 con lo que falta) y después baja `cv.docx`.
