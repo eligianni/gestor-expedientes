@@ -48,7 +48,7 @@ class PruebaPrototipo(ayudas.CasoConServidor):
 
         cv = self.servidor.get("/api/expedientes/%d/cv.docx" % id_exp)
         self.assertEqual(cv.estado, 200)
-        self.assertIn("Se valida con remito 00001-00029461 correspondiente al período agosto 2026.", _texto_docx(cv.cuerpo))
+        self.assertIn("Se valida con remito 00001-00029461 correspondiente al período AGOSTO 2026.", _texto_docx(cv.cuerpo))
         autorizacion = self.servidor.get("/api/expedientes/%d/autorizacion.docx" % id_exp)
         self.assertIn(GOLDEN_EFIA, _texto_docx(autorizacion.cuerpo))
 
