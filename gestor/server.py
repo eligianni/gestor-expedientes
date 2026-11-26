@@ -658,6 +658,16 @@ def expediente_reanudar(h, m, cuerpo):
     return 200, _ok(negocio.reanudar_expediente(h.conexion(), m.group("id"), leer_json(h, cuerpo).get("version")))
 
 
+def expediente_tramite_textos(h, m, cuerpo):
+    return 200, _ok(negocio.textos_del_tramite(h.conexion(), m.group("id")))
+
+
+def expediente_tramite(h, m, cuerpo):
+    datos = leer_json(h, cuerpo)
+    valores = {c: v for c, v in datos.items() if c not in ("version", "accion")}
+    return 200, _ok(negocio.tramitar(h.conexion(), m.group("id"), datos.get("version"), datos.get("accion"), valores))
+
+
 def expediente_gde(h, m, cuerpo):
     datos = leer_json(h, cuerpo)
     return 200, _ok(negocio.guardar_gde(h.conexion(), m.group("id"), datos.get("version"), datos.get("gde")))
@@ -788,6 +798,8 @@ RUTAS = [
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/estado"), expediente_estado),
     ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/reanudar"), expediente_reanudar),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/gde"), expediente_gde),
+    ("POST", re.compile(r"/api/expedientes/(?P<id>\d+)/tramite"), expediente_tramite),
+    ("GET", re.compile(r"/api/expedientes/(?P<id>\d+)/tramite"), expediente_tramite_textos),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/consumo-manual"), expediente_consumo_manual),
     ("PUT", re.compile(r"/api/expedientes/(?P<id>\d+)/centralizada"), expediente_centralizada),
     ("GET", re.compile(r"/api/centralizadas/tablero"), centralizadas_tablero),
@@ -920,7 +932,7 @@ def crear_servidor(puerto, cfg):
     httpd.huella = huella_codigo()
     ruta_base = config.ruta(cfg, "base_datos")
     try:
-        db.inicializar(ruta_base, cfg["parametros_iniciales"])
+        db.inicializar(ruta_base, dict(negocio.PARAMETROS_POR_DEFECTO, **cfg["parametros_iniciales"]))
         con = db.conectar(ruta_base)
         try:
             httpd.integridad = db.verificar_integridad(con)

@@ -422,7 +422,7 @@ def textos_sap(ctx, limite):
             "aviso_largo": ("El Texto tiene %d caracteres; el límite configurado es %d." % (largo, limite)
                             if largo > limite else None),
             "asignacion": "OC %s" % ctx["oc"],
-            "txt_cabecera": "0000-0000-0000000-0",
+            "txt_cabecera": TXT_CABECERA_INGRESO,
             "clase": "KE",
         },
         "contabilizada": {"txt_cabecera": "%s %s OC %s" % (mm_barra_aa, sigla, ctx["oc"])},
@@ -434,4 +434,64 @@ def textos_sap(ctx, limite):
             "periodo": periodo,
             "texto_breve": "%s - %s" % (concepto, mm_barra_aa),
         },
+    }
+
+
+# --- Datos para SAP por paso del trámite ---------------------------------------
+
+LUGAR_SERVICIO = {"HBI": "HBI", "CASPH": "HUR"}
+TXT_CABECERA_INGRESO = "0000-0000-0000000-0"
+
+
+def _concepto(ctx):
+    concepto = (ctx.get("concepto_corto") or "").strip()
+    if not concepto:
+        raise TextoIncompleto("Falta el concepto corto (Texto SAP) en la OC %s." % ctx.get("oc", ""))
+    return concepto
+
+
+def _es_bien(ctx):
+    return ctx.get("tipo_oc") in ("BIEN", "PROVISION")
+
+
+def entrada_sap(ctx):
+    """Ingreso del bien (MIGO: un bloque por remito) o del servicio (ML81N: período validado, centro y cantidades)."""
+    _requerir(ctx, "oc", "periodo")
+    anio, mes = ctx["periodo"].split("-")
+    if _es_bien(ctx):
+        remitos = ctx.get("remitos_detalle") or []
+        if not remitos:
+            raise TextoIncompleto("Falta cargar al menos un remito.")
+        sin_fecha = [r["numero"] for r in remitos if not r.get("fecha")]
+        if sin_fecha:
+            raise TextoIncompleto("Falta la fecha del remito %s." % ", ".join(sin_fecha))
+        return {
+            "tipo": "BIEN", "oc": ctx["oc"], "fecha_documento": "01.%s.%s" % (mes, anio),
+            "remitos": [{"numero": r["numero"], "fecha": _fecha_sap_iso(r["fecha"]),
+                         "renglones": [dict(x) for x in r.get("renglones") or []]} for r in remitos],
+        }
+    if not ctx.get("periodo_desde") or not ctx.get("periodo_hasta"):
+        raise TextoIncompleto("Faltan las fechas desde y hasta del período.")
+    lugar = (ctx.get("parametros_efector") or {}).get("lugar_servicio") or LUGAR_SERVICIO.get(ctx.get("efector"), ctx.get("efector"))
+    return {
+        "tipo": "SERVICIO", "oc": ctx["oc"], "texto_breve": "%s - %s" % (_concepto(ctx), util.mm_barra_aa(ctx["periodo"])),
+        "desde": _fecha_sap_iso(ctx["periodo_desde"]), "hasta": _fecha_sap_iso(ctx["periodo_hasta"]), "centro": lugar,
+        "renglones": [dict(r) for r in ctx.get("cantidades") or []],
+    }
+
+
+def factura_sap(ctx, limite):
+    """Ingreso de la factura: los textos de `textos_sap` sin la transacción, más el expediente y la fecha de la factura."""
+    if not ctx.get("expediente"):
+        raise TextoIncompleto("Falta cargar el N° de expediente (EX) en la caratulación.")
+    if not ctx.get("fecha_factura"):
+        raise TextoIncompleto("Falta la fecha de emisión de la factura.")
+    sap = textos_sap(dict(ctx, fecha_base_remitos=ctx.get("fecha_base_remitos") or ctx["fecha_factura"]), limite)
+    ingreso = sap["ingreso"]
+    return {
+        "fecha_documento": ingreso["fecha_documento"], "importe": ingreso["importe"], "texto": ingreso["texto"],
+        "largo_texto": ingreso["largo_texto"], "aviso_largo": ingreso["aviso_largo"], "asignacion": ingreso["asignacion"],
+        "txt_cabecera_ingreso": TXT_CABECERA_INGRESO, "txt_cabecera": sap["contabilizada"]["txt_cabecera"],
+        "clase": ingreso["clase"], "fecha_contabilizacion": _fecha_sap_iso(ctx["fecha_factura"]),
+        "texto_breve": sap["entrada"]["texto_breve"], "expediente": ctx["expediente"],
     }

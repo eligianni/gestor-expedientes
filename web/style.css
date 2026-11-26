@@ -623,3 +623,15 @@ button.secundario.boton-peligro:hover { background: var(--error-fondo); color: v
 /* Paso 2: período sugerido por los remitos */
 .panel-periodo p { margin: 0 0 8px; }
 .panel-periodo .entrada-corta { width: 120px; }
+
+/* Trámite del expediente común: datos para copiar y carga en GDE */
+.tabla-copiar th[scope="row"] { width: 38%; font-weight: 600; text-align: left; }
+.tabla-copiar td { vertical-align: middle; }
+.tabla-copiar td:last-child { width: 1%; white-space: nowrap; }
+.tarjeta-gde { padding: 16px 20px; margin: 0 0 12px; border-radius: var(--radio-panel); background: var(--superficie-hundida);
+  box-shadow: var(--sombra-panel); }
+.tarjeta-gde h4 { margin: 0 0 8px; }
+.referencia-gde { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 8px; }
+.referencia-gde .mono { overflow-wrap: anywhere; }
+.detalle-controles { margin: 0 0 16px; }
+.detalle-controles summary { cursor: pointer; color: var(--primario); font-weight: 600; min-height: 44px; display: flex; align-items: center; }

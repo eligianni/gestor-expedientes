@@ -5,6 +5,7 @@ descomprime los contenidos, decodifica las fuentes (ToUnicode, WinAnsi, Differen
 posición: los fragmentos de una misma altura forman una línea y las columnas se separan con espacios, parecido a
 `pdftotext -layout`. Las coordenadas son geometría de la página (float); nunca montos.
 """
+import hashlib
 import math
 import re
 import unicodedata
@@ -337,6 +338,223 @@ def _predictor(datos, parametros):
     return bytes(salida)
 
 
+
+# --- Descifrado (PDF con «contraseña de propietario» pero que se abre sin contraseña) -------------------------------
+# Muchos PDF (ARCA, SII) vienen cifrados solo para restringir permisos: la contraseña para abrirlos es vacía. Se
+# descifran con el manejador estándar: RC4 (40/128 bits), AES-128 (AESV2) y AES-256 (AESV3, R5/R6). Todo en Python puro.
+
+_RELLENO = bytes.fromhex("28BF4E5E4E758A4164004E56FFFA01082E2E00B6D0683E802F0CA9FE6453697A")
+
+
+def _rc4(clave, datos):
+    s = list(range(256))
+    j = 0
+    for i in range(256):
+        j = (j + s[i] + clave[i % len(clave)]) & 0xFF
+        s[i], s[j] = s[j], s[i]
+    i = j = 0
+    salida = bytearray(len(datos))
+    for k, byte in enumerate(datos):
+        i = (i + 1) & 0xFF
+        j = (j + s[i]) & 0xFF
+        s[i], s[j] = s[j], s[i]
+        salida[k] = byte ^ s[(s[i] + s[j]) & 0xFF]
+    return bytes(salida)
+
+
+def _xtime(a):
+    return ((a << 1) ^ 0x1B) & 0xFF if a & 0x80 else a << 1
+
+
+def _mul(a, b):
+    resultado = 0
+    while b:
+        if b & 1:
+            resultado ^= a
+        a = _xtime(a)
+        b >>= 1
+    return resultado
+
+
+def _cajas():
+    sbox = [0] * 256
+    p = q = 1
+    while True:
+        p = p ^ ((p << 1) & 0xFF) ^ (0x1B if p & 0x80 else 0)
+        q ^= q << 1
+        q ^= q << 2
+        q ^= q << 4
+        q &= 0xFF
+        if q & 0x80:
+            q ^= 0x09
+        x = q ^ ((q << 1) | (q >> 7)) ^ ((q << 2) | (q >> 6)) ^ ((q << 3) | (q >> 5)) ^ ((q << 4) | (q >> 4))
+        sbox[p] = (x ^ 0x63) & 0xFF
+        if p == 1:
+            break
+    sbox[0] = 0x63
+    inversa = [0] * 256
+    for i, v in enumerate(sbox):
+        inversa[v] = i
+    return sbox, inversa
+
+
+_SBOX, _SBOX_INV = _cajas()
+
+
+def _expandir(clave):
+    nk = len(clave) // 4
+    rondas = nk + 6
+    w = [list(clave[4 * i:4 * i + 4]) for i in range(nk)]
+    rcon = 1
+    for i in range(nk, 4 * (rondas + 1)):
+        t = list(w[i - 1])
+        if i % nk == 0:
+            t = [_SBOX[b] for b in t[1:] + t[:1]]
+            t[0] ^= rcon
+            rcon = _xtime(rcon)
+        elif nk > 6 and i % nk == 4:
+            t = [_SBOX[b] for b in t]
+        w.append([a ^ b for a, b in zip(w[i - nk], t)])
+    return [sum(w[4 * r:4 * r + 4], []) for r in range(rondas + 1)]
+
+
+def _aes_bloque(claves, bloque, descifrar):
+    estado = [b ^ k for b, k in zip(bloque, claves[-1 if descifrar else 0])]
+    rondas = len(claves) - 1
+    filas = (0, 5, 10, 15, 4, 9, 14, 3, 8, 13, 2, 7, 12, 1, 6, 11)
+    filas_inv = (0, 13, 10, 7, 4, 1, 14, 11, 8, 5, 2, 15, 12, 9, 6, 3)
+    for r in range(1, rondas + 1):
+        if descifrar:
+            estado = [_SBOX_INV[estado[i]] for i in filas_inv]
+            estado = [b ^ k for b, k in zip(estado, claves[rondas - r])]
+            if r != rondas:
+                nuevo = []
+                for c in range(4):
+                    a = estado[4 * c:4 * c + 4]
+                    nuevo += [_mul(a[0], 14) ^ _mul(a[1], 11) ^ _mul(a[2], 13) ^ _mul(a[3], 9),
+                              _mul(a[0], 9) ^ _mul(a[1], 14) ^ _mul(a[2], 11) ^ _mul(a[3], 13),
+                              _mul(a[0], 13) ^ _mul(a[1], 9) ^ _mul(a[2], 14) ^ _mul(a[3], 11),
+                              _mul(a[0], 11) ^ _mul(a[1], 13) ^ _mul(a[2], 9) ^ _mul(a[3], 14)]
+                estado = nuevo
+        else:
+            estado = [_SBOX[estado[i]] for i in filas]
+            if r != rondas:
+                nuevo = []
+                for c in range(4):
+                    a = estado[4 * c:4 * c + 4]
+                    nuevo += [_xtime(a[0]) ^ _xtime(a[1]) ^ a[1] ^ a[2] ^ a[3],
+                              a[0] ^ _xtime(a[1]) ^ _xtime(a[2]) ^ a[2] ^ a[3],
+                              a[0] ^ a[1] ^ _xtime(a[2]) ^ _xtime(a[3]) ^ a[3],
+                              _xtime(a[0]) ^ a[0] ^ a[1] ^ a[2] ^ _xtime(a[3])]
+                estado = nuevo
+            estado = [b ^ k for b, k in zip(estado, claves[r])]
+    return bytes(estado)
+
+
+def aes_cbc(clave, iv, datos, descifrar=True):
+    """AES-CBC sin relleno (128 o 256 bits). `datos` debe tener largo múltiplo de 16."""
+    claves = _expandir(clave)
+    salida = bytearray()
+    previo = iv
+    for i in range(0, len(datos) - len(datos) % 16, 16):
+        bloque = datos[i:i + 16]
+        if descifrar:
+            salida += bytes(a ^ b for a, b in zip(_aes_bloque(claves, bloque, True), previo))
+            previo = bloque
+        else:
+            previo = _aes_bloque(claves, bytes(a ^ b for a, b in zip(bloque, previo)), False)
+            salida += previo
+    return bytes(salida)
+
+
+def _aes_descifrar(clave, datos):
+    """AESV2/AESV3: los primeros 16 bytes son el IV; al final, relleno PKCS#5."""
+    if len(datos) < 32:
+        return b""
+    plano = aes_cbc(clave, datos[:16], datos[16:])
+    relleno = plano[-1] if plano else 0
+    return plano[:-relleno] if 0 < relleno <= 16 else plano
+
+
+def _hash_r6(contrasena, sal, extra):
+    """Algoritmo 2.B (PDF 2.0) para AES-256 revisión 6."""
+    k = hashlib.sha256(contrasena + sal + extra).digest()
+    ronda = 0
+    while True:
+        k1 = (contrasena + k + extra) * 64
+        e = aes_cbc(k[:16], k[16:32], k1, descifrar=False)
+        modulo = int.from_bytes(e[:16], "big") % 3
+        k = (hashlib.sha256, hashlib.sha384, hashlib.sha512)[modulo](e).digest()
+        ronda += 1
+        if ronda >= 64 and e[-1] <= ronda - 32:
+            return k[:32]
+
+
+class _Descifrador:
+    """Descifra cadenas y flujos con la contraseña de usuario vacía; `ok` es False si hace falta una contraseña."""
+
+    def __init__(self, encrypt, id0):
+        self.ok = False
+        self.v = int(encrypt.get("V") or 0)
+        self.r = int(encrypt.get("R") or 0)
+        o, u = bytes(encrypt.get("O") or b""), bytes(encrypt.get("U") or b"")
+        self.metodo_flujos = self.metodo_cadenas = "RC4"
+        if self.v >= 4:
+            filtros = encrypt.get("CF") if isinstance(encrypt.get("CF"), dict) else {}
+
+            def metodo(nombre):
+                if nombre == "Identity":
+                    return "Identity"
+                cfm = (filtros.get(nombre) or {}).get("CFM") if isinstance(filtros.get(nombre), dict) else None
+                return {"AESV2": "AESV2", "AESV3": "AESV3", "None": "Identity"}.get(cfm, "RC4")
+
+            self.metodo_flujos = metodo(encrypt.get("StmF", "Identity"))
+            self.metodo_cadenas = metodo(encrypt.get("StrF", "Identity"))
+        self.cifra_metadatos = encrypt.get("EncryptMetadata", True) is not False
+        if self.r >= 5:
+            if self.r == 6:
+                if _hash_r6(b"", u[32:40], b"") != u[:32]:
+                    return
+                intermedia = _hash_r6(b"", u[40:48], b"")
+            else:
+                if hashlib.sha256(u[32:40]).digest() != u[:32]:
+                    return
+                intermedia = hashlib.sha256(u[40:48]).digest()
+            self.clave = aes_cbc(intermedia, bytes(16), bytes(encrypt.get("UE") or b"")[:32])
+            self.ok = True
+            return
+        largo = 5 if self.r == 2 else int(encrypt.get("Length") or 40) // 8
+        p = int(encrypt.get("P") or 0) & 0xFFFFFFFF
+        base = _RELLENO + o[:32] + p.to_bytes(4, "little") + id0
+        if self.r >= 4 and not self.cifra_metadatos:
+            base += b"\xff\xff\xff\xff"
+        clave = hashlib.md5(base).digest()
+        if self.r >= 3:
+            for _ in range(50):
+                clave = hashlib.md5(clave[:largo]).digest()
+        self.clave = clave[:largo]
+        if self.r == 2:
+            self.ok = _rc4(self.clave, _RELLENO) == u[:32]
+        else:
+            prueba = _rc4(self.clave, hashlib.md5(_RELLENO + id0).digest())
+            for i in range(1, 20):
+                prueba = _rc4(bytes(b ^ i for b in self.clave), prueba)
+            self.ok = prueba == u[:16]
+
+    def _clave_objeto(self, num, gen, aes):
+        if self.r >= 5:
+            return self.clave
+        extra = num.to_bytes(3, "little") + gen.to_bytes(2, "little") + (b"sAlT" if aes else b"")
+        return hashlib.md5(self.clave + extra).digest()[:min(len(self.clave) + 5, 16)]
+
+    def descifrar(self, datos, num, gen, flujo):
+        metodo = self.metodo_flujos if flujo else self.metodo_cadenas
+        if metodo == "Identity" or not datos:
+            return datos
+        if metodo in ("AESV2", "AESV3"):
+            return _aes_descifrar(self._clave_objeto(num, gen, True), datos)
+        return _rc4(self._clave_objeto(num, gen, False), datos)
+
 class _Documento:
     def __init__(self, datos):
         if not datos.lstrip()[:5].startswith(b"%PDF") and b"%PDF-" not in datos[:1024]:
@@ -350,8 +568,10 @@ class _Documento:
     def _leer_objetos(self):
         datos = self.datos
         definiciones = {}
+        generaciones = {}
         for m in re.finditer(rb"(?<![0-9])(\d+)\s+(\d+)\s+obj\b", datos):
             num = int(m.group(1))
+            generaciones[num] = int(m.group(2))
             lector = _Lector(datos, m.end())
             try:
                 valor = lector.objeto()
@@ -366,6 +586,8 @@ class _Documento:
                 continue
             definiciones[num] = (m.start(), valor)
         self.objetos = {num: valor for num, (_, valor) in definiciones.items()}
+        self._leer_trailers()
+        self._descifrar(definiciones, generaciones)
         # Flujos de objetos (PDF 1.5+): sus objetos valen si el flujo es posterior a la definición suelta.
         for num, (posicion, valor) in sorted(definiciones.items(), key=lambda x: x[1][0]):
             if isinstance(valor, Flujo) and valor.dic.get("Type") == "ObjStm":
@@ -374,15 +596,59 @@ class _Documento:
                     if previo is None or previo[0] < posicion:
                         definiciones[interno] = (posicion, objeto)
                         self.objetos[interno] = objeto
+
+    def _leer_trailers(self):
         self.trailers = []
-        for m in re.finditer(rb"trailer\s*<<", datos):
+        for m in re.finditer(rb"trailer\s*<<", self.datos):
             try:
-                self.trailers.append(_Lector(datos, m.end() - 2).objeto())
+                self.trailers.append(_Lector(self.datos, m.end() - 2).objeto())
             except (IndexError, ValueError):
                 continue
         for valor in self.objetos.values():
             if isinstance(valor, Flujo) and valor.dic.get("Type") == "XRef":
                 self.trailers.append(valor.dic)
+
+    def _descifrar(self, definiciones, generaciones):
+        """Si el PDF está cifrado, descifra cadenas y flujos (objetos sueltos) con la contraseña vacía."""
+        self.con_contrasena = False
+        trailer = next((t for t in self.trailers if isinstance(t, dict) and t.get("Encrypt") is not None), None)
+        if trailer is None:
+            return
+        ref = trailer.get("Encrypt")
+        encrypt = self.resolver(ref)
+        ids = self.resolver(trailer.get("ID"))
+        id0 = bytes(ids[0]) if isinstance(ids, list) and ids and isinstance(ids[0], bytes) else b""
+        if not isinstance(encrypt, dict) or self.resolver(encrypt.get("Filter")) != "Standard":
+            self.con_contrasena = True
+            return
+        descifrador = _Descifrador({k: self.resolver(v) for k, v in encrypt.items()}, id0)
+        if not descifrador.ok:
+            self.con_contrasena = True
+            return
+        excluido = ref.num if isinstance(ref, Ref) else None
+
+        def recorrer(valor, num, gen):
+            if isinstance(valor, bytes) and not isinstance(valor, (Nombre, Operador)):
+                return descifrador.descifrar(valor, num, gen, False)
+            if isinstance(valor, dict):
+                return {k: recorrer(v, num, gen) for k, v in valor.items()}
+            if isinstance(valor, list):
+                return [recorrer(v, num, gen) for v in valor]
+            return valor
+
+        for num, (posicion, valor) in list(definiciones.items()):
+            if num == excluido or valor is encrypt:
+                continue
+            gen = generaciones.get(num, 0)
+            if isinstance(valor, Flujo):
+                tipo = valor.dic.get("Type")
+                if tipo == "XRef" or (tipo == "Metadata" and not descifrador.cifra_metadatos):
+                    continue
+                nuevo = Flujo(recorrer(valor.dic, num, gen), descifrador.descifrar(valor.crudo, num, gen, True))
+            else:
+                nuevo = recorrer(valor, num, gen)
+            definiciones[num] = (posicion, nuevo)
+            self.objetos[num] = nuevo
 
     def _datos_flujo(self, dic, pos):
         datos = self.datos
@@ -471,7 +737,8 @@ class _Documento:
         return datos
 
     def cifrado(self):
-        return any(isinstance(t, dict) and t.get("Encrypt") is not None for t in self.trailers)
+        """True solo si hace falta una contraseña para abrirlo (los cifrados con contraseña vacía ya se descifraron)."""
+        return self.con_contrasena
 
     def raiz(self):
         for trailer in reversed(self.trailers):
@@ -950,7 +1217,8 @@ def paginas(datos):
         raise PdfError("El archivo no es un PDF.")
     doc = _Documento(bytes(datos))
     if doc.cifrado():
-        raise PdfError("El PDF está protegido con contraseña; no se puede leer su texto.")
+        raise PdfError("El PDF pide una contraseña para abrirlo; no se puede leer su texto. Abrilo, guardalo como PDF "
+                       "nuevo (Imprimir → Guardar como PDF) y subí ese.")
     resultado = []
     for pagina, recursos in doc.paginas():
         interprete = _Interprete(doc)

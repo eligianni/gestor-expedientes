@@ -1388,6 +1388,18 @@ def cantidades_del_expediente(exp):
     return cantidades
 
 
+def _renglones_del_remito(remito):
+    """[{pos, cantidad}] de un remito, en el orden de los renglones; sin los ítems sin cantidad."""
+    renglones = {}
+    for item in remito.get("items") or []:
+        try:
+            pos, cantidad = int(item.get("pos")), _cantidad(item.get("cantidad"))
+        except (TypeError, ValueError, ErrorValidacion):
+            continue
+        renglones[pos] = renglones.get(pos, Decimal(0)) + cantidad
+    return [{"pos": pos, "cantidad": _cantidad_texto(c)} for pos, c in sorted(renglones.items()) if c]
+
+
 def _cantidades_de_remitos(datos):
     cantidades = {}
     for remito in datos.get("remitos") or []:
@@ -1647,6 +1659,10 @@ def contexto_textos(con, id_expediente):
         "periodo_hasta": exp.get("periodo_hasta"),
         "dia_inicio": dia_inicio_de(oc) if oc else 1,
         "remitos": [r["numero"] for r in remitos if not r.get("es_equipo_comodato")],
+        "remitos_detalle": [
+            {"numero": r["numero"], "fecha": r.get("fecha"),
+             "renglones": _renglones_del_remito(r)}
+            for r in remitos if not r.get("es_equipo_comodato")],
         "remito_equipo": equipo,
         "fecha_base_remitos": max(
             (fecha_base(r) for r in remitos if not r.get("es_equipo_comodato") and fecha_base(r)), default=None),
@@ -1720,6 +1736,37 @@ def textos_del_expediente(con, id_expediente):
                 resultado[clave] = generador(ctx)
             except textos.TextoIncompleto as error:
                 resultado[clave + "_error"] = str(error)
+    return resultado
+
+
+# Datos para caratular en GDE (los mismos para HBI y CASPH); se editan en Configuración (parámetro `caratulacion`).
+CARATULACION = {"codigo_tramite": "PAMI00058", "mail": "contablehbi@pami.org.ar", "numero": "37549700", "oficina": "contable"}
+PARAMETROS_POR_DEFECTO = {"caratulacion": CARATULACION}
+
+
+def datos_caratulacion(parametros):
+    guardados = parametros.get("caratulacion")
+    return dict(CARATULACION, **(guardados if isinstance(guardados, dict) else {}))
+
+
+def textos_del_tramite(con, id_expediente):
+    """Lo que muestran los pasos del trámite (CV, ingreso en SAP, caratulación, GDE, factura en SAP, autorización).
+
+    A diferencia de `textos_del_expediente`, no falla si falta algo: cada parte que todavía no se puede armar viene como
+    `<clave>_error` con el motivo, porque los primeros pasos se hacen antes de tener la factura.
+    """
+    ctx = contexto_textos(con, id_expediente)
+    resultado = {"caratulacion": datos_caratulacion(db.leer_parametros(con)), "referencias": []}
+    generadores = [("referencia_cv", textos.referencia_cv), ("entrada_sap", textos.entrada_sap),
+                   ("factura_sap", lambda c: textos.factura_sap(c, c["limite_texto_sap"])),
+                   ("caratula", textos.caratula), ("referencias", textos.referencias), ("autorizacion", textos.autorizacion)]
+    if ctx["comodato"] and ctx["primera_validacion"] and ctx["remito_equipo"]:
+        generadores.append(("constancia_comodato", textos.constancia_comodato))
+    for clave, generador in generadores:
+        try:
+            resultado[clave] = generador(ctx)
+        except textos.TextoIncompleto as error:
+            resultado[clave + "_error"] = str(error)
     return resultado
 
 
@@ -1887,7 +1934,8 @@ TRANSICIONES_COMUN = {
     "BORRADOR": ["CONTROLADO"],
     "CONTROLADO": ["EN_FIRMA", "BORRADOR"],
     "EN_FIRMA": ["FIRMADO", "CONTROLADO"],
-    "FIRMADO": ["ENVIADO"],
+    "FIRMADO": ["COMPLETO", "ENVIADO"],
+    "COMPLETO": ["ENVIADO", "FIRMADO"],  # COMPLETO = con el pase al buzón de Contable; ENVIADO solo por la entrega
     "ENVIADO": ["CONTABILIZADO"],
     "CONTABILIZADO": ["CERRADO"],
 }
@@ -2052,6 +2100,118 @@ def guardar_gde(con, id_expediente, version, gde):
     return obtener_expediente(con, id_expediente)
 
 
+# --- Trámite del expediente común (orden real) ------------------------------------
+
+ACCIONES_TRAMITE = ("cv_en_firma", "cv_firmado", "ingreso_sap", "caratular", "gde", "factura_sap",
+                    "autorizacion_en_firma", "autorizacion_firmada", "pase")
+_MARCAS_TRAMITE = {"cv_en_firma": "cv_en_firma", "ingreso_sap": "ingreso_sap", "factura_sap": "factura_sap"}
+_GDE_DE_ACCION = {"cv_firmado": "cv", "autorizacion_firmada": "autorizacion", "pase": "contabilizacion"}
+_NOMBRE_GDE = {"cv": "del certificado de validación firmado", "autorizacion": "de la autorización de pago firmada",
+               "contabilizacion": "de la constancia de contabilización"}
+
+
+def _gde_parcial(gde):
+    """Números GDE que se cargan en el paso «Carga en GDE»: solo las claves enviadas, normalizadas."""
+    if not isinstance(gde, dict) or not gde:
+        raise ErrorValidacion("Faltan los números GDE.")
+    desconocidas = [c for c in gde if c not in CLAVES_GDE]
+    if desconocidas:
+        raise ErrorValidacion("No se puede cargar: %s." % ", ".join(sorted(desconocidas)))
+    limpio = {}
+    for clave, valor in gde.items():
+        if clave == "remitos":
+            if not isinstance(valor, dict):
+                raise ErrorValidacion("Los GDE de los remitos deben ser un objeto número → GDE.")
+            limpio[clave] = {str(numero): _gde_valido(g) for numero, g in valor.items() if _gde_valido(g)}
+        elif clave == "orden_remito_equipo":
+            limpio[clave] = None if valor in (None, "") else _entero(valor, "orden del remito del equipo", minimo=1)
+        else:
+            limpio[clave] = _gde_valido(valor)
+    return limpio
+
+
+def tramitar(con, id_expediente, version, accion, valores=None):
+    """Un paso del trámite del expediente común, con su versión, su evento y el estado que corresponda.
+
+    - `cv_en_firma`, `ingreso_sap`, `factura_sap`: marcas con fecha (`hecho` true/false) en `datos.tramite`.
+    - `cv_firmado`: N° GDE del CV firmado.
+    - `caratular`: N° de expediente (EX); desde BORRADOR pide los controles en orden y pasa a CONTROLADO.
+    - `gde`: números de la carga en GDE (solo las claves enviadas; el resto queda como estaba).
+    - `autorizacion_en_firma`: CONTROLADO → EN_FIRMA (pide el EX).
+    - `autorizacion_firmada`: N° GDE de la autorización firmada → FIRMADO.
+    - `pase`: N° GDE de la constancia de contabilización y pase al buzón de Contable → COMPLETO.
+    """
+    version = _version(version)
+    valores = valores if isinstance(valores, dict) else {}
+    if accion not in ACCIONES_TRAMITE:
+        raise ErrorValidacion("Paso del trámite desconocido: %s." % accion)
+    numero = None
+    if accion in _GDE_DE_ACCION:
+        numero = _gde_valido(valores.get("gde"))
+        if not numero:
+            raise ErrorValidacion("Cargá el N° GDE %s." % _NOMBRE_GDE[_GDE_DE_ACCION[accion]])
+    elif accion == "caratular":
+        numero = _gde_valido(valores.get("expediente"))
+        if not numero or not numero.startswith("EX-"):
+            raise ErrorValidacion("Cargá el N° de expediente (EX-…).")
+    parcial = _gde_parcial(valores.get("gde")) if accion == "gde" else None
+    with db.transaccion(con):
+        actual = _leer_expediente(con, id_expediente)
+        _no_anulado(actual)
+        if actual["tipo"] != "COMUN":
+            raise ErrorNegocio("Este trámite es el de los expedientes comunes.")
+        contenido = _datos_de(actual)
+        tramite = contenido.setdefault("tramite", {})
+        gde = contenido.setdefault("gde", {})
+        previo = estado = actual["estado"]
+        hoy = db.ahora_utc()[:10]
+        if accion in _MARCAS_TRAMITE:
+            tramite[_MARCAS_TRAMITE[accion]] = hoy if valores.get("hecho") else None
+        elif accion == "cv_firmado":
+            gde["cv"] = numero
+        elif accion == "caratular":
+            if estado == "BORRADOR":
+                mensaje = _no_cumple_controlado(con, actual["id"])
+                if mensaje:
+                    raise ErrorNegocio(mensaje.replace("No se puede pasar a CONTROLADO", "Todavía no se puede caratular"))
+                estado = "CONTROLADO"
+            gde["expediente"] = numero
+        elif accion == "gde":
+            if "remitos" in parcial:
+                parcial["remitos"] = dict(gde.get("remitos") or {}, **parcial["remitos"])
+            if "oc_pdf" in parcial and not parcial["oc_pdf"] and actual.get("oc"):
+                oc = db.leer_fila(con, "oc", {"numero": actual["oc"]})
+                if oc is not None and oc.get("gde_pdf_oc"):
+                    parcial["oc_pdf"] = util.normalizar_gde(oc["gde_pdf_oc"])  # vacío = el PDF de la OC
+            gde.update(parcial)
+        elif accion == "autorizacion_en_firma":
+            if not gde.get("expediente"):
+                raise ErrorNegocio("Primero cargá el N° de expediente en la caratulación.")
+            if estado != "CONTROLADO":
+                raise ErrorNegocio("La autorización se pone en firma con el expediente caratulado (estado actual: %s)." % estado)
+            estado = "EN_FIRMA"
+        elif accion == "autorizacion_firmada":
+            if estado not in ("CONTROLADO", "EN_FIRMA", "FIRMADO", "COMPLETO"):
+                raise ErrorNegocio("Primero caratulá el expediente.")
+            gde["autorizacion"] = numero
+            if estado in ("CONTROLADO", "EN_FIRMA"):
+                estado = "FIRMADO"
+        elif accion == "pase":
+            if estado not in ("FIRMADO", "COMPLETO"):
+                raise ErrorNegocio("El pase se da con la autorización de pago firmada (estado actual: %s)." % estado)
+            gde["contabilizacion"] = numero
+            tramite["pase"] = tramite.get("pase") or hoy
+            estado = "COMPLETO"
+        entrada = _entrada_historial(accion.upper(), estado)
+        if estado != previo:
+            entrada["desde"] = previo
+        contenido["historial"].append(entrada)
+        db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, version, {
+            "estado": estado, "datos": contenido, "actualizado": db.ahora_utc(),
+        })
+    return obtener_expediente(con, id_expediente)
+
+
 def guardar_consumo_manual(con, id_expediente, version, cantidades):
     """Consumo de un mes ya facturado que no tiene remitos cargados: {pos: cantidad} por renglón de la OC.
 
@@ -2167,7 +2327,7 @@ ESTADOS_CALENDARIO = {
     "pendiente_en_plazo": "P", "atrasado": "A", "sin_iniciar": "·",
 }
 _ESTADO_POR_EXPEDIENTE = {
-    "FIRMADO": "validado", "ENVIADO": "validado", "CONTABILIZADO": "validado", "CERRADO": "validado",
+    "FIRMADO": "validado", "COMPLETO": "validado", "ENVIADO": "validado", "CONTABILIZADO": "validado", "CERRADO": "validado",
     "BORRADOR": "en_curso", "CONTROLADO": "en_curso", "EN_FIRMA": "en_curso",
     "PENDIENTE": "pendiente_motivo",
     # correctivo y pago eventual
@@ -2384,7 +2544,7 @@ def _alertas_expedientes(con, hoy):
     filas = con.execute(
         "SELECT e.id, e.tipo, e.oc, e.periodo, e.estado, e.motivo_pendiente, e.fecha_seguimiento, e.entrega_id, "
         "e.actualizado, p.razon_social FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap "
-        "WHERE e.estado IN ('PENDIENTE', 'FIRMADO', 'INFORME_ECONOMICO', 'EN_DTO_ECONOMICO_CONTABLE') ORDER BY e.id"
+        "WHERE e.estado IN ('PENDIENTE', 'FIRMADO', 'COMPLETO', 'INFORME_ECONOMICO', 'EN_DTO_ECONOMICO_CONTABLE') ORDER BY e.id"
     )
     for fila in filas:
         fila = dict(fila)
@@ -2396,7 +2556,7 @@ def _alertas_expedientes(con, hoy):
                     nombre, fila["motivo_pendiente"] or "sin motivo",
                     util.ddmmaaaa(util.fecha_desde_texto(fila["fecha_seguimiento"]))),
                 oc=fila["oc"], expediente_id=fila["id"], fecha=fila["fecha_seguimiento"]))
-        elif fila["estado"] == "FIRMADO" and fila["entrega_id"] is None:
+        elif fila["estado"] in ESTADOS_PARA_ENTREGA and fila["entrega_id"] is None:
             alertas.append(_alerta("listo_sin_entrega", 3, "%s firmado y sin entrega asignada." % nombre,
                                    oc=fila["oc"], expediente_id=fila["id"], fecha=fila["actualizado"][:10]))
         elif (fila["tipo"], fila["estado"]) in (("CORRECTIVO", "INFORME_ECONOMICO"), ("EVENTUAL", "EN_DTO_ECONOMICO_CONTABLE")):
@@ -2423,6 +2583,8 @@ def alertas(con, hoy=None, integridad_ok=True):
 
 # --- Entregas (paso 24) -----------------------------------------------------
 
+# Firmado (autorización firmada) o completo (con el pase): la entrega se envía cuando todos tienen el pase.
+ESTADOS_PARA_ENTREGA = ("FIRMADO", "COMPLETO")
 MENSAJE_ASIGNAR = "Solo se asignan expedientes FIRMADO del mismo efector."
 
 
@@ -2487,7 +2649,8 @@ def listar_entregas(con, efector=None):
 def firmados_sin_entrega(con, efector=None):
     """Expedientes FIRMADO que todavía no están en ninguna entrega (candidatos a asignar)."""
     sql = ("SELECT e.id, e.tipo, e.efector, e.oc, e.sap, p.razon_social, e.periodo, e.factura, e.version "
-           "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.estado = 'FIRMADO' AND e.entrega_id IS NULL")
+           "FROM expediente e LEFT JOIN proveedor p ON p.sap = e.sap WHERE e.estado IN ('FIRMADO', 'COMPLETO') "
+           "AND e.entrega_id IS NULL")
     parametros = []
     if efector in EFECTORES:
         sql += " AND e.efector = ?"
@@ -2524,14 +2687,14 @@ def asignar_a_entrega(con, entrega_id, version, ids):
         db.actualizar_con_version(con, "entrega", {"id": entrega["id"]}, version, {"estado": "ABIERTA"})
         for id_expediente in ids:
             actual = _leer_expediente(con, id_expediente)
-            if actual["estado"] != "FIRMADO" or actual["efector"] != entrega["efector"]:
+            if actual["estado"] not in ESTADOS_PARA_ENTREGA or actual["efector"] != entrega["efector"]:
                 raise ErrorNegocio(MENSAJE_ASIGNAR)
             if actual["entrega_id"] not in (None, entrega["id"]):
                 raise ErrorNegocio("El expediente %d ya está en otra entrega." % actual["id"])
             if actual["entrega_id"] == entrega["id"]:
                 continue
             contenido = _datos_de(actual)
-            entrada = _entrada_historial("ENTREGA", "FIRMADO")
+            entrada = _entrada_historial("ENTREGA", actual["estado"])
             entrada["entrega"] = _nombre_entrega(entrega)
             contenido["historial"].append(entrada)
             db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, actual["version"], {
@@ -2574,7 +2737,7 @@ def enviar_entrega(con, entrega_id, version, fecha):
         expedientes = _expedientes_de_entrega(con, entrega["id"])
         if not expedientes:
             raise ErrorNegocio("La entrega no tiene expedientes asignados.")
-        no_firmados = [str(e["id"]) for e in expedientes if e["estado"] != "FIRMADO"]
+        no_firmados = [str(e["id"]) for e in expedientes if e["estado"] not in ESTADOS_PARA_ENTREGA]
         if no_firmados:
             raise ErrorNegocio("Para enviar la entrega, todos sus expedientes tienen que estar FIRMADO (revisá: %s)."
                                % ", ".join(no_firmados))
@@ -2584,7 +2747,7 @@ def enviar_entrega(con, entrega_id, version, fecha):
             actual = _leer_expediente(con, resumen["id"])
             contenido = _datos_de(actual)
             entrada = _entrada_historial("ESTADO", "ENVIADO")
-            entrada.update(desde="FIRMADO", entrega=_nombre_entrega(entrega), fecha_envio=fecha)
+            entrada.update(desde=actual["estado"], entrega=_nombre_entrega(entrega), fecha_envio=fecha)
             contenido["historial"].append(entrada)
             db.actualizar_con_version(con, "expediente", {"id": actual["id"]}, actual["version"], {
                 "estado": "ENVIADO", "datos": contenido, "actualizado": db.ahora_utc(),
